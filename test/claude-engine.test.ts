@@ -135,6 +135,21 @@ test("only whitelisted built-in tools are available", () => {
   assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), ["--tools", ""]);
 });
 
+test("an agent's deny list and extra directories are added to the command line", () => {
+  const args = buildClaudeArgs({
+    allowedTools: ["Read", "Bash(git *)"],
+    disallowedTools: ["Bash(git push *)", "Bash(vercel *)"],
+    addDirs: ["/repos/target"],
+    maxBudgetUsd: 1,
+  } as RunInput);
+  assert.deepEqual(args.slice(args.indexOf("--add-dir"), args.indexOf("--add-dir") + 2), ["--add-dir", "/repos/target"]);
+  const denied = args.slice(args.indexOf("--disallowedTools") + 1, args.indexOf("--max-budget-usd"));
+  assert.ok(denied.includes("Bash(git push *)"));
+  assert.equal(denied.filter((tool) => tool === "Bash(vercel *)").length, 1);
+  const tools = buildClaudeArgs({ allowedTools: ["mcp__hq__hq_submit"], tools: ["Read", "Glob"], maxBudgetUsd: 1 } as RunInput);
+  assert.deepEqual(tools.slice(tools.indexOf("--tools"), tools.indexOf("--tools") + 3), ["--tools", "Read", "Glob"]);
+});
+
 test("LocalEngine is a skeleton that throws", async () => {
   const iterator = new LocalEngine().run({} as RunInput)[Symbol.asyncIterator]();
   await assert.rejects(iterator.next(), /not implemented/);

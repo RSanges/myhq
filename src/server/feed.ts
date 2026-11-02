@@ -198,7 +198,7 @@ export function getState(db: Db, home: Home): StateDto {
           model: agent.model,
           role: toPosix(path.relative(home.root, agent.rolePath)),
           allowedTools: agent.allowedTools,
-          cron: agent.cron,
+          cron: agent.routines[0]?.cron ?? null,
           state,
           lastRun: row ? toRun(row) : null,
         };

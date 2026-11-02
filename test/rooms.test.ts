@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { getDbAt } from "../src/server/db";
-import { loadHome, syncHome } from "../src/server/rooms";
+import { loadHome, syncHome, type Agent } from "../src/server/rooms";
 import { makeHome } from "./helpers";
 
 const agent = { id: "scout", name: "Scout", role: "roles/scout.md", model: "sonnet", allowedTools: ["WebSearch"] };
@@ -37,6 +37,22 @@ for (const [label, roomJson, pattern] of [
     { name: "demo", targetRepo: "x", agents: [{ ...agent, workingDirectory: "../elsewhere" }] },
     /must stay inside the home/,
   ],
+  ["an invalid cron expression", { name: "demo", targetRepo: "x", agents: [{ ...agent, cron: "0 25 * * *" }] }, /hour 25/],
+  [
+    "a routine without a task",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, cron: [{ cron: "0 7 * * *" }] }] },
+    /agents\.0\.cron/,
+  ],
+  [
+    "a worktree outside the home",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, worktree: "../wt" }] },
+    /worktree of "scout" must stay inside the home/,
+  ],
+  [
+    "a worktree that differs from the working directory",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, worktree: "data/wt/scout", workingDirectory: "data/other" }] },
+    /works in its worktree/,
+  ],
   ["a duplicate agent id", { name: "demo", targetRepo: "x", agents: [agent, agent] }, /duplicate agent id/],
   [
     "a server named hq",
@@ -64,4 +80,41 @@ test("syncs rooms and agents into the database", () => {
   syncHome(db, loadHome(config.home));
   const row = db.prepare("SELECT * FROM agents WHERE room = 'demo' AND id = 'scout'").get() as { role_path: string };
   assert.equal(row.role_path, "rooms/demo/roles/scout.md");
+});
+
+test("routines, armed state, worktree, deny list and read directories", () => {
+  const config = makeHome({}, {
+    name: "demo",
+    targetRepo: "../demo-project",
+    agents: [
+      { ...agent, id: "scout", cron: "0 7 * * 1-5", armed: true, allowedTools: ["Read", "WebSearch"] },
+      {
+        ...agent,
+        id: "dev",
+        cron: [
+          { cron: "0 5 * * *", task: "Fix one bug." },
+          { cron: "0 17 * * fri", task: "Weekly summary." },
+        ],
+        worktree: "data/worktrees/demo/dev",
+        workingDirectory: "data/worktrees/demo/dev",
+        disallowedTools: ["Bash(git push *)"],
+        allowedTools: ["Read", "Edit", "Bash(git *)"],
+      },
+      { ...agent, id: "writer", addDirs: ["../notes"] },
+    ],
+  });
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  const [scout, dev, writer] = home.rooms[0]!.agents as [Agent, Agent, Agent];
+  assert.deepEqual(scout.routines, [{ cron: "0 7 * * 1-5", task: null }]);
+  assert.equal(scout.armed, true);
+  assert.deepEqual(scout.addDirs, [path.resolve(config.home, "../demo-project")]);
+  assert.deepEqual(dev.routines.map((r) => r.task), ["Fix one bug.", "Weekly summary."]);
+  assert.equal(dev.armed, false);
+  assert.equal(dev.worktree, path.join(config.home, "data", "worktrees", "demo", "dev"));
+  assert.equal(dev.workDir, dev.worktree);
+  assert.deepEqual(dev.addDirs, []);
+  assert.deepEqual(dev.disallowedTools, ["Bash(git push *)"]);
+  assert.deepEqual(writer.routines, []);
+  assert.deepEqual(writer.addDirs, [path.resolve(config.home, "../notes")]);
 });

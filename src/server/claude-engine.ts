@@ -148,10 +148,11 @@ export function buildClaudeArgs(input: RunInput): string[] {
     "--setting-sources",
     "project,local",
   ];
-  const tools = builtInTools(input.allowedTools);
+  for (const dir of input.addDirs ?? []) args.push("--add-dir", dir);
+  const tools = input.tools ?? builtInTools(input.allowedTools);
   args.push("--tools", ...(tools.length > 0 ? tools : [""]));
   if (input.allowedTools.length > 0) args.push("--allowedTools", ...input.allowedTools);
-  args.push("--disallowedTools", ...DENIED_TOOLS);
+  args.push("--disallowedTools", ...new Set([...DENIED_TOOLS, ...(input.disallowedTools ?? [])]));
   args.push("--max-budget-usd", String(input.maxBudgetUsd));
   return args;
 }

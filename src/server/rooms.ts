@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { isInside } from "./config";
+import { cronError } from "./cron";
 import { now, type Db } from "./db";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
@@ -25,6 +26,17 @@ const remoteServerSchema = z.looseObject({
 export const MODELS = ["opus", "sonnet", "haiku"] as const;
 export type Model = (typeof MODELS)[number];
 
+const cronSchema = z.string().superRefine((value, ctx) => {
+  const error = cronError(value);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+});
+
+/** One routine: a cron expression and the task given to the run it starts. */
+const routineSchema = z.strictObject({
+  cron: cronSchema,
+  task: z.string().trim().min(1).max(20_000),
+});
+
 const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
@@ -36,10 +48,16 @@ const agentSchema = z.strictObject({
     .refine((servers) => !("hq" in servers), "the name 'hq' is reserved for the HQ MCP server")
     .optional(),
   workingDirectory: z.string().min(1).optional(),
-  cron: z
-    .string()
-    .regex(/^\S+(\s+\S+){4}$/, "a cron expression has five fields")
-    .optional(),
+  /** A cron expression (the routine work of the role), or several routines with a task each. */
+  cron: z.union([cronSchema, z.array(routineSchema).min(1)]).optional(),
+  /** Initial armed state of the routines; the database keeps later changes. */
+  armed: z.boolean().optional(),
+  /** Dedicated Git worktree of the target repository, relative to the home. */
+  worktree: z.string().min(1).optional(),
+  /** Denied to this agent on top of the global deny list. */
+  disallowedTools: z.array(z.string().min(1)).optional(),
+  /** Extra directories the agent may read (`--add-dir`), relative to the home. */
+  addDirs: z.array(z.string().min(1)).optional(),
   maxBudgetUsd: z.number().positive().optional(),
 });
 
@@ -62,9 +80,20 @@ export type Agent = {
   rolePath: string;
   /** Absolute path of the working directory, always inside the home. */
   workDir: string;
-  cron: string | null;
+  /** Scheduled routines; `task` null means the routine work of the role. */
+  routines: Routine[];
+  /** Armed state given by room.json (the database may override it). */
+  armed: boolean;
+  /** Absolute path of the agent's Git worktree (its working directory), or null. */
+  worktree: string | null;
+  /** The agent's own deny list, merged with the global one at run time. */
+  disallowedTools: string[];
+  /** Absolute paths passed as `--add-dir`. */
+  addDirs: string[];
   maxBudgetUsd: number | null;
 };
+
+export type Routine = { cron: string; task: string | null };
 
 export type Room = {
   name: string;
@@ -82,6 +111,18 @@ function formatZodError(error: z.ZodError): string {
   return error.issues
     .map((issue) => `${issue.path.length ? issue.path.join(".") : "(root)"}: ${issue.message}`)
     .join("; ");
+}
+
+const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
+
+/**
+ * An agent that reads files but has no worktree may read the target
+ * repository by default (it runs in its own directory of the home).
+ */
+function defaultAddDirs(agent: RoomFile["agents"][number], targetRepo: string): string[] {
+  if (agent.worktree) return [];
+  const reads = agent.allowedTools.some((tool) => READ_TOOLS.has(tool.replace(/\(.*$/, "").trim()));
+  return reads ? [targetRepo] : [];
 }
 
 /** Loads and validates one room directory. Throws an explicit Error when invalid. */
@@ -103,6 +144,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     throw new Error(`${file}: name "${room.name}" must match its folder name "${folder}"`);
   }
 
+  const targetRepo = path.resolve(home, room.targetRepo);
   const seen = new Set<string>();
   const agents = room.agents.map((agent): Agent => {
     if (seen.has(agent.id)) throw new Error(`${file}: duplicate agent id "${agent.id}"`);
@@ -116,12 +158,19 @@ export function loadRoom(home: string, roomDir: string): Room {
       throw new Error(`${file}: role file of "${agent.id}" not found (${agent.role})`);
     }
 
+    const worktree = agent.worktree ? path.resolve(home, agent.worktree) : null;
+    if (worktree && !isInside(home, worktree)) {
+      throw new Error(`${file}: worktree of "${agent.id}" must stay inside the home`);
+    }
     const workDir = path.resolve(
       home,
-      agent.workingDirectory ?? path.join("data", "work", room.name, agent.id),
+      agent.workingDirectory ?? agent.worktree ?? path.join("data", "work", room.name, agent.id),
     );
     if (!isInside(home, workDir)) {
       throw new Error(`${file}: workingDirectory of "${agent.id}" must stay inside the home`);
+    }
+    if (worktree && workDir !== worktree) {
+      throw new Error(`${file}: "${agent.id}" works in its worktree: workingDirectory must be left out or equal to it`);
     }
 
     return {
@@ -132,7 +181,16 @@ export function loadRoom(home: string, roomDir: string): Room {
       mcpServers: agent.mcpServers ?? {},
       rolePath,
       workDir,
-      cron: agent.cron ?? null,
+      routines:
+        agent.cron === undefined
+          ? []
+          : typeof agent.cron === "string"
+            ? [{ cron: agent.cron, task: null }]
+            : agent.cron.map((r) => ({ cron: r.cron, task: r.task })),
+      armed: agent.armed ?? false,
+      worktree,
+      disallowedTools: agent.disallowedTools ?? [],
+      addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
     };
   });
@@ -140,7 +198,7 @@ export function loadRoom(home: string, roomDir: string): Room {
   return {
     name: room.name,
     dir: roomDir,
-    targetRepo: path.resolve(home, room.targetRepo),
+    targetRepo,
     agents,
   };
 }

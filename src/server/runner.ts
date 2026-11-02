@@ -9,6 +9,7 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine"
 import { HqError } from "./errors";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
+import { ensureWorktree, worktreeBranch } from "./worktree";
 
 export const startRunSchema = z.strictObject({
   room: z.string().min(1),
@@ -239,6 +240,9 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   let end: Extract<RunEvent, { type: "end" }> | null = null;
   try {
+    if (agent.worktree) {
+      ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
+    }
     fs.mkdirSync(agent.workDir, { recursive: true });
     fs.mkdirSync(config.runsDir, { recursive: true });
     writeMcpConfig({
@@ -256,6 +260,8 @@ async function execute(p: ExecuteParams): Promise<void> {
       model: agent.model,
       rolePath: agent.rolePath,
       allowedTools: agent.allowedTools,
+      disallowedTools: agent.disallowedTools,
+      addDirs: agent.addDirs,
       mcpConfigPath,
       maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
       workDir: agent.workDir,

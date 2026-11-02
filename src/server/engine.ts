@@ -26,6 +26,12 @@ export type RunInput = {
   model: Model;
   rolePath: string;
   allowedTools: string[];
+  /** Denied on top of the global deny list (the agent's `disallowedTools`). */
+  disallowedTools?: string[];
+  /** Built-in tools that exist for the run; by default those named by `allowedTools`. */
+  tools?: string[];
+  /** Extra directories the run may read (`--add-dir`). */
+  addDirs?: string[];
   /** Per-run MCP config file (the HQ server plus the agent's extra servers). */
   mcpConfigPath: string;
   maxBudgetUsd: number;
