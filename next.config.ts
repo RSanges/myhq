@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   partialPrefetching: true,
   // CLAUDE.md already points agents to node_modules/next/dist/docs/.
   agentRules: false,
+  // The assistant imports the home's TypeScript extensions at runtime with
+  // tsx (esbuild underneath), which must not be bundled.
+  serverExternalPackages: ["tsx"],
   turbopack: {
     rules: {
       "*.css": {
