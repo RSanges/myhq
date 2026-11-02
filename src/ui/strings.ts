@@ -33,8 +33,16 @@ export const strings = {
       copied: "Copié !",
       manual: "Sélectionné, copie-le (Ctrl+C)",
     },
+    copyCommand: {
+      idle: "Copier la commande",
+      copied: "Copié !",
+      manual: "Sélectionné, copie-le (Ctrl+C)",
+    },
     copyManualLabel: "Texte à copier",
     handover: "Copié ? Colle-le dans le fil.",
+    branch: (branch: string, sha: string | null) =>
+      sha ? `Branche ${branch} (commit ${sha.slice(0, 10)})` : `Branche ${branch}`,
+    branchHandover: "L'agent ne pousse pas : pousse la branche et ouvre la pull request toi-même, depuis le dépôt cible.",
     approve: "Approuver",
     reject: "Refuser",
     revise: "À retravailler",
@@ -224,6 +232,8 @@ export const strings = {
       `#${p.id} ${p.room} / ${p.agent} : ${p.title}`,
     decided: (id: number, label: string) => `Item #${id} : ${label}.`,
     alertDecided: (text: string, label: string) => `${text}\n\nDécision : ${label}`,
+    branchHandover: (branch: string, sha: string | null) =>
+      `Branche ${branch}${sha ? ` (commit ${sha.slice(0, 10)})` : ""}. L'agent ne pousse pas : depuis le dépôt cible, lance les commandes du message suivant.`,
     askReject: (id: number) =>
       `Motif du refus de l'item #${id} ? Réponds par un message (la question reste valable une heure).`,
     askRevise: (id: number) =>

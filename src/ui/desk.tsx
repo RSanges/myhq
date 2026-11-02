@@ -5,7 +5,7 @@ import { decideApproval, errorText } from "./api";
 import { HandoverControls } from "./copy-button";
 import { formatDateTime } from "./format";
 import { Markdown } from "./markdown-view";
-import { payloadUrl, type Action } from "./model";
+import { branchHandover, payloadUrl, type Action } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
@@ -186,9 +186,9 @@ export function Desk({
   dispatch: Dispatch;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
-  // An approved item that points to a thread is now the user's to post: show it in the history.
+  // An approved item that points to a thread, or a branch to push, is now the user's: show it in the history.
   const showHandover = (approval: Approval) => {
-    if (payloadUrl(approval.payload)) setTab("history");
+    if (payloadUrl(approval.payload) || branchHandover(approval)) setTab("history");
   };
   const tabClass = (active: boolean) =>
     `min-h-10 rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${

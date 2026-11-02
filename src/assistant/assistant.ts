@@ -11,7 +11,7 @@ import { schedulerInfo } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
 import { getUsage } from "../server/usage";
 import { formatCost } from "../ui/format";
-import { payloadUrl } from "../ui/model";
+import { branchHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
 import { askChat, chatEnv, type ChatRunner } from "./chat";
@@ -328,12 +328,17 @@ export class Assistant {
   /**
    * The user posts approved replies himself: when the item points to a thread
    * (an http(s) `payload.url`), sends the body as a plain message of its own
-   * (to copy it on the phone, cut at 4000 as usual), then the link.
+   * (to copy it on the phone, cut at 4000 as usual), then the link. An
+   * approved pull request or blog post with a local branch gets the branch,
+   * then the push and `gh pr create` commands as a message of their own.
    */
   private async handOver(approval: ApprovalDto): Promise<void> {
     const url = payloadUrl(approval.payload);
-    if (!url) return;
-    const parts = [...splitMessage(approval.body), url];
+    const branch = branchHandover(approval);
+    let parts: string[];
+    if (url) parts = [...splitMessage(approval.body), url];
+    else if (branch) parts = [strings.assistant.branchHandover(branch.branch, branch.sha), branch.commands];
+    else return;
     for (const part of parts) {
       try {
         await this.deps.telegram.sendMessage(this.deps.chatId, part);

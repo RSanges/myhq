@@ -245,3 +245,41 @@ export function roleFileName(role: string): string {
 export function pendingTitle(base: string, pending: number): string {
   return pending > 0 ? `(${pending}) ${base}` : base;
 }
+
+/** Item types whose payload may carry a local branch to push (a dev agent never pushes). */
+export const BRANCH_TYPES = ["pull_request", "blog_post"] as const;
+
+const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
+const SHA = /^[0-9a-f]{7,40}$/i;
+
+/** A text made safe inside double quotes in sh, PowerShell and cmd: one line, no quote, no expansion. */
+function shellText(text: string, max: number): string {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/["`$\%!]/g, "'")
+    .trim()
+    .slice(0, max);
+}
+
+export type BranchHandover = { branch: string; sha: string | null; commands: string };
+
+/**
+ * The branch of an approved pull request or blog post: the agent committed it
+ * in its worktree and never pushes, so the user pushes it and opens the pull
+ * request himself, from the target repository.
+ */
+export function branchHandover(approval: Pick<Approval, "type" | "title" | "payload">): BranchHandover | null {
+  if (!(BRANCH_TYPES as readonly string[]).includes(approval.type)) return null;
+  const { branch, sha, title, summary } = approval.payload;
+  if (typeof branch !== "string" || !BRANCH.test(branch)) return null;
+  const prTitle = shellText(typeof title === "string" && title.trim() ? title : approval.title, 200);
+  const body = shellText(typeof summary === "string" && summary.trim() ? summary : prTitle, 2000);
+  return {
+    branch,
+    sha: typeof sha === "string" && SHA.test(sha) ? sha : null,
+    commands: [
+      `git push -u origin ${branch}`,
+      `gh pr create --head ${branch} --title "${prTitle}" --body "${body}"`,
+    ].join("\n"),
+  };
+}

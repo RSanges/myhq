@@ -146,6 +146,27 @@ test("a long body is cut at 4000 characters, the link comes last", async () => {
   await fake.close();
 });
 
+test("approving a pull request on a local branch hands over the branch, then the commands", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = Number(
+    db
+      .prepare(
+        "INSERT INTO approvals (room, agent_id, type, title, body, payload, status, created_at) VALUES ('demo', 'scout', 'pull_request', 'Fix', 'Diff summary', ?, 'pending', ?)",
+      )
+      .run(JSON.stringify({ branch: "hq/scout-fix", sha: "abcdef1234567", title: "Fix", summary: "Fixes it" }), new Date().toISOString())
+      .lastInsertRowid,
+  );
+  await handle(assistant, message(`/approve ${id}`));
+  const sent = fake.sent();
+  assert.equal(sent.length, 3);
+  assert.match(sent[1]!, /^Branche hq\/scout-fix \(commit abcdef1234\)/);
+  assert.equal(
+    sent[2],
+    'git push -u origin hq/scout-fix\ngh pr create --head hq/scout-fix --title "Fix" --body "Fixes it"',
+  );
+  await fake.close();
+});
+
 test("items without an http(s) url, and other decisions, send no hand-over", async () => {
   const { db, fake, assistant } = await setup();
   const plain = addApproval(db);

@@ -5,6 +5,7 @@ import {
   buildFeed,
   initialModel,
   payloadUrl,
+  branchHandover,
   pendingTitle,
   reducer,
   roleFileName,
@@ -237,4 +238,25 @@ test("the state schema accepts the documented snapshot and ignores extra fields"
   };
   assert.equal(stateSchema.safeParse(snapshot).success, true);
   assert.equal(stateSchema.safeParse({ cursor: "x" }).success, false);
+});
+
+test("branchHandover gives the push and gh pr create commands of a branch item", () => {
+  const item = {
+    type: "pull_request",
+    title: "Fix the date picker",
+    payload: { branch: "hq/dev-date-picker", sha: "0123456789abcdef", title: 'Fix "dates" $HOME', summary: "Line one\nline two" },
+  };
+  assert.deepEqual(branchHandover(item), {
+    branch: "hq/dev-date-picker",
+    sha: "0123456789abcdef",
+    commands:
+      "git push -u origin hq/dev-date-picker\n" +
+      `gh pr create --head hq/dev-date-picker --title "Fix 'dates' 'HOME" --body "Line one line two"`,
+  });
+  assert.equal(branchHandover({ ...item, type: "blog_post", payload: { branch: "hq/writer-post" } })?.sha, null);
+  assert.match(branchHandover({ ...item, payload: { branch: "hq/x" } })!.commands, /--title "Fix the date picker" --body "Fix the date picker"/);
+  assert.equal(branchHandover({ ...item, type: "community_reply" }), null);
+  assert.equal(branchHandover({ ...item, payload: { branch: "x; rm -rf /" } }), null);
+  assert.equal(branchHandover({ ...item, payload: { branch: "--force" } }), null);
+  assert.equal(branchHandover({ ...item, payload: {} }), null);
 });

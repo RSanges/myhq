@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { browserCopyIo, copyLabel, copyText, COPIED_RESET_MS, type CopyState } from "./clipboard";
-import { payloadUrl } from "./model";
+import { branchHandover, payloadUrl } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { buttonClass, fieldClass } from "./ui";
@@ -11,7 +11,15 @@ import { buttonClass, fieldClass } from "./ui";
  * Copies a text to the clipboard. When the browser refuses, the text appears
  * in a read-only field, selected, so that Ctrl+C is enough.
  */
-export function CopyButton({ text, id }: { text: string; id: string }) {
+export function CopyButton({
+  text,
+  id,
+  labels = strings.desk.copy,
+}: {
+  text: string;
+  id: string;
+  labels?: Record<CopyState, string>;
+}) {
   const [state, setState] = useState<CopyState>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const area = useRef<HTMLTextAreaElement | null>(null);
@@ -33,7 +41,7 @@ export function CopyButton({ text, id }: { text: string; id: string }) {
   return (
     <span className="inline-flex flex-col gap-2">
       <button type="button" className={buttonClass()} onClick={click} aria-live="polite">
-        {copyLabel(state, strings.desk.copy)}
+        {copyLabel(state, labels)}
       </button>
       {state === "manual" && (
         <textarea
@@ -57,7 +65,7 @@ export function CopyButton({ text, id }: { text: string; id: string }) {
  */
 export function HandoverControls({ approval, prominent }: { approval: Approval; prominent: boolean }) {
   const url = payloadUrl(approval.payload);
-  if (!url) return null;
+  if (!url) return <BranchControls approval={approval} prominent={prominent} />;
   const link = (
     <a
       href={url}
@@ -84,6 +92,28 @@ export function HandoverControls({ approval, prominent }: { approval: Approval; 
         {link}
       </div>
       <p className="break-all text-xs text-muted">{url}</p>
+    </div>
+  );
+}
+
+/**
+ * A pull request or blog post committed on a local branch: the agent never
+ * pushes, so once approved the user copies the push and `gh pr create`
+ * commands and runs them from the target repository.
+ */
+function BranchControls({ approval, prominent }: { approval: Approval; prominent: boolean }) {
+  const handover = branchHandover(approval);
+  if (!handover) return null;
+  const label = strings.desk.branch(handover.branch, handover.sha);
+  if (!prominent) return <p className="break-all font-mono text-xs text-muted">{label}</p>;
+  return (
+    <div className="space-y-2 rounded-md border border-accent bg-accent-soft p-3">
+      <p className="text-sm font-medium">{strings.desk.branchHandover}</p>
+      <p className="break-all font-mono text-xs">{label}</p>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-card px-3 py-2 font-mono text-xs">
+        {handover.commands}
+      </pre>
+      <CopyButton text={handover.commands} id={`cmd-${approval.id}`} labels={strings.desk.copyCommand} />
     </div>
   );
 }
