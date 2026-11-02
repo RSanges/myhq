@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useReducer, useState } from "react";
-import { errorText, fetchState, fetchUsage } from "./api";
+import { errorText, fetchRoutines, fetchState, fetchUsage } from "./api";
 import { initialModel, reducer, type Action, type Model } from "./model";
 import { approvalSchema, eventSchema, messageSchema, readySchema, runSchema } from "./schemas";
 
@@ -9,6 +9,8 @@ export type Connection = "connecting" | "live" | "reconnecting";
 
 const RECONNECT_MS = 3000;
 const USAGE_DEBOUNCE_MS = 400;
+/** Skipped firings start no run: the journal is also refreshed on a timer. */
+const ROUTINES_REFRESH_MS = 60_000;
 
 export type Hq = {
   model: Model;
@@ -50,6 +52,16 @@ export function useHq(): Hq {
       }
     };
 
+    const refreshRoutines = async () => {
+      try {
+        const routines = await fetchRoutines();
+        if (!closed) dispatch({ type: "routines", ...routines });
+      } catch {
+        // The journal keeps its last state; the next refresh tries again.
+      }
+    };
+    const routinesTimer = setInterval(() => void refreshRoutines(), ROUTINES_REFRESH_MS);
+
     const connect = () => {
       const stream = new EventSource(`/api/events?since=${cursor}`);
       source = stream;
@@ -74,7 +86,10 @@ export function useHq(): Hq {
         const run = runSchema.parse(data);
         dispatch({ type: "run", run });
         clearTimeout(usageTimer);
-        usageTimer = setTimeout(() => void refreshUsage(), USAGE_DEBOUNCE_MS);
+        usageTimer = setTimeout(() => {
+          void refreshUsage();
+          void refreshRoutines();
+        }, USAGE_DEBOUNCE_MS);
       });
       follow("event", (data) => dispatch({ type: "event", event: eventSchema.parse(data) }));
       follow("message", (data) => dispatch({ type: "message", message: messageSchema.parse(data) }));
@@ -108,6 +123,7 @@ export function useHq(): Hq {
       source?.close();
       clearTimeout(reconnectTimer);
       clearTimeout(usageTimer);
+      clearInterval(routinesTimer);
     };
   }, [attempt]);
 

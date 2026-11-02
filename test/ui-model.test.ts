@@ -80,18 +80,30 @@ const baseState = (over: Partial<State> = {}): State => ({
     {
       name: "demo",
       agents: [
-        { id: "scout", name: "Scout", model: "sonnet", role: "rooms/demo/roles/scout.md", lastRun: null },
+        {
+          id: "scout",
+          name: "Scout",
+          model: "sonnet",
+          role: "rooms/demo/roles/scout.md",
+          armed: true,
+          routines: [{ cron: "0 7 * * *", task: null, nextAt: "2026-11-03T06:00:00.000Z" }],
+          lastRun: null,
+        },
         {
           id: "writer",
           name: "Writer",
           model: "opus",
           role: "rooms/demo/roles/writer.md",
+          armed: false,
+          routines: [],
           lastRun: run({ agentId: "writer", status: "failed" }),
         },
       ],
     },
   ],
   invalidRooms: [],
+  scheduler: { enabled: true, running: true, timeZone: "Europe/Paris" },
+  firings: [],
   approvals: {
     pending: [approval({ id: 2 })],
     history: [approval({ id: 1, status: "approved", decidedAt: "2026-11-02T11:00:00.000Z" })],
@@ -259,4 +271,27 @@ test("branchHandover gives the push and gh pr create commands of a branch item",
   assert.equal(branchHandover({ ...item, payload: { branch: "x; rm -rf /" } }), null);
   assert.equal(branchHandover({ ...item, payload: { branch: "--force" } }), null);
   assert.equal(branchHandover({ ...item, payload: {} }), null);
+});
+
+test("the reducer keeps the scheduler, the journal and the armed state", () => {
+  let model = reducer(initialModel, { type: "state", state: baseState() });
+  assert.equal(model.scheduler.running, true);
+  model = reducer(model, { type: "armed", room: "demo", agentId: "scout", armed: false });
+  assert.equal(selectAgents(model).find((a) => a.id === "scout")!.armed, false);
+  assert.equal(selectAgents(model).find((a) => a.id === "writer")!.armed, false);
+  const firing = {
+    id: 1,
+    room: "demo",
+    agentId: "scout",
+    cron: "0 7 * * *",
+    task: null,
+    scheduledAt: "2026-11-03T06:00:00.000Z",
+    outcome: "skipped_unarmed" as const,
+    runId: null,
+    detail: null,
+    createdAt: "2026-11-03T06:00:01.000Z",
+  };
+  model = reducer(model, { type: "routines", scheduler: { enabled: false, running: false, timeZone: "UTC" }, firings: [firing] });
+  assert.equal(model.scheduler.enabled, false);
+  assert.deepEqual(model.firings, [firing]);
 });

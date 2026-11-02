@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Agent, Approval, HqEvent, Message, Run, State, Usage } from "./schemas";
+import type { Agent, Approval, Firing, HqEvent, Message, Run, Scheduler, State, Usage } from "./schemas";
 
 // Pure state of the page: a snapshot from /api/state, then upserts from the SSE
 // stream (every message is "upsert this entity by id", see docs/api.md).
@@ -18,6 +18,9 @@ export type Model = {
   events: HqEvent[];
   messages: Message[];
   usage: Usage | null;
+  scheduler: Scheduler;
+  /** Routine firings, newest first. */
+  firings: Firing[];
 };
 
 export type Action =
@@ -26,7 +29,9 @@ export type Action =
   | { type: "run"; run: Run }
   | { type: "event"; event: HqEvent }
   | { type: "message"; message: Message }
-  | { type: "approval"; approval: Approval };
+  | { type: "approval"; approval: Approval }
+  | { type: "routines"; scheduler: Scheduler; firings: Firing[] }
+  | { type: "armed"; room: string; agentId: string; armed: boolean };
 
 export const initialModel: Model = {
   loaded: false,
@@ -38,6 +43,8 @@ export const initialModel: Model = {
   events: [],
   messages: [],
   usage: null,
+  scheduler: { enabled: false, running: false, timeZone: "UTC" },
+  firings: [],
 };
 
 export const agentKey = (room: string, agentId: string): string => `${room}/${agentId}`;
@@ -80,8 +87,26 @@ export function reducer(model: Model, action: Action): Model {
         approvals: indexApprovals([state.approvals.pending, state.approvals.history]),
         events: state.recent.events,
         messages: state.recent.messages,
+        scheduler: state.scheduler,
+        firings: state.firings,
       };
     }
+    case "routines":
+      return { ...model, scheduler: action.scheduler, firings: action.firings };
+    case "armed":
+      return {
+        ...model,
+        rooms: model.rooms.map((room) =>
+          room.name !== action.room
+            ? room
+            : {
+                ...room,
+                agents: room.agents.map((agent) =>
+                  agent.id === action.agentId ? { ...agent, armed: action.armed } : agent,
+                ),
+              },
+        ),
+      };
     case "usage":
       return { ...model, usage: action.usage };
     case "run": {

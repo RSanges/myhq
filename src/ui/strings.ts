@@ -89,6 +89,20 @@ export const strings = {
     },
     runLine: (p: { id: number; status: string; date: string }) => `Tour #${p.id} : ${p.status}, ${p.date}`,
     runStarted: (id: number) => `Tour #${id} lancé.`,
+    scheduler: (p: { enabled: boolean; running: boolean; timeZone: string }) =>
+      p.running
+        ? `Planificateur actif (fuseau ${p.timeZone}).`
+        : p.enabled
+          ? `Planificateur activé, mais tenu par un autre processus MyHQ (fuseau ${p.timeZone}).`
+          : "Planificateur éteint (HQ_SCHEDULER=off) : aucune routine ne part seule.",
+    routinesTitle: "Routines",
+    routineDefaultTask: "Travail habituel du rôle",
+    routineNext: (date: string) => `Prochain déclenchement : ${date}`,
+    routineNever: "Cette expression ne se déclenche jamais.",
+    armedLabel: "Routines armées",
+    armedOn: "Armé",
+    armedOff: "Désarmé",
+    armedHint: "Une routine désarmée est notée dans le journal sans lancer de tour.",
   },
   feed: {
     title: "Le fil",
@@ -120,6 +134,23 @@ export const strings = {
     capValue: (remaining: number, max: number) => `${remaining} sur ${max}`,
     capReached: "Plafond quotidien atteint.",
     unavailable: "Compteur indisponible.",
+    budget: "Budget de la semaine",
+    budgetShare: (percent: number) => `${percent} %`,
+    budgetDetail: (spent: string, budget: string) => `${spent} sur ${budget}`,
+    budgetOver: "Budget hebdomadaire dépassé.",
+  },
+  routines: {
+    title: "Le journal des routines",
+    empty: "Aucune routine déclenchée pour l'instant.",
+    scheduledAt: (date: string) => `Prévue ${date}`,
+    run: (id: number) => `Tour #${id}`,
+    outcome: {
+      started: "Lancée",
+      skipped_busy: "Sautée, agent occupé",
+      skipped_cap: "Sautée, plafond atteint",
+      skipped_unarmed: "Sautée, désarmée",
+      error: "Erreur",
+    } as Record<string, string>,
   },
   roadmap: {
     title: "Feuille de route",

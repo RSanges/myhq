@@ -5,6 +5,7 @@ import { useEffect, useMemo } from "react";
 import { Desk } from "./desk";
 import { Feed } from "./feed";
 import { Meter } from "./meter";
+import { RoutineJournal } from "./routine-journal";
 import { pendingTitle, selectAgents, selectHistory, selectPending } from "./model";
 import { strings } from "./strings";
 import { Team } from "./team";
@@ -64,7 +65,8 @@ export function Dashboard() {
             <Desk pending={pending} history={history} dispatch={dispatch} />
           </div>
           <div className="order-3 min-w-0 space-y-6">
-            <Team agents={agents} invalidRooms={model.invalidRooms} dispatch={dispatch} />
+            <Team agents={agents} invalidRooms={model.invalidRooms} scheduler={model.scheduler} dispatch={dispatch} />
+            <RoutineJournal firings={model.firings} agents={agents} />
             <Feed events={model.events} messages={model.messages} agents={agents} />
           </div>
         </div>

@@ -3,7 +3,9 @@ import { roadmapSchema, type Roadmap } from "@/server/roadmap-schema";
 import { strings } from "./strings";
 import {
   approvalResponseSchema,
+  armResponseSchema,
   errorBodySchema,
+  routinesResponseSchema,
   runResponseSchema,
   stateSchema,
   usageSchema,
@@ -69,6 +71,13 @@ export const fetchState = (): Promise<State> => request("/api/state", stateSchem
 export const fetchRoadmap = (): Promise<Roadmap> => request("/api/roadmap", roadmapSchema);
 
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
+
+export const fetchRoutines = () => request("/api/routines", routinesResponseSchema);
+
+export async function setArmed(room: string, agent: string, armed: boolean): Promise<boolean> {
+  const url = `/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}`;
+  return (await request(url, armResponseSchema, jsonInit("PATCH", { armed }))).agent.armed;
+}
 
 export async function startRun(room: string, agent: string, task: string): Promise<Run> {
   const body: { room: string; agent: string; task?: string } = { room, agent };

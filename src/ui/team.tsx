@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { errorText, startRun } from "./api";
+import { errorText, setArmed, startRun } from "./api";
 import { formatCost, formatDateTime } from "./format";
 import { roleFileName, type Action, type AgentState, type TeamAgent } from "./model";
+import type { Scheduler } from "./schemas";
 import { strings } from "./strings";
 import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
 
@@ -12,6 +13,73 @@ const stateTone: Record<AgentState, "ok" | "danger" | "neutral"> = {
   failed: "danger",
   idle: "neutral",
 };
+
+/** The agent's routines, with their next fire, and the switch that arms them. */
+function Routines({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const switchId = `armed-${agent.key}`;
+
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const armed = await setArmed(agent.room, agent.id, !agent.armed);
+      dispatch({ type: "armed", room: agent.room, agentId: agent.id, armed });
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">{strings.team.routinesTitle}</p>
+        <div className="flex items-center gap-2">
+          <span id={switchId} className="text-xs text-muted">
+            {strings.team.armedLabel}
+          </span>
+          <button
+            aria-labelledby={switchId}
+            type="button"
+            role="switch"
+            aria-checked={agent.armed}
+            disabled={busy}
+            onClick={() => void toggle()}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50 ${
+              agent.armed ? "border-accent bg-accent" : "border-line bg-soft"
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`inline-block size-4 rounded-full bg-card shadow transition-transform ${
+                agent.armed ? "translate-x-6" : "translate-x-1"
+              }`}
+            />
+          </button>
+          <Badge tone={agent.armed ? "ok" : "neutral"}>{agent.armed ? strings.team.armedOn : strings.team.armedOff}</Badge>
+        </div>
+      </div>
+      <ul className="space-y-1">
+        {agent.routines.map((routine, index) => (
+          <li key={index} className="rounded-md bg-soft px-3 py-2">
+            <p className="flex flex-wrap items-baseline gap-x-2">
+              <code className="font-mono text-xs">{routine.cron}</code>
+              <span className="break-words">{routine.task ?? strings.team.routineDefaultTask}</span>
+            </p>
+            <p className="text-xs text-muted">
+              {routine.nextAt ? strings.team.routineNext(formatDateTime(routine.nextAt)) : strings.team.routineNever}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {!agent.armed && <p className="text-xs text-muted">{strings.team.armedHint}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </div>
+  );
+}
 
 function AgentCard({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
   const [task, setTask] = useState("");
@@ -52,6 +120,8 @@ function AgentCard({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: A
         <dt className="text-muted">{strings.team.model}</dt>
         <dd>{agent.model}</dd>
       </dl>
+
+      {agent.routines.length > 0 && <Routines agent={agent} dispatch={dispatch} />}
 
       <div className="space-y-1 text-sm">
         <p className="font-medium">{strings.team.lastRun}</p>
@@ -113,14 +183,19 @@ function AgentCard({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: A
 export function Team({
   agents,
   invalidRooms,
+  scheduler,
   dispatch,
 }: {
   agents: TeamAgent[];
   invalidRooms: { room: string; error: string }[];
+  scheduler: Scheduler;
   dispatch: (action: Action) => void;
 }) {
   return (
     <Section title={strings.team.title}>
+      <p role="status" className="text-sm text-muted">
+        {strings.team.scheduler(scheduler)}
+      </p>
       {invalidRooms.length > 0 && (
         <div className="space-y-1 rounded-md border border-warn bg-warn-soft px-3 py-2 text-sm text-warn">
           <p className="font-medium">{strings.app.invalidRoomsTitle}</p>
