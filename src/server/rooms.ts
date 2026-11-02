@@ -74,6 +74,10 @@ const agentSchema = z.strictObject({
   maxBudgetUsd: z.number().positive().optional(),
   /** Character sheet of the room view, relative to the home (the neutral one when left out). */
   sprite: spriteSchema.optional(),
+  /** "task": approving one of its items gives the agent a task to execute it, and wakes it. */
+  onApproval: z.enum(["task"]).optional(),
+  /** "run": a message from another agent (hq_message) wakes it at once. */
+  onMessage: z.enum(["run"]).optional(),
 });
 
 export const roomFileSchema = z.strictObject({
@@ -110,6 +114,10 @@ export type Agent = {
   maxBudgetUsd: number | null;
   /** Absolute path of the agent's character sheet, always inside the home, or null for the neutral one. */
   sprite: string | null;
+  /** "task": an approved item becomes a task for the agent, and wakes it (see wakeAgents). */
+  onApproval: "task" | null;
+  /** "run": a message addressed to the agent wakes it (see wakeAgents). */
+  onMessage: "run" | null;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -217,6 +225,8 @@ export function loadRoom(home: string, roomDir: string): Room {
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
       sprite,
+      onApproval: agent.onApproval ?? null,
+      onMessage: agent.onMessage ?? null,
     };
   });
 

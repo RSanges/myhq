@@ -80,6 +80,11 @@ export const strings = {
     proposalTitle: (language: string, room: string) =>
       language.toLowerCase().split("-")[0] === "fr" ? `Proposition de salle : ${room}` : `Room proposal: ${room}`,
   },
+  /** Tasks MyHQ writes in an agent's mailbox. */
+  tasks: {
+    /** Created when an item of an agent with `onApproval: "task"` is approved. */
+    executeApproved: (id: number, title: string) => `Exécute l'item approuvé n° ${id} : ${title}`,
+  },
   team: {
     title: "L'équipe",
     empty: "Aucun agent. Proposez une première salle avec « Ajouter une salle ».",

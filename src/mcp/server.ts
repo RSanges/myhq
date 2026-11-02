@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     "hq_message",
     {
       description:
-        "Send a message to another agent of your room. It becomes a task handled at its next run.",
+        "Send a message to another agent of your room. It becomes a task handled at its next run (at once when the recipient wakes on messages).",
       inputSchema: inputs.hq_message,
     },
     async (args) => respond(() => hqMessage(db, ctx, args)),

@@ -24,6 +24,9 @@ export type StartRunRequest = z.infer<typeof startRunSchema>;
 
 export const DEFAULT_TASK = "Do the routine work described in your role.";
 
+/** The task of a run MyHQ starts to hand over an approved item or a message (wakeAgents). */
+export const WAKE_TASK = "Handle the pending tasks of your mailbox, listed below.";
+
 export type RunnerDeps = {
   config?: HqConfig;
   engine?: Engine;
@@ -155,6 +158,52 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
   });
 }
 
+type WakeCandidate = { room: string; agent_id: string; source: "approval" | "message" };
+
+/**
+ * Starts a run, at once, for each agent that has a reason to wake up: a task
+ * from an approved item (`onApproval: "task"`, reason `approval`) or from a
+ * message (`onMessage: "run"`, reason `message`) created since the agent's
+ * last run started. A busy agent or the daily cap leaves the task pending: it
+ * is taken by the agent's next run, and an agent still busy is woken again
+ * when its run ends (the app calls this after each decision, on each tool
+ * result and at the end of each run). Tasks given back by a failed run are
+ * older than that run, so a failing agent is not woken in a loop. Never
+ * throws for a busy agent or the cap; returns the runs started.
+ */
+export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
+  const candidates = db
+    .prepare(
+      `SELECT t.room, t.agent_id, t.source FROM tasks t
+       WHERE t.status = 'pending' AND t.source IN ('approval', 'message')
+         AND t.created_at > COALESCE(
+           (SELECT MAX(r.started_at) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id), '')
+       ORDER BY t.id`,
+    )
+    .all() as WakeCandidate[];
+  if (candidates.length === 0) return [];
+  const home = loadHome(config.home);
+  const started: RunRow[] = [];
+  const done = new Set<string>();
+  for (const candidate of candidates) {
+    const key = `${candidate.room}/${candidate.agent_id}`;
+    if (done.has(key)) continue;
+    const agent = home.rooms.find((r) => r.name === candidate.room)?.agents.find((a) => a.id === candidate.agent_id);
+    if (!agent) continue;
+    const wanted = candidate.source === "approval" ? agent.onApproval === "task" : agent.onMessage === "run";
+    if (!wanted) continue;
+    done.add(key);
+    try {
+      const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
+      started.push(startRun(request, { ...deps, config }));
+    } catch (error) {
+      if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "DAILY_CAP_REACHED")) continue;
+      console.error(`[runner] could not wake ${key}`, error);
+    }
+  }
+  return started;
+}
+
 /**
  * Records and starts a run of any agent, room agent or MyHQ's own (onboarding),
  * after the agent lock and the daily cap. `prompt` receives the run id and
@@ -221,7 +270,7 @@ export function launchRun(params: {
     .immediate();
 
   const prompt = params.prompt(run.id, mailbox);
-  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert }).catch((error) => {
+  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps }).catch((error) => {
     console.error(`[runner] run #${run.id} crashed`, error);
   });
   return run;
@@ -236,6 +285,8 @@ type ExecuteParams = {
   run: RunRow;
   prompt: string;
   send: Send;
+  /** Passed on to the runs this one wakes (wakeAgents). */
+  deps: RunnerDeps;
 };
 
 function storeEvent(db: Db, run: RunRow, event: RunEvent): void {
@@ -250,6 +301,15 @@ function storeEvent(db: Db, run: RunRow, event: RunEvent): void {
     JSON.stringify(data),
     now(),
   );
+}
+
+/** Wakes the agents that a message of this run, or the end of it, lets start. Never throws. */
+function wake(p: ExecuteParams): void {
+  try {
+    wakeAgents(p.config, p.db, { ...p.deps, engine: p.engine, send: p.send });
+  } catch (error) {
+    console.error(`[runner] wake after run #${p.run.id} failed`, error);
+  }
 }
 
 async function execute(p: ExecuteParams): Promise<void> {
@@ -309,7 +369,10 @@ async function execute(p: ExecuteParams): Promise<void> {
         db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
       }
       storeEvent(db, run, event);
-      if (event.type === "tool_result") void notifyPendingApprovals(db, p.send);
+      if (event.type === "tool_result") {
+        void notifyPendingApprovals(db, p.send);
+        wake(p);
+      }
     }
   } catch (error) {
     end = {
@@ -366,6 +429,7 @@ async function execute(p: ExecuteParams): Promise<void> {
     }
   })();
 
+  wake(p);
   await notifyPendingApprovals(db, p.send);
   if (status === "failed") {
     await p.send(strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }));

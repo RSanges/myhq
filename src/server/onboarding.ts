@@ -141,6 +141,8 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
     disallowedTools: [],
     maxBudgetUsd: config.onboardingMaxBudgetUsd,
     sprite: null,
+    onApproval: null,
+    onMessage: null,
   };
 }
 
