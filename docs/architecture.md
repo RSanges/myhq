@@ -24,13 +24,16 @@ is built from the room and role definition in the home directory:
   plugins) do not run inside agents.
 - `--disallowedTools`: deployment and schema push commands, denied to every
   agent whatever its whitelist says.
+- `--tools`: only the built-in tools of the whitelist exist for the agent
+  (none when it only uses MCP tools), so nothing outside it can run.
 
 The process starts in the agent's own working directory and receives the run
 context through environment variables (`HQ_DB_PATH`, `HQ_RUN_ID`,
 `HQ_AGENT_ID`, `HQ_ROOM`); the app's own variables, Telegram token included,
-are never passed on. The Claude Code binary is not modified
-and runs on the user's own plan, which is the frame the subscription terms
-allow. There is no Agent SDK.
+are never passed on. Tool search is turned off (`ENABLE_TOOL_SEARCH=false`)
+so that the MCP tools are listed from the start. The Claude Code binary is not
+modified and runs on the user's own plan, which is the frame the subscription
+terms allow. There is no Agent SDK.
 
 `--max-turns` does not exist in CLI 2.1.183: the per-run cap goes through
 `--max-budget-usd`. Check the flags again when the CLI version changes.

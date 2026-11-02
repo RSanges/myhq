@@ -53,6 +53,26 @@ export function writeMcpConfig(params: {
   fs.writeFileSync(params.file, JSON.stringify(config, null, 2));
 }
 
+/**
+ * Built-in tools named by an agent's whitelist (`Bash(git *)` gives `Bash`).
+ * Passed to `--tools` so that nothing else is even available: without it,
+ * Claude Code would still run read-only Bash commands for any agent.
+ */
+export function builtInTools(allowedTools: string[]): string[] {
+  const names = allowedTools
+    .filter((tool) => !tool.startsWith("mcp__"))
+    .map((tool) => tool.replace(/\(.*$/, "").trim())
+    .filter(Boolean);
+  return [...new Set(names)];
+}
+
+/**
+ * Environment additions for every run. Tool search is off so that the MCP
+ * tools are in the tool list from the start (with it, a model must first look
+ * them up, which smaller models fail to do).
+ */
+export const CLAUDE_ENV = { ENABLE_TOOL_SEARCH: "false" } as const;
+
 /** The exact argument list given to `claude`. */
 export function buildClaudeArgs(input: RunInput): string[] {
   const args = [
@@ -73,6 +93,8 @@ export function buildClaudeArgs(input: RunInput): string[] {
     "--setting-sources",
     "project,local",
   ];
+  const tools = builtInTools(input.allowedTools);
+  args.push("--tools", ...(tools.length > 0 ? tools : [""]));
   if (input.allowedTools.length > 0) args.push("--allowedTools", ...input.allowedTools);
   args.push("--disallowedTools", ...DENIED_TOOLS);
   args.push("--max-budget-usd", String(input.maxBudgetUsd));
@@ -242,7 +264,7 @@ export class ClaudeEngine implements Engine {
   async *run(input: RunInput): AsyncIterable<RunEvent> {
     const child = spawn(this.bin, buildClaudeArgs(input), {
       cwd: input.workDir,
-      env: input.env as NodeJS.ProcessEnv,
+      env: { ...input.env, ...CLAUDE_ENV } as unknown as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

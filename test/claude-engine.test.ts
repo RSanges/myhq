@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { buildClaudeArgs, parseStreamLine } from "../src/server/claude-engine";
+import { buildClaudeArgs, builtInTools, parseStreamLine } from "../src/server/claude-engine";
 import type { RunEvent, RunInput } from "../src/server/engine";
 import { LocalEngine } from "../src/server/engine";
 
@@ -103,12 +103,17 @@ test("builds the claude command line", () => {
     "--strict-mcp-config",
     "--setting-sources",
     "project,local",
-    "--allowedTools",
+    "--tools",
   ]);
-  assert.deepEqual(args.slice(15, 17), ["WebSearch", "mcp__hq__*"]);
-  assert.equal(args[17], "--disallowedTools");
+  assert.deepEqual(args.slice(15, 20), ["WebSearch", "--allowedTools", "WebSearch", "mcp__hq__*", "--disallowedTools"]);
   assert.deepEqual(args.slice(-2), ["--max-budget-usd", "2"]);
   assert.ok(!args.includes("--max-turns"));
+});
+
+test("only whitelisted built-in tools are available", () => {
+  assert.deepEqual(builtInTools(["WebSearch", "Bash(git *)", "Bash(npm test)", "mcp__hq__*"]), ["WebSearch", "Bash"]);
+  const args = buildClaudeArgs({ allowedTools: ["mcp__hq__*"], maxBudgetUsd: 1 } as RunInput);
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), ["--tools", ""]);
 });
 
 test("LocalEngine is a skeleton that throws", async () => {
