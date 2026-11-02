@@ -1,9 +1,9 @@
-import { strings } from "@/ui/strings";
+import { Dashboard } from "@/ui/dashboard";
 
 export default function Home() {
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <p className="text-lg">{strings.app.placeholder}</p>
+    <main className="flex-1">
+      <Dashboard />
     </main>
   );
 }

@@ -6,8 +6,8 @@ through the official Claude Code binary (`claude -p`), and everything an agent
 wants to publish goes through your approval queue.
 
 **Status: pre-alpha.** The core of the first slice is in place (database, HQ
-MCP server, runner, HTTP API, Telegram notifications); the interface comes
-next.
+MCP server, runner, HTTP API, Telegram notifications) and the one-page interface
+(approval desk, team, live feed, usage meter).
 
 ## Concepts
 
