@@ -51,7 +51,8 @@ export function getConfig(env: Env = process.env): HqConfig {
   }
   const vars = parsed.data;
   const repoRoot = process.cwd();
-  const home = path.resolve(repoRoot, vars.MYHQ_HOME);
+  // The home is read at runtime, never bundled: keep it out of output tracing.
+  const home = path.resolve(/* turbopackIgnore: true */ repoRoot, vars.MYHQ_HOME);
   const dataDir = path.join(home, "data");
   return {
     repoRoot,
