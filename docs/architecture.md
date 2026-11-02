@@ -19,9 +19,16 @@ is built from the room and role definition in the home directory:
 - `--mcp-config`: a JSON file generated per run, with the HQ MCP server and
   the extra servers the agent is allowed to use.
 - `--max-budget-usd`: the cap on the cost of one run.
+- `--strict-mcp-config`: only the servers of that file, none of the user's.
+- `--setting-sources project,local`: the user's personal settings (hooks,
+  plugins) do not run inside agents.
+- `--disallowedTools`: deployment and schema push commands, denied to every
+  agent whatever its whitelist says.
 
 The process starts in the agent's own working directory and receives the run
-context through environment variables. The Claude Code binary is not modified
+context through environment variables (`HQ_DB_PATH`, `HQ_RUN_ID`,
+`HQ_AGENT_ID`, `HQ_ROOM`); the app's own variables, Telegram token included,
+are never passed on. The Claude Code binary is not modified
 and runs on the user's own plan, which is the frame the subscription terms
 allow. There is no Agent SDK.
 
