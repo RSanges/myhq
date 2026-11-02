@@ -2,80 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { HqConfig } from "./config";
+import { DEFAULT_LANGUAGE, readHomeSettings } from "./home-settings";
 import { getDbAt, type ApprovalRow, type Db, type MessageRow, type RunRow } from "./db";
 import { HqError } from "./errors";
 import { toApproval, toMessage, toRun, type ApprovalDto, type MessageDto, type RunDto } from "./feed";
 import { addDays, dayKey, dayRange, wallTime } from "./time";
 
-export const DEFAULT_LANGUAGE = "en";
-
-/**
- * `<home>/myhq.json`: settings of the home that are not secrets. Optional;
- * other keys are ignored, so that the file can grow.
- */
-export const homeSettingsSchema = z.looseObject({
-  /**
-   * Language of the texts the agents write for this home (BCP 47 tag such as
-   * `fr` or `en`). Read by the onboarding run; defaults to English.
-   */
-  language: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "a BCP 47 language tag such as fr or en")
-    .default(DEFAULT_LANGUAGE),
-  export: z
-    .strictObject({
-      /** Folder of the daily export, relative to the home or absolute. */
-      dir: z.string().trim().min(1),
-      /** Local hour (HQ_TIMEZONE) from which the previous day is exported. */
-      hour: z.number().int().min(0).max(23).default(1),
-    })
-    .optional(),
-  /**
-   * Approval types sent to Telegram in full (header and body, cut in messages
-   * of 4000 characters, the buttons under the last one) instead of the short alert.
-   */
-  notifyTypes: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,62}$/, "an approval type in snake_case")).default([]),
-});
+export { DEFAULT_LANGUAGE, homeSettingsSchema } from "./home-settings";
 
 export type ExportSettings = { dir: string; hour: number };
-
-/** The parsed myhq.json, or null when the file is absent. Throws when it is invalid. */
-function readHomeSettings(home: string): z.infer<typeof homeSettingsSchema> | null {
-  const file = path.join(home, "myhq.json");
-  if (!fs.existsSync(file)) return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`);
-  }
-  const parsed = homeSettingsSchema.safeParse(raw);
-  if (!parsed.success) {
-    const details = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
-    throw new Error(`${file}: ${details}`);
-  }
-  return parsed.data;
-}
 
 /** The export settings of the home, or null when myhq.json or its `export` is absent. Throws when invalid. */
 export function readExportSettings(home: string): ExportSettings | null {
   const settings = readHomeSettings(home)?.export;
   return settings ? { dir: path.resolve(home, settings.dir), hour: settings.hour } : null;
-}
-
-/**
- * The approval types sent in full on Telegram (`notifyTypes` in myhq.json),
- * none when the file or the key is absent. Never throws: an invalid file is
- * logged and the alerts stay short.
- */
-export function readNotifyTypes(home: string): string[] {
-  try {
-    return readHomeSettings(home)?.notifyTypes ?? [];
-  } catch (error) {
-    console.error(`[notify] ${(error as Error).message}`);
-    return [];
-  }
 }
 
 /** The language of the home (`language` in myhq.json), `en` when the file or the key is absent. Throws when invalid. */

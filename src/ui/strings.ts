@@ -402,6 +402,9 @@ export const strings = {
   notify: {
     approvalPending: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
       `MyHQ : un item attend ta validation (#${p.id})\n${p.room} / ${p.agent} : ${p.type}\n${p.title}`,
+    /** First line of an informational item (notifyTypes), followed by its body. */
+    notification: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
+      `MyHQ : ${p.title} (#${p.id})\n${p.room} / ${p.agent} : ${p.type}`,
     runFailed: (p: { room: string; agent: string; runId: number; summary: string }) =>
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
   },

@@ -1,6 +1,7 @@
 import { approvalKeyboard } from "../assistant/approval-buttons";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { splitMessage } from "../assistant/text";
+import { NOTIFICATION_NOTE } from "./home-settings";
 import { strings } from "../ui/strings";
 import type { Env } from "./config";
 import type { Db } from "./db";
@@ -60,36 +61,40 @@ export async function notify(
 export const sendAlert: Send = (text, options) => notify(text, process.env, fetch, options);
 
 /**
- * Notifies every pending approval not notified yet. Approvals are created by
- * the HQ MCP server, which runs without the Telegram variables, so the app
- * process sweeps them (during and after each run). An item whose type is in
- * `notifyTypes` (myhq.json) is sent in full: the alert, then its body as is,
- * cut in messages of 4000 characters, the buttons under the last one.
+ * Notifies every pending approval not notified yet, and every informational
+ * item (a type of `notifyTypes`, born approved by hq_submit). Approvals are
+ * created by the HQ MCP server, which runs without the Telegram variables, so
+ * the app process sweeps them (during and after each run). A pending item gets
+ * the short alert with the buttons; an informational one is sent in full, its
+ * alert line then its body as is, cut in messages of 4000 characters, with no
+ * buttons.
  */
-export async function notifyPendingApprovals(
-  db: Db,
-  send: Send = sendAlert,
-  notifyTypes: readonly string[] = [],
-): Promise<void> {
+export async function notifyPendingApprovals(db: Db, send: Send = sendAlert): Promise<void> {
   const rows = db
     .prepare(
-      `SELECT a.id, a.room, a.type, a.title, a.body, COALESCE(g.name, a.agent_id) AS agent
+      `SELECT a.id, a.room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
        FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
-       WHERE a.status = 'pending' AND a.notified_at IS NULL ORDER BY a.id`,
+       WHERE a.notified_at IS NULL AND (a.status = 'pending'
+         OR (a.status = 'approved' AND a.decision_note = ? AND a.decided_at = a.created_at))
+       ORDER BY a.id`,
     )
-    .all() as { id: number; room: string; type: string; title: string; body: string; agent: string }[];
+    .all(NOTIFICATION_NOTE) as {
+    id: number;
+    room: string;
+    type: string;
+    title: string;
+    body: string;
+    status: string;
+    agent: string;
+  }[];
   const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
   for (const row of rows) {
     // Marked first so that two concurrent sweeps never send the same item twice.
     if (mark.run(new Date().toISOString(), row.id).changes === 0) continue;
-    const alert = strings.notify.approvalPending(row);
-    if (!notifyTypes.includes(row.type)) {
-      await send(alert, { approvalId: row.id });
+    if (row.status === "pending") {
+      await send(strings.notify.approvalPending(row), { approvalId: row.id });
       continue;
     }
-    const parts = splitMessage(`${alert}\n\n${row.body}`);
-    for (const [index, part] of parts.entries()) {
-      await send(part, index === parts.length - 1 ? { approvalId: row.id } : {});
-    }
+    for (const part of splitMessage(`${strings.notify.notification(row)}\n\n${row.body}`)) await send(part);
   }
 }

@@ -1,6 +1,8 @@
+import path from "node:path";
 import { z } from "zod";
 import type { Env } from "../server/config";
 import { now, type ApprovalRow, type Db } from "../server/db";
+import { NOTIFICATION_NOTE, readNotifyTypes } from "../server/home-settings";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
@@ -18,7 +20,15 @@ export type HqContext = {
   room: string;
   /** MyHQ's role templates, to instantiate the roles of a room proposal. */
   templatesDir?: string;
+  /** The home, to read `notifyTypes` from its myhq.json; none when unknown. */
+  home?: string;
 };
+
+/** MyHQ keeps its database at `<home>/data/hq.db`: the home is two levels up. */
+function homeOf(dbPath: string): string | undefined {
+  const dataDir = path.dirname(path.resolve(dbPath));
+  return path.basename(dataDir) === "data" ? path.dirname(dataDir) : undefined;
+}
 
 export function readContext(env: Env): HqContext {
   const parsed = contextSchema.safeParse(env);
@@ -31,6 +41,7 @@ export function readContext(env: Env): HqContext {
     runId: parsed.data.HQ_RUN_ID,
     agentId: parsed.data.HQ_AGENT_ID,
     room: parsed.data.HQ_ROOM,
+    home: homeOf(parsed.data.HQ_DB_PATH),
   };
 }
 
@@ -106,10 +117,17 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       throw new ToolError((error as Error).message);
     }
   }
+  // An informational type (notifyTypes in myhq.json) is born approved: the
+  // app sends it to Telegram in full, it never waits for a decision and never
+  // triggers onApproval. Its agent already knows it, so it is marked seen.
+  const informational =
+    parsed.type !== ROOM_PROPOSAL && ctx.home !== undefined && readNotifyTypes(ctx.home).includes(parsed.type);
+  const at = now();
   const result = db
     .prepare(
-      `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
+         decided_at, seen_by_agent_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       ctx.room,
@@ -119,9 +137,16 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       parsed.title,
       body,
       JSON.stringify(payload ?? {}),
-      now(),
+      informational ? "approved" : "pending",
+      informational ? NOTIFICATION_NOTE : null,
+      informational ? at : null,
+      informational ? at : null,
+      at,
     );
-  return { approvalId: Number(result.lastInsertRowid), status: "pending" as const };
+  return {
+    approvalId: Number(result.lastInsertRowid),
+    status: informational ? ("approved" as const) : ("pending" as const),
+  };
 }
 
 export function hqTaskUpdate(db: Db, ctx: HqContext, args: Args<"hq_task_update">) {

@@ -7,7 +7,6 @@ import { getConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
-import { readNotifyTypes } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
@@ -372,7 +371,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       }
       storeEvent(db, run, event);
       if (event.type === "tool_result") {
-        void notifyPendingApprovals(db, p.send, readNotifyTypes(config.home));
+        void notifyPendingApprovals(db, p.send);
         wake(p);
       }
     }
@@ -432,7 +431,7 @@ async function execute(p: ExecuteParams): Promise<void> {
   })();
 
   wake(p);
-  await notifyPendingApprovals(db, p.send, readNotifyTypes(config.home));
+  await notifyPendingApprovals(db, p.send);
   if (status === "failed") {
     await p.send(strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }));
   }

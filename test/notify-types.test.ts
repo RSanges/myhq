@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { hqReadDecisions, hqSubmit, readContext, type HqContext } from "../src/mcp/tools";
 import type { Env } from "../src/server/config";
-import { getDbAt, type Db } from "../src/server/db";
+import { getDbAt, type ApprovalRow, type Db } from "../src/server/db";
 import type { Engine, RunEvent } from "../src/server/engine";
-import { readNotifyTypes } from "../src/server/export";
+import { getState } from "../src/server/feed";
+import { readNotifyTypes } from "../src/server/home-settings";
 import { notify, notifyPendingApprovals, type Send } from "../src/server/notify";
 import { loadHome } from "../src/server/rooms";
+import { schedulerInfo } from "../src/server/routines";
 import { startRun } from "../src/server/runner";
 import { startFakeTelegram, type FakeTelegram } from "./fake-telegram";
 import { makeHome, waitForRun } from "./helpers";
@@ -15,7 +18,7 @@ import { makeHome, waitForRun } from "./helpers";
 const TOKEN = "notify-token";
 const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
 
-/** The app's sender, pointed at the fake Bot API, polling on (so alerts carry buttons). */
+/** The app's sender, pointed at the fake Bot API, polling on (so pending alerts carry buttons). */
 function sender(fake: FakeTelegram): Send {
   const env: Env = {
     HQ_TELEGRAM_BOT_TOKEN: TOKEN,
@@ -28,89 +31,122 @@ function sender(fake: FakeTelegram): Send {
 
 const sendCalls = (fake: FakeTelegram) => fake.calls.filter((c) => c.method === "sendMessage").map((c) => c.params);
 
-function addApproval(db: Db, type: string, title: string, body: string): number {
-  return Number(
-    db
-      .prepare(
-        "INSERT INTO approvals (room, agent_id, type, title, body, status, created_at) VALUES ('demo', 'scout', ?, ?, ?, 'pending', ?)",
-      )
-      .run(type, title, body, new Date().toISOString()).lastInsertRowid,
-  );
-}
-
 function writeMyhq(home: string, settings: unknown): void {
   fs.writeFileSync(path.join(home, "myhq.json"), JSON.stringify(settings));
 }
 
-test("myhq.json: notifyTypes defaults to none, and an invalid file keeps the short alerts", () => {
+const approval = (db: Db, id: number) => db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow;
+
+/** A home with a mailer (onApproval: task), myhq.json declaring mail_alert informational. */
+function informationalHome() {
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "../demo-project",
+      agents: [
+        { id: "mailer", name: "Mailer", role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"], onApproval: "task" },
+      ],
+    },
+  );
+  writeMyhq(config.home, { notifyTypes: ["mail_alert"] });
+  return config;
+}
+
+test("myhq.json: notifyTypes defaults to none, and an invalid file keeps every item pending", () => {
   const config = makeHome();
   assert.deepEqual(readNotifyTypes(config.home), []);
   writeMyhq(config.home, { language: "fr" });
   assert.deepEqual(readNotifyTypes(config.home), []);
-  writeMyhq(config.home, { notifyTypes: ["mail_alert", "mail_reply"] });
-  assert.deepEqual(readNotifyTypes(config.home), ["mail_alert", "mail_reply"]);
+  writeMyhq(config.home, { notifyTypes: ["mail_alert", "brief"] });
+  assert.deepEqual(readNotifyTypes(config.home), ["mail_alert", "brief"]);
   writeMyhq(config.home, { notifyTypes: ["Not A Type"] });
   assert.deepEqual(readNotifyTypes(config.home), []);
 });
 
-test("a listed type goes out in full, cut at 4000, the buttons under the last part; others stay short", async () => {
+test("the HQ MCP server finds the home from HQ_DB_PATH", () => {
+  const config = makeHome();
+  const ctx = readContext({ HQ_DB_PATH: config.dbPath, HQ_RUN_ID: "1", HQ_AGENT_ID: "a", HQ_ROOM: "r" });
+  assert.equal(ctx.home, config.home);
+  const elsewhere = readContext({ HQ_DB_PATH: path.join(config.home, "hq.db"), HQ_RUN_ID: "1", HQ_AGENT_ID: "a", HQ_ROOM: "r" });
+  assert.equal(elsewhere.home, undefined);
+});
+
+test("hq_submit: an informational type is born approved with the note, seen, and off the pending list", () => {
+  const config = informationalHome();
+  const db = getDbAt(config.dbPath);
+  const ctx: HqContext = { dbPath: config.dbPath, runId: 1, agentId: "mailer", room: "demo", home: config.home };
+  db.prepare(
+    "INSERT INTO runs (id, room, agent_id, engine, task, status, started_at) VALUES (1, 'demo', 'mailer', 'claude', 't', 'done', ?)",
+  ).run(new Date().toISOString());
+
+  const info = hqSubmit(db, ctx, { type: "mail_alert", title: "Invoice due", body: "Pay before Friday." });
+  assert.equal(info.status, "approved");
+  const row = approval(db, info.approvalId);
+  assert.equal(row.status, "approved");
+  assert.equal(row.decision_note, "notification");
+  assert.ok(row.decided_at);
+  assert.equal(row.decided_at, row.created_at);
+  assert.ok(row.seen_by_agent_at, "its agent does not read it back as a decision");
+
+  const reply = hqSubmit(db, ctx, { type: "mail_reply", title: "Reply to Alice", body: "Hello Alice." });
+  assert.equal(reply.status, "pending");
+  assert.equal(approval(db, reply.approvalId).decision_note, null);
+
+  // Desk: history only. No task for the onApproval agent, nothing to read back.
+  const state = getState(db, loadHome(config.home), schedulerInfo(config));
+  assert.deepEqual(state.approvals.pending.map((a) => a.id), [reply.approvalId]);
+  assert.ok(state.approvals.history.some((a) => a.id === info.approvalId && a.decisionNote === "notification"));
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE source = 'approval'").get() as { n: number }).n, 0);
+  assert.deepEqual(hqReadDecisions(db, ctx).decisions, []);
+});
+
+test("an informational item goes out in full, cut at 4000, without buttons; a pending one keeps the alert and buttons", async () => {
   const fake = await startFakeTelegram(TOKEN);
   try {
-    const db = getDbAt(makeHome().dbPath);
-    const body = `Draft reply:\n${"line of the draft, kept as **is**\n".repeat(300)}End.`;
-    const long = addApproval(db, "mail_reply", "Reply to Alice", body);
-    const short = addApproval(db, "community_reply", "A thread", "Body of the reply.");
-    await notifyPendingApprovals(db, sender(fake), ["mail_reply"]);
+    const config = informationalHome();
+    const db = getDbAt(config.dbPath);
+    const ctx: HqContext = { dbPath: config.dbPath, runId: 1, agentId: "mailer", room: "demo", home: config.home };
+    db.prepare(
+      "INSERT INTO runs (id, room, agent_id, engine, task, status, started_at) VALUES (1, 'demo', 'mailer', 'claude', 't', 'done', ?)",
+    ).run(new Date().toISOString());
+    const body = `Three mails need you:\n${"a line of the alert, kept as **is**\n".repeat(300)}End.`;
+    const info = hqSubmit(db, ctx, { type: "mail_alert", title: "Mails du matin", body }).approvalId;
+    const pending = hqSubmit(db, ctx, { type: "mail_reply", title: "Reply to Alice", body: "Hello Alice." }).approvalId;
+    await notifyPendingApprovals(db, sender(fake));
 
     const calls = sendCalls(fake);
-    const parts = calls.filter((c) => String(c.text).includes("line of the draft") || String(c.text).includes(`#${long}`));
+    const parts = calls.filter((c) => String(c.text).includes("a line of the alert") || String(c.text).includes(`(#${info})`));
     assert.ok(parts.length >= 3, `the body is cut in several messages (${parts.length})`);
     assert.ok(parts.every((p) => String(p.text).length <= 4000));
-    assert.match(String(parts[0]!.text), new RegExp(`MyHQ : un item attend ta validation \\(#${long}\\)`));
-    assert.match(String(parts[0]!.text), /Reply to Alice\n\nDraft reply:/);
+    assert.equal(String(parts[0]!.text).split("\n\n")[0], `MyHQ : Mails du matin (#${info})\ndemo / mailer : mail_alert`);
+    assert.match(String(parts[0]!.text), /\n\nThree mails need you:/);
     assert.match(String(parts.at(-1)!.text), /End\.$/);
-    // The body is sent as is (no Markdown stripping), and only the last part carries the buttons.
-    assert.ok(String(parts[1]!.text).includes("kept as **is**"));
-    assert.deepEqual(
-      parts.map((p) => "reply_markup" in p),
-      parts.map((_, i) => i === parts.length - 1),
-    );
-    const keyboard = parts.at(-1)!.reply_markup as { inline_keyboard: { callback_data: string }[][] };
-    assert.equal(keyboard.inline_keyboard[0]![0]!.callback_data, `hq:a:${long}`);
+    assert.ok(String(parts[1]!.text).includes("kept as **is**"), "the body is sent as is");
+    assert.ok(parts.every((p) => !("reply_markup" in p)), "no buttons on an informational item");
 
-    const alert = calls.find((c) => String(c.text).includes(`#${short}`))!;
-    assert.equal(String(alert.text).includes("Body of the reply."), false, "an unlisted type gets the short alert");
+    const alert = calls.find((c) => String(c.text).includes(`(#${pending})`))!;
+    assert.match(String(alert.text), /un item attend ta validation/);
+    assert.equal(String(alert.text).includes("Hello Alice."), false);
     assert.ok("reply_markup" in alert);
 
-    // Notified once.
     const before = sendCalls(fake).length;
-    await notifyPendingApprovals(db, sender(fake), ["mail_reply"]);
-    assert.equal(sendCalls(fake).length, before);
+    await notifyPendingApprovals(db, sender(fake));
+    assert.equal(sendCalls(fake).length, before, "sent once");
   } finally {
     await fake.close();
   }
 });
 
-test("a run reads notifyTypes from myhq.json for the items it submits", async () => {
+test("an approved item whose note happens to be « notification » is not sent again as information", async () => {
   const fake = await startFakeTelegram(TOKEN);
   try {
-    const config = makeHome();
-    writeMyhq(config.home, { notifyTypes: ["mail_alert"] });
-    const db = getDbAt(config.dbPath);
-    const engine: Engine = {
-      name: "claude",
-      async *run(input) {
-        db.prepare(
-          "INSERT INTO approvals (room, agent_id, run_id, type, title, body, status, created_at) VALUES ('demo', 'scout', ?, 'mail_alert', 'Invoice due', 'The full alert text.', 'pending', ?)",
-        ).run(input.runId, new Date().toISOString());
-        yield { type: "tool_result", toolUseId: "t1", isError: false, content: "{}" };
-        yield { type: "end", status: "done", reason: "success", summary: "ok", usage, costUsd: 0 };
-      },
-    };
-    const run = startRun({ room: "demo", agent: "scout" }, { config, engine, send: sender(fake) });
-    await waitForRun(db, run.id);
-    await fake.waitFor(() => fake.sent().some((t) => t.includes("The full alert text.")));
-    assert.equal(fake.sent().length, 1);
+    const db = getDbAt(makeHome().dbPath);
+    db.prepare(
+      "INSERT INTO approvals (room, agent_id, type, title, body, status, decision_note, decided_at, created_at) VALUES ('demo', 'scout', 'x', 'T', 'B', 'approved', 'notification', '2026-11-03T10:00:00.000Z', '2026-11-03T09:00:00.000Z')",
+    ).run();
+    await notifyPendingApprovals(db, sender(fake));
+    assert.deepEqual(fake.sent(), []);
   } finally {
     await fake.close();
   }

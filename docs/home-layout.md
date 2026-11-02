@@ -380,7 +380,7 @@ without a section, the feature is off. Other keys are ignored.
 {
   "language": "fr",
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
-  "notifyTypes": ["mail_reply"]
+  "notifyTypes": ["brief", "mail_alert"]
 }
 ```
 
@@ -389,9 +389,9 @@ without a section, the feature is off. Other keys are ignored.
 | `language` | no | Language of the texts the agents write for this home, as a BCP 47 tag (`fr`, `en`, `pt-BR`). Default: `en`. The onboarding run tells its agent to write the proposal, the role prompts and the "HQ agents" block in it (the English templates stay the structural source, the agent translates them), and, for a French home, to title the proposal « Proposition de salle : <name> ». Roles you write by hand are yours to write in any language. |
 | `export.dir` | yes (with `export`) | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
-| `notifyTypes` | no | Approval types (snake_case) sent to Telegram in full: the usual alert, then the item's body as is (no Markdown stripping, so a draft can be read and copied exactly), cut in messages of 4000 characters, with the Approuver, Refuser and À retravailler buttons under the last one. Other types keep the short alert. The item stays pending like any other. Default: none. |
+| `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored already `approved`, with the note « notification », the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with no buttons, it shows on the desk in the history only (not in the pending list nor in the count of the tab title, not in `/pending` nor in `hq_pending`), and it never triggers `onApproval`. `hq_submit` answers `"status": "approved"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 
-The file is read when the export is checked (every ten minutes) and when
-new items are notified, so a change needs no restart. An invalid file is
-reported in the log (and the alerts stay short).
+The file is read when the export is checked (every ten minutes) and at each
+`hq_submit`, so a change needs no restart. An invalid file is reported in the
+log (and every item keeps the pending flow).
 

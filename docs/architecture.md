@@ -67,7 +67,7 @@ room) and writes directly to SQLite. Seven tools, all validated with zod:
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text)` | Send a message to another agent. |
-| `hq_submit(type, title, body, payload)` | Submit an item to the approval queue. |
+| `hq_submit(type, title, body, payload)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored already approved, see section 5). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -452,11 +452,14 @@ order:
 **What goes out without being asked.** Besides the alerts above, two options
 of the home send text on their own, in both modes:
 
-- `notifyTypes` in `myhq.json`: an item of a listed type is sent in full, the
-  usual alert then its body as is (no Markdown stripping), cut in messages of
-  4000 characters, with the buttons under the last one. For an item the user
-  must read whole before deciding, such as a reply drafted for a mail. The
-  item stays pending like any other.
+- `notifyTypes` in `myhq.json`: informational items. `hq_submit` stores an
+  item of a listed type already `approved`, with the note « notification »
+  (and marked seen by its agent); the app sends it in full, an alert line then
+  its body as is, cut in messages of 4000 characters, without buttons. It is
+  in the desk's history, never in the pending list, `/pending` or
+  `hq_pending`, and it never triggers `onApproval`. For a mail alert: the user
+  reads it, there is nothing to decide. The MCP server finds the home's
+  `myhq.json` from `HQ_DB_PATH` (`<home>/data/hq.db`).
 - `notifyRuns: "summary"` on an agent in `room.json`: when its run ends
   `done`, its summary is sent as a plain message (Markdown marks removed, cut
   at 4000 characters). This is how a morning brief or an evening recap agent
