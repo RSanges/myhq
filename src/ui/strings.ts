@@ -17,7 +17,7 @@ export const strings = {
     },
     invalidRoomsTitle: "Salles invalides",
     roadmapLink: "Feuille de route",
-    roomLink: "La pièce",
+    roomLink: "L'étage",
   },
   desk: {
     title: "Le bureau",
@@ -257,14 +257,15 @@ export const strings = {
   },
   /** The room view (/room): the animated office, its whiteboard and the sheet of an agent. */
   room: {
-    title: "La pièce",
-    pageTitle: "La pièce | MyHQ",
+    title: "L'étage",
+    pageTitle: "L'étage | MyHQ",
+    /** The floor of a project: the room name, first letter in capital. */
+    floorTitle: (room: string) => `L'étage ${room.charAt(0).toUpperCase()}${room.slice(1)}`,
     back: "Retour au bureau",
     roomsLabel: "Salles",
     noAgents: "Aucun agent dans cette salle. Ajoutez-en une depuis le bureau.",
     listTitle: "Les agents",
     openCard: (name: string) => `Ouvrir la fiche de ${name}`,
-    openShort: "Fiche",
     status: {
       asleep: "dort",
       seated: "à sa table",
@@ -336,6 +337,7 @@ export const strings = {
       "Usage : npx tsx scripts/replay-fixture.ts <fixture.jsonl> [options]",
       "  --home <dossier>    home jetable (par défaut : <tmp>/myhq-replay-home)",
       "  --agent <id>        agent qui joue le tour (par défaut : scout)",
+      "  --agents <n>        nombre d'agents de la salle de démonstration, 2 à 12 (par défaut : 3)",
       "  --interval <ms>     délai entre deux événements (par défaut : 1000)",
       "  --delay <s>         attente avant le premier événement (par défaut : 8)",
       "Les fixtures sont dans test/fixtures/*.jsonl.",

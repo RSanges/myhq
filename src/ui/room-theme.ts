@@ -37,11 +37,3 @@ export function readRoomTheme(element: Element): RoomTheme {
     appliance: color("--room-appliance", 0x3b4743),
   };
 }
-
-/** The font families of the wall (next/font variables), for the canvas text. */
-export function readRoomFonts(element: Element): { body: string; display: string } {
-  const style = getComputedStyle(element);
-  const body = style.getPropertyValue("--font-wall-body").trim() || "system-ui, sans-serif";
-  const display = style.getPropertyValue("--font-wall-display").trim() || body;
-  return { body: `${body}, system-ui, sans-serif`, display: `${display}, system-ui, sans-serif` };
-}

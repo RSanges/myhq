@@ -5,7 +5,17 @@ import { test } from "node:test";
 import { parseStreamLine } from "../src/server/claude-engine";
 import type { HqEvent } from "../src/ui/schemas";
 import { agentKey } from "../src/ui/model";
-import { layoutRoom, MAX_COLUMNS, WORLD_W } from "../src/ui/room-layout";
+import {
+  CORRIDOR_H,
+  layoutRoom,
+  officeOf,
+  pointOnRoute,
+  routeLength,
+  routeToOffice,
+  routeToUser,
+  type Point,
+  type RoomLayout,
+} from "../src/ui/room-layout";
 import {
   applyInput,
   ASLEEP_AFTER_MS,
@@ -122,17 +132,16 @@ function probe(model: RoomModel, steps: Step[], times: number[], reduced = false
 }
 
 const agent = (view: RoomView, key = SCOUT): AgentView => view.agents.find((a) => a.key === key)!;
-const legMs = (from: { x: number; y: number }, to: { x: number; y: number }) =>
-  Math.max(500, (Math.hypot(to.x - from.x, to.y - from.y) / WALK_SPEED) * 1000);
+const legMs = (route: Point[]) => Math.max(500, (routeLength(route) / WALK_SPEED) * 1000);
+const last = (route: Point[]) => route[route.length - 1]!;
 
-test("a room of three agents starts asleep, one row of desks, nothing in the tray", () => {
+test("a room of three agents starts asleep, offices on both sides of the corridor, nothing in the tray", () => {
   const view = snapshotRoom(hydrated(), T0);
   assert.deepEqual(view.agents.map((a) => a.status.kind), ["asleep", "asleep", "asleep"]);
   assert.deepEqual(view.agents.map((a) => a.pose), ["sleep", "sleep", "sleep"]);
   assert.equal(view.agents[0]!.bubble?.kind, "zzz");
   assert.equal(view.pending, 0);
-  assert.equal(view.layout.desks.length, 3);
-  assert.equal(new Set(view.layout.desks.map((d) => d.seat.y)).size, 1);
+  assert.deepEqual(view.layout.offices.map((o) => o.side), ["top", "bottom", "top"]);
   assert.equal(view.fps, IDLE_FPS);
   assert.equal(view.nextChangeAt, Number.POSITIVE_INFINITY);
 });
@@ -143,8 +152,10 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   const steps = replaySteps(events);
   const submitAt = T0 + 19 * STEP; // event 18 is the hq_submit call
   const layout = hydrated().layout;
-  const seat = layout.desks[0]!.seat;
-  const leg = legMs(seat, layout.trayStand);
+  const office = layout.offices[0]!;
+  const seat = office.seat;
+  const route = routeToUser(layout, office);
+  const leg = legMs(route);
   const times = [
     T0 + 500, // the run has started, nothing happened yet
     T0 + 2 * STEP + 100, // text
@@ -184,7 +195,7 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.equal(walker.seated, false);
   assert.equal(walker.carrying, true);
   assert.equal(walker.facing, 1);
-  assert.ok(walker.x > seat.x && walker.x < layout.trayStand.x, "on its way");
+  assert.ok(walker.x > seat.x && walker.x < layout.user.stand.x, "on its way");
   assert.equal(walking.pending, 0);
 
   assert.equal(agent(carrying).status.kind, "carrying");
@@ -195,7 +206,7 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.equal(beforeDrop.pending, 0);
   assert.equal(agent(dropped).carrying, false);
   assert.equal(dropped.pending, 1, "the counter rises when the folder is dropped");
-  assert.deepEqual([agent(dropped).x, agent(dropped).y], [layout.trayStand.x, layout.trayStand.y]);
+  assert.deepEqual([agent(dropped).x, agent(dropped).y], [layout.user.stand.x, layout.user.stand.y]);
   assert.equal(agent(leaving).status.kind, "dropping");
   assert.equal(agent(home).seated, true);
   assert.deepEqual([agent(home).x, agent(home).y], [seat.x, seat.y]);
@@ -226,9 +237,11 @@ test("an hq_message walks to the table of the recipient, stays there, and comes 
   );
   assert.equal((events[2]!.data as { name: string }).name, "mcp__hq__hq_message");
   const model = hydrated();
-  const scout = model.layout.desks[0]!;
-  const writer = model.layout.desks[1]!;
-  const leg = legMs(scout.seat, writer.standLeft);
+  const scout = model.layout.offices[0]!;
+  const writer = model.layout.offices[1]!;
+  const route = routeToOffice(scout, writer);
+  const stand = last(route);
+  const leg = legMs(route);
   const messageAt = T0 + 3 * STEP;
   const { views } = probe(model, replaySteps(events), [
     messageAt + 100,
@@ -242,15 +255,15 @@ test("an hq_message walks to the table of the recipient, stays there, and comes 
   assert.deepEqual(leaving.status, { kind: "visiting", target: "Writer" });
   assert.equal(leaving.pose, "walk");
   assert.deepEqual(leaving.coarse, { kind: "visiting", target: "Writer" });
-  assert.ok(middle.x > scout.seat.x && middle.x < writer.standLeft.x);
+  assert.ok(Math.hypot(middle.x - scout.seat.x, middle.y - scout.seat.y) > 20, "on its way");
+  assert.ok(Math.hypot(middle.x - stand.x, middle.y - stand.y) > 20);
   assert.deepEqual(arrived.status, { kind: "talking", target: "Writer" });
   assert.equal(arrived.pose, "stand");
   assert.deepEqual(arrived.bubble, { kind: "talk" });
-  assert.deepEqual([arrived.x, arrived.y], [writer.standLeft.x, writer.standLeft.y]);
+  assert.deepEqual([arrived.x, arrived.y], [stand.x, stand.y]);
   assert.equal(arrived.facing, 1, "facing the desk of the recipient");
   assert.equal(talking.status.kind, "talking");
   assert.deepEqual(returning.status, { kind: "returning" });
-  assert.equal(returning.facing, -1, "the walk back is mirrored");
   assert.equal(returning.carrying, false);
   assert.deepEqual([back.x, back.y], [scout.seat.x, scout.seat.y]);
   assert.equal(back.seated, true);
@@ -372,9 +385,10 @@ test("a snapshot of the home reads the last run: running is awake, failed asks, 
 test("reduced motion: no walking, held poses, a move is a crossfade and nothing is drawn while still", () => {
   const events = fixtureEvents("stream-json-message.synthetic.jsonl");
   const model = hydrated();
-  const scout = model.layout.desks[0]!;
-  const writer = model.layout.desks[1]!;
-  const leg = legMs(scout.seat, writer.standLeft);
+  const scout = model.layout.offices[0]!;
+  const writer = model.layout.offices[1]!;
+  const stand = last(routeToOffice(scout, writer));
+  const leg = legMs(routeToOffice(scout, writer));
   const messageAt = T0 + 3 * STEP;
   const times = [messageAt + 10, messageAt + leg / 2, messageAt + leg - 10, messageAt + leg + 500];
   const { views } = probe(model, replaySteps(events), times, true);
@@ -382,8 +396,8 @@ test("reduced motion: no walking, held poses, a move is a crossfade and nothing 
   assert.deepEqual([start.x, start.y, start.alpha], [scout.seat.x, scout.seat.y, 1], "still at its desk, fully visible");
   assert.ok(middle.alpha < 0.05, "invisible in the middle of the move");
   assert.ok(end.alpha > 0.9);
-  assert.deepEqual([end.x, end.y], [writer.standLeft.x, writer.standLeft.y], "no point between the two desks");
-  assert.deepEqual([staying.x, staying.y], [writer.standLeft.x, writer.standLeft.y]);
+  assert.deepEqual([end.x, end.y], [stand.x, stand.y], "no point between the two offices");
+  assert.deepEqual([staying.x, staying.y], [stand.x, stand.y]);
   for (const view of [start, middle, end, staying]) assert.equal(view.frame, 0);
   assert.equal(views[3]!.fps, 0, "redrawn only when something changes");
   assert.ok(views[1]!.fps > 0, "a fade asks for frames");
@@ -432,19 +446,76 @@ test("an event of another room, or of an agent that is not in the room, changes 
   assert.equal(applyInput(model, { type: "event", event: toolCall(1, "Read", {}, "ghost") }, T0), model);
 });
 
-test("layout: three desks per row at most, inside the world, no overlap, height grows by rows", () => {
-  for (let count = 1; count <= 9; count += 1) {
-    const layout = layoutRoom(Array.from({ length: count }, (_, i) => `r/a${i}`));
-    assert.equal(layout.width, WORLD_W);
-    assert.equal(layout.desks.length, count);
-    assert.equal(new Set(layout.desks.map((d) => d.seat.y)).size, Math.ceil(count / MAX_COLUMNS));
-    for (const desk of layout.desks) {
-      for (const p of [desk.seat, desk.standLeft, desk.standRight, desk.label]) {
-        assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height);
+const inRect = (p: Point, r: { x: number; y: number; w: number; h: number }) =>
+  p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+
+/** A route never crosses the wall of the corridor or of the user's office outside a door. */
+function assertThroughDoors(layout: RoomLayout, route: Point[], label: string) {
+  const sides = [layout.corridor.y, layout.corridor.y + CORRIDOR_H];
+  const gaps = layout.offices.map((o) => o.door);
+  for (let i = 1; i < route.length; i += 1) {
+    const a = route[i - 1]!;
+    const b = route[i]!;
+    for (const wallY of sides) {
+      if ((a.y - wallY) * (b.y - wallY) < 0) {
+        const t = (wallY - a.y) / (b.y - a.y);
+        const x = a.x + (b.x - a.x) * t;
+        if (x >= layout.user.room.x) continue; // inside the user's office
+        assert.ok(
+          gaps.some((door) => door.y === wallY && Math.abs(x - door.x) <= door.w / 2),
+          `${label}: crosses a wall at ${x.toFixed(0)},${wallY}`,
+        );
       }
     }
-    assert.equal(new Set(layout.desks.map((d) => `${d.seat.x},${d.seat.y}`)).size, count);
-    assert.ok(layout.trayStand.y < layout.desks[0]!.seat.y - 60, "the user's desk is at the back");
+    const wallX = layout.user.room.x;
+    if ((a.x - wallX) * (b.x - wallX) < 0) {
+      const t = (wallX - a.x) / (b.x - a.x);
+      const y = a.y + (b.y - a.y) * t;
+      assert.ok(Math.abs(y - layout.user.door.y) <= layout.user.door.w / 2, `${label}: crosses the user's wall at ${y.toFixed(0)}`);
+    }
   }
-  assert.ok(layoutRoom(Array.from({ length: 7 }, (_, i) => `r/a${i}`)).height > layoutRoom(["r/a"]).height);
+}
+
+test("layout: offices on both sides of a corridor, built from the number of agents, routes through the doors", () => {
+  for (let count = 1; count <= 12; count += 1) {
+    const layout = layoutRoom(Array.from({ length: count }, (_, i) => `r/a${i}`));
+    assert.equal(layout.offices.length, count);
+    assert.equal(layout.vacant.length, count % 2);
+    assert.equal(new Set(layout.offices.map((o) => `${o.room.x},${o.room.y}`)).size, count, "no two offices share a place");
+    for (const [index, office] of layout.offices.entries()) {
+      assert.equal(office.side, index % 2 === 0 ? "top" : "bottom");
+      for (const p of [office.seat, office.plate, ...office.exit, ...office.visit]) {
+        assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height);
+      }
+      assert.ok(inRect(office.seat, office.room), "the desk is inside the office");
+      assert.equal(office.exit[office.exit.length - 1]!.y, layout.lineY);
+      assertThroughDoors(layout, office.exit, `exit of ${office.key}`);
+      assertThroughDoors(layout, routeToUser(layout, office), `to the user from ${office.key}`);
+      for (const other of layout.offices) {
+        if (other !== office) assertThroughDoors(layout, routeToOffice(office, other), `${office.key} to ${other.key}`);
+      }
+    }
+    assert.ok(inRect(layout.user.stand, layout.user.room));
+    assert.ok(layout.user.room.w > layout.offices[0]!.room.w, "the user's office is the larger one");
+    assert.ok(layout.width / layout.height > 1.4 && layout.width / layout.height < 4.5, "a plan that fits a wide screen");
+  }
+  assert.ok(layoutRoom(Array.from({ length: 9 }, (_, i) => `r/a${i}`)).width > layoutRoom(["r/a", "r/b"]).width);
+  assert.equal(officeOf(layoutRoom(["r/a"]), "r/zzz"), null);
+});
+
+test("a route is walked at a fraction of its length, facing the way it goes", () => {
+  const route = [
+    { x: 0, y: 0 },
+    { x: 0, y: 10 },
+    { x: 30, y: 10 },
+    { x: 30, y: 0 },
+  ];
+  assert.equal(routeLength(route), 50);
+  assert.deepEqual(pointOnRoute(route, 0).point, { x: 0, y: 0 });
+  assert.deepEqual(pointOnRoute(route, 1).point, { x: 30, y: 0 });
+  const half = pointOnRoute(route, 0.5);
+  assert.deepEqual(half.point, { x: 15, y: 10 });
+  assert.equal(half.facing, 1);
+  assert.equal(pointOnRoute(route, 0.1).facing, 1, "a vertical segment keeps the nearest horizontal direction");
+  assert.equal(pointOnRoute([{ x: 20, y: 0 }, { x: 0, y: 0 }], 0.5).facing, -1);
 });

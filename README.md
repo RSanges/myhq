@@ -12,8 +12,8 @@ approval buttons, conversation, voice notes, files, extensions from the home),
 and the third slice on the MyHQ side: routines with an armed state and a
 journal, generic role templates, `npm run init`, onboarding a project through
 the approval queue, and a daily export. The fourth slice adds the animated
-room (`/room`): a top-down office where agents type, think, walk to a
-colleague or to your desk as their runs happen.
+floor (`/room`): a plan of closed offices along a corridor where agents type,
+think, walk to a colleague's office or to yours as their runs happen.
 
 ## Concepts
 
@@ -135,8 +135,8 @@ The onboarding fixture has reads and an `hq_submit` (the agent walks to your
 desk and drops a folder in the tray), `stream-json-message.synthetic.jsonl`
 an `hq_message` (a walk to a colleague's table, a synthetic file, see its first
 line), `stream-json-auth-error.jsonl` a failed run (a question mark). Options:
-`--agent <id>` (scout, writer or analyst), `--interval <ms>`, `--delay <s>`,
-`--home <dir>`. The script refuses a folder it did not create, so it never
+`--agent <id>` (scout, writer or analyst by default), `--agents <n>` (a floor of
+2 to 12 offices), `--interval <ms>`, `--delay <s>`, `--home <dir>`. The script refuses a folder it did not create, so it never
 writes into your real home, and it never starts `claude`.
 
 ## Running as a service

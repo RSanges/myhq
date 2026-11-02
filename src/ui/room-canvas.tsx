@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { WORLD_W } from "./room-layout";
+import { SPRITE_SIZE } from "./room-layout";
 import { snapshotRoom, type AgentView, type RoomView } from "./room-model";
 import type { RoomRenderer, RoomScene } from "./room-renderer";
 import type { RoomStore } from "./room-store";
-import { readRoomFonts, readRoomTheme } from "./room-theme";
+import { createLabelLayer } from "./room-labels";
+import { readRoomTheme } from "./room-theme";
 
 export type RoomCanvasProps = {
   store: RoomStore;
@@ -22,13 +23,12 @@ export type RoomCanvasProps = {
 
 /** The neutral sheet shipped in public/. */
 const NEUTRAL_SHEET = "/sprites/neutral.png";
-const FONT_WAIT_MS = 1_500;
 
 /** The character under a point of the room, in world units. */
 function agentAt(view: RoomView, x: number, y: number): AgentView | null {
   let found: AgentView | null = null;
   for (const agent of view.agents) {
-    if (Math.abs(x - agent.x) > 24 || y < agent.y - 66 || y > agent.y + 8) continue;
+    if (Math.abs(x - agent.x) > 14 || y < agent.y - SPRITE_SIZE - 2 || y > agent.y + 6) continue;
     if (!found || agent.y > found.y) found = agent;
   }
   return found;
@@ -43,6 +43,7 @@ function agentAt(view: RoomView, x: number, y: number): AgentView | null {
  */
 export function RoomCanvas(props: RoomCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const labelsRef = useRef<HTMLDivElement>(null);
   const latest = useRef(props);
   const kickRef = useRef<() => void>(() => undefined);
 
@@ -53,7 +54,9 @@ export function RoomCanvas(props: RoomCanvasProps) {
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    const labelHost = labelsRef.current;
+    if (!host || !labelHost) return;
+    const labelLayer = createLabelLayer(labelHost);
     let cancelled = false;
     let renderer: RoomRenderer | null = null;
     let raf = 0;
@@ -61,13 +64,12 @@ export function RoomCanvas(props: RoomCanvasProps) {
     let visible = document.visibilityState === "visible";
     let onScreen = true;
     let lastView: RoomView | null = null;
-    let sizedFor = { width: 0, world: 0 };
+    let sizedFor = { width: 0, height: 0, world: "" };
 
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
     canvas.style.display = "block";
-    canvas.style.width = "100%";
-    host.appendChild(canvas);
+    host.insertBefore(canvas, labelHost);
 
     const stop = () => {
       cancelAnimationFrame(raf);
@@ -84,10 +86,11 @@ export function RoomCanvas(props: RoomCanvasProps) {
       const view = snapshotRoom(props.store.get(props.room), now, props.reduced);
       lastView = view;
 
-      const width = host.clientWidth;
-      if (width > 0 && (width !== sizedFor.width || view.layout.height !== sizedFor.world)) {
-        sizedFor = { width, world: view.layout.height };
-        host.style.height = `${renderer.resize(width, view.layout.height)}px`;
+      const { clientWidth: width, clientHeight: height } = host;
+      const world = `${view.layout.width}x${view.layout.height}`;
+      if (width > 0 && height > 0 && (width !== sizedFor.width || height !== sizedFor.height || world !== sizedFor.world)) {
+        sizedFor = { width, height, world };
+        renderer.resize(width, height, view.layout);
       }
       renderer.setSprites(props.sprites);
       renderer.draw(
@@ -134,10 +137,24 @@ export function RoomCanvas(props: RoomCanvasProps) {
     observer.observe(host);
 
     const resizer = new ResizeObserver(() => {
-      sizedFor = { width: 0, world: 0 };
+      sizedFor = { width: 0, height: 0, world: "" };
       kick();
     });
     resizer.observe(host);
+
+    // Zoom, or a move to another screen, changes the device pixel ratio: draw at the new density.
+    let densityQuery: MediaQueryList | null = null;
+    const watchDensity = () => {
+      densityQuery?.removeEventListener("change", onDensity);
+      densityQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      densityQuery.addEventListener("change", onDensity, { once: true });
+    };
+    function onDensity() {
+      renderer?.setResolution(window.devicePixelRatio || 1);
+      watchDensity();
+      kick();
+    }
+    watchDensity();
 
     const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
     const onScheme = () => {
@@ -148,8 +165,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
 
     const pointerWorld = (event: PointerEvent | MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      const factor = WORLD_W / rect.width;
-      return { x: (event.clientX - rect.left) * factor, y: (event.clientY - rect.top) * factor };
+      return renderer?.toWorld(event.clientX - rect.left, event.clientY - rect.top) ?? { x: -1, y: -1 };
     };
     const onMove = (event: PointerEvent) => {
       const point = pointerWorld(event);
@@ -165,17 +181,11 @@ export function RoomCanvas(props: RoomCanvasProps) {
 
     void (async () => {
       try {
-        const fonts = readRoomFonts(host);
-        await Promise.race([
-          Promise.all([document.fonts.load(`600 12px ${fonts.body}`), document.fonts.load(`700 12px ${fonts.display}`)]),
-          new Promise((resolve) => setTimeout(resolve, FONT_WAIT_MS)),
-        ]).catch(() => undefined);
         const { createRoomRenderer } = await import("./room-renderer");
         const created = await createRoomRenderer({
           canvas,
           neutralSheetUrl: NEUTRAL_SHEET,
-          bodyFont: fonts.body,
-          displayFont: fonts.display,
+          labels: labelLayer,
           theme: readRoomTheme(host),
         });
         if (cancelled) {
@@ -198,14 +208,19 @@ export function RoomCanvas(props: RoomCanvasProps) {
       observer.disconnect();
       resizer.disconnect();
       colorScheme.removeEventListener("change", onScheme);
+      densityQuery?.removeEventListener("change", onDensity);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("click", onClick);
       renderer?.destroy();
       renderer = null;
+      labelLayer.destroy();
       canvas.remove();
-      host.style.height = "";
     };
   }, []);
 
-  return <div ref={hostRef} className="room-canvas" aria-hidden="true" />;
+  return (
+    <div ref={hostRef} className="room-canvas" aria-hidden="true">
+      <div ref={labelsRef} className="room-labels" />
+    </div>
+  );
 }

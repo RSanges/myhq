@@ -130,27 +130,34 @@ export function RoomPage() {
   const pending = snapshot?.view.pending ?? 0;
   const showCanvas = room !== null && roomAgents.length > 0 && (wide || narrowOpen);
 
+  const title = room === null ? t.title : t.floorTitle(room);
+
   return (
     <div className="wall-page room-page">
-      <header className="wall-hero">
-        <div className="wall-wrap">
-          <div className="wall-hero-top">
-            <Link href="/" className="wall-back">
-              <svg viewBox="0 0 20 20" aria-hidden focusable="false">
-                <path d="M12 4 6 10l6 6" />
-              </svg>
-              {t.back}
-            </Link>
-            <p className="wall-live" role="status" data-connected={connection === "live" ? "" : undefined}>
-              <span className="wall-live-dot" aria-hidden />
-              {strings.app.connection[connection]}
-            </p>
+      <header className="room-top">
+        <Link href="/" className="wall-back">
+          <svg viewBox="0 0 20 20" aria-hidden focusable="false">
+            <path d="M12 4 6 10l6 6" />
+          </svg>
+          {t.back}
+        </Link>
+        <h1 className="room-title wall-display">{title}</h1>
+        {model.loaded && roomNames.length > 1 && (
+          <div className="room-rooms" role="group" aria-label={t.roomsLabel}>
+            {roomNames.map((name) => (
+              <button key={name} type="button" className="wall-filter" aria-pressed={name === room} onClick={() => setChosen(name)}>
+                {name}
+              </button>
+            ))}
           </div>
-          <h1 className="wall-title wall-display">{t.title}</h1>
-        </div>
+        )}
+        <p className="wall-live room-live" role="status" data-connected={connection === "live" ? "" : undefined}>
+          <span className="wall-live-dot" aria-hidden />
+          {strings.app.connection[connection]}
+        </p>
       </header>
 
-      <div className="wall-wrap wall-body room-body">
+      <div className="room-main">
         {loadError && (
           <div className="space-y-3">
             <ErrorNote>
@@ -162,23 +169,6 @@ export function RoomPage() {
           </div>
         )}
         {!model.loaded && !loadError && <p className="wall-empty-text">{strings.app.loading}</p>}
-
-        {model.loaded && roomNames.length > 1 && (
-          <div className="wall-filters" role="group" aria-label={t.roomsLabel}>
-            {roomNames.map((name) => (
-              <button
-                key={name}
-                type="button"
-                className="wall-filter"
-                aria-pressed={name === room}
-                onClick={() => setChosen(name)}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        )}
-
         {model.loaded && room !== null && roomAgents.length === 0 && <p className="wall-empty-text">{t.noAgents}</p>}
 
         {model.loaded && room !== null && roomAgents.length > 0 && (
@@ -221,41 +211,39 @@ export function RoomPage() {
                 )}
               </div>
             )}
-
-            <section aria-labelledby="room-agents">
-              <h2 id="room-agents" className="wall-panel-title">
-                {t.listTitle}
-                {wide && (
-                  <span className="wall-panel-count" aria-live="off">
-                    {t.trayCount(pending)}
-                  </span>
-                )}
-              </h2>
-              <ul className="room-agents">
-                {roomAgents.map((agent) => (
-                  <AgentRow
-                    key={agent.key}
-                    agent={agent}
-                    status={statusOf.get(agent.key)?.status ?? null}
-                    selected={agent.key === selectedKey}
-                    onOpen={() => setSelectedKey(agent.key)}
-                  />
-                ))}
-              </ul>
-              <p className="sr-only" role="status" aria-live="polite">
-                {snapshot?.announcement ?? ""}
-              </p>
-            </section>
           </>
         )}
       </div>
+
+      {model.loaded && room !== null && roomAgents.length > 0 && (
+        <section className="room-strip" aria-labelledby="room-agents">
+          <h2 id="room-agents" className="sr-only">
+            {t.listTitle}
+          </h2>
+          <ul className="room-agents">
+            {roomAgents.map((agent) => (
+              <AgentRow
+                key={agent.key}
+                agent={agent}
+                status={statusOf.get(agent.key)?.status ?? null}
+                selected={agent.key === selectedKey}
+                onOpen={() => setSelectedKey(agent.key)}
+              />
+            ))}
+          </ul>
+          {wide && <p className="room-strip-tray">{t.trayCount(pending)}</p>}
+          <p className="sr-only" role="status" aria-live="polite">
+            {snapshot?.announcement ?? ""}
+          </p>
+        </section>
+      )}
 
       {selected && <AgentSheet key={selected.key} agent={selected} events={model.events} dispatch={dispatch} onClose={closeSheet} />}
     </div>
   );
 }
 
-/** One agent of the list under the room: its name, what it is doing, and the button that opens its sheet. */
+/** One agent of the list under the floor: a button with its name and what it is doing, that opens its sheet. */
 function AgentRow({
   agent,
   status,
@@ -268,14 +256,18 @@ function AgentRow({
   onOpen: () => void;
 }) {
   return (
-    <li className="room-agent" data-state={status?.kind}>
-      <span className="room-agent-name">{agent.name}</span>
-      <span className="room-agent-status">{status ? statusText(status) : ""}</span>
-      <button type="button" className="room-agent-open" aria-expanded={selected} onClick={onOpen} aria-label={t.openCard(agent.name)}>
-        {t.openShort}
-        <svg viewBox="0 0 20 20" aria-hidden focusable="false">
-          <path d="m8 4 6 6-6 6" />
-        </svg>
+    <li>
+      <button
+        type="button"
+        className="room-agent"
+        data-state={status?.kind}
+        aria-expanded={selected}
+        aria-haspopup="dialog"
+        title={t.openCard(agent.name)}
+        onClick={onOpen}
+      >
+        <span className="room-agent-name">{agent.name}</span>
+        <span className="room-agent-status">{status ? statusText(status) : ""}</span>
       </button>
     </li>
   );

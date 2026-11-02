@@ -1,6 +1,16 @@
 import { agentKey, viewEvent } from "./model";
 import type { Approval, HqEvent, Run } from "./schemas";
-import { deskOf, layoutRoom, visitSpot, type DeskSpot, type Point, type RoomLayout } from "./room-layout";
+import {
+  layoutRoom,
+  officeOf,
+  pointOnRoute,
+  routeLength,
+  routeToOffice,
+  routeToUser,
+  type Office,
+  type Point,
+  type RoomLayout,
+} from "./room-layout";
 
 // The animation model of the room: what each agent is doing, derived from the
 // entities of the SSE stream (docs/api.md). Pure and testable: no canvas, no
@@ -25,7 +35,7 @@ export const FOLDER_DROP_MS = 700;
 /** No run for this long: the agent falls asleep. */
 export const ASLEEP_AFTER_MS = 60_000;
 /** Walking speed, in world units per second. */
-export const WALK_SPEED = 96;
+export const WALK_SPEED = 110;
 /** The shortest walk leg, so that a neighbour is not reached in a blink. */
 export const MIN_LEG_MS = 500;
 /** With reduced motion, a move is a fade out then a fade in of this length. */
@@ -87,8 +97,8 @@ type Trip = {
   start: number;
   legMs: number;
   stayMs: number;
-  from: Point;
-  to: Point;
+  /** From the seat to where the character stands: through the door, along the corridor, through the other door. */
+  path: Point[];
   /** Direction the character faces while it stays. */
   faceStay: 1 | -1;
   /** The approval this trip carries, once the `approval` event arrived. */
@@ -126,7 +136,6 @@ const tripEnd = (trip: Trip): number => trip.start + trip.legMs * 2 + trip.stayM
 /** The moment the folder of a `submit` trip is in the tray. */
 const tripDropAt = (trip: Trip): number => trip.start + trip.legMs + FOLDER_DROP_MS;
 
-const distance = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y);
 const sign = (value: number, fallback: 1 | -1): 1 | -1 => (value > 0.5 ? 1 : value < -0.5 ? -1 : fallback);
 
 function parseTime(iso: string | null): number {
@@ -166,26 +175,26 @@ function withTrip(agent: AgentRuntime, trip: Omit<Trip, "start">, at: number): A
   return { ...agent, trips: [...queued, { ...trip, start }] };
 }
 
-function walkLeg(from: Point, to: Point): number {
-  return Math.max(MIN_LEG_MS, (distance(from, to) / WALK_SPEED) * 1000);
+function walkLeg(path: Point[]): number {
+  return Math.max(MIN_LEG_MS, (routeLength(path) / WALK_SPEED) * 1000);
 }
 
 function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at: number): AgentRuntime {
-  const self = deskOf(model.layout, agent.key);
+  const self = officeOf(model.layout, agent.key);
   const targetKey = agentKey(model.room, targetId);
-  const target = deskOf(model.layout, targetKey);
+  const target = officeOf(model.layout, targetKey);
   const targetAgent = model.agents.find((candidate) => candidate.key === targetKey);
   if (!self || !target || !targetAgent || targetKey === agent.key) return agent;
-  const to = visitSpot(self, target);
+  const path = routeToOffice(self, target);
+  const to = path[path.length - 1]!;
   return withTrip(
     agent,
     {
       kind: "visit",
       targetName: targetAgent.name,
-      legMs: walkLeg(self.seat, to),
+      legMs: walkLeg(path),
       stayMs: VISIT_STAY_MS,
-      from: self.seat,
-      to,
+      path,
       faceStay: sign(target.seat.x - to.x, 1),
       approvalId: null,
     },
@@ -194,19 +203,20 @@ function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at:
 }
 
 function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRuntime {
-  const self = deskOf(model.layout, agent.key);
+  const self = officeOf(model.layout, agent.key);
   if (!self) return agent;
-  const to = model.layout.trayStand;
+  const path = routeToUser(model.layout, self);
+  const to = path[path.length - 1]!;
+  const desk = model.layout.user.desk;
   return withTrip(
     agent,
     {
       kind: "submit",
       targetName: null,
-      legMs: walkLeg(self.seat, to),
+      legMs: walkLeg(path),
       stayMs: DROP_STAY_MS,
-      from: self.seat,
-      to,
-      faceStay: sign(to.x - self.seat.x, 1),
+      path,
+      faceStay: sign(desk.x + desk.w / 2 - to.x, 1),
       approvalId: null,
     },
     at,
@@ -409,7 +419,6 @@ const ease = (value: number): number => {
   const t = Math.min(1, Math.max(0, value));
   return t * t * (3 - 2 * t);
 };
-const lerp = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 
 type TripPose = {
   x: number;
@@ -423,41 +432,41 @@ type TripPose = {
 /** Where a trip puts the character at `at` (the trip is in progress). */
 function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
   const t = at - trip.start;
-  const arrival = sign(trip.to.x - trip.from.x, trip.faceStay);
-  const leg = (progress: number, from: Point, to: Point, facing: 1 | -1) => {
+  const last = trip.path[trip.path.length - 1]!;
+  const back = trip.path.slice().reverse();
+  const leg = (progress: number, route: Point[]) => {
     if (!reduced) {
-      const p = lerp(from, to, ease(progress));
-      return { x: p.x, y: p.y, facing, alpha: 1 };
+      const { point, facing } = pointOnRoute(route, ease(progress));
+      return { x: point.x, y: point.y, facing, alpha: 1 };
     }
     // Reduced motion: the character fades out where it is and fades in where it goes.
     const half = FADE_MS / 2;
     const elapsed = progress * trip.legMs;
     const middle = trip.legMs / 2;
     const alpha = Math.min(1, Math.abs(elapsed - middle) / half);
-    const p = elapsed < middle ? from : to;
-    return { x: p.x, y: p.y, facing: facing, alpha };
+    const point = elapsed < middle ? route[0]! : route[route.length - 1]!;
+    return { x: point.x, y: point.y, facing: pointOnRoute(route, 0).facing, alpha };
   };
   const dropped = at >= tripDropAt(trip);
   if (t < trip.legMs) {
-    return { ...leg(t / trip.legMs, trip.from, trip.to, arrival), stage: "out", carrying: trip.kind === "submit" };
+    return { ...leg(t / trip.legMs, trip.path), stage: "out", carrying: trip.kind === "submit" };
   }
   if (t < trip.legMs + trip.stayMs) {
     return {
-      x: trip.to.x,
-      y: trip.to.y,
+      x: last.x,
+      y: last.y,
       facing: trip.faceStay,
       alpha: 1,
       stage: "stay",
       carrying: trip.kind === "submit" && !dropped,
     };
   }
-  const back = (t - trip.legMs - trip.stayMs) / trip.legMs;
-  return { ...leg(back, trip.to, trip.from, (arrival === 1 ? -1 : 1) as 1 | -1), stage: "back", carrying: false };
+  return { ...leg((t - trip.legMs - trip.stayMs) / trip.legMs, back), stage: "back", carrying: false };
 }
 
 const isAwake = (agent: AgentRuntime, at: number): boolean => agent.running || at - agent.lastActive < ASLEEP_AFTER_MS;
 
-function viewAgent(agent: AgentRuntime, index: number, spot: DeskSpot, at: number, reduced: boolean): AgentView {
+function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number, reduced: boolean): AgentView {
   const base = { key: agent.key, id: agent.id, name: agent.name, index };
   const phase = index * 137;
   const trip = agent.trips.find((candidate) => at >= candidate.start && at < tripEnd(candidate));
@@ -549,7 +558,7 @@ export const MOVE_FPS = 60;
  */
 export function snapshotRoom(model: RoomModel, at: number, reduced = false): RoomView {
   const agents = model.agents.map((agent, index) => {
-    const spot = deskOf(model.layout, agent.key);
+    const spot = officeOf(model.layout, agent.key);
     return spot ? viewAgent(agent, index, spot, at, reduced) : null;
   });
   const views = agents.filter((view): view is AgentView => view !== null);

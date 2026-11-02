@@ -106,9 +106,9 @@ body {
   --owner-l: 84%;
   --owner-fg-l: 24%;
   /* The room (/room): a light, neutral floor (never pink), wood and a dark appliance grey. */
-  --room-floor: #e7eae6;
+  --room-floor: #dde3de;
   --room-floor-line: #d3d9d3;
-  --room-wall: #d8dfda;
+  --room-wall: #f3f5f2;
   --room-wall-edge: #b3bfb8;
   --room-wood: #dcc9a6;
   --room-wood-edge: #a68d66;
@@ -151,9 +151,9 @@ body {
     --owner-s: 30%;
     --owner-l: 24%;
     --owner-fg-l: 82%;
-    --room-floor: #17211e;
+    --room-floor: #131c19;
     --room-floor-line: #22302b;
-    --room-wall: #1e2a26;
+    --room-wall: #1c2824;
     --room-wall-edge: #364640;
     --room-wood: #66563b;
     --room-wood-edge: #8f7a52;
@@ -1308,22 +1308,171 @@ body {
   }
 }
 
-/* ---- The room: /room ----------------------------------------------------- */
+/* ---- The floor: /room ------------------------------------------------------ */
 
-.room-body {
-  gap: 1.5rem;
+/* One screen, no scroll on a wide viewport: the header, the floor (what is left) and the strip of agents. */
+.room-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 100dvh;
+  padding: 0 1rem 0.75rem;
+  background-image: none;
+  background: var(--background);
+}
+
+@media (min-width: 40rem) {
+  .room-page {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+.room-top {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  min-height: 2.75rem;
+}
+
+.room-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.room-rooms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.room-rooms .wall-filter {
+  min-height: 2rem;
+  padding: 0.1rem 0.7rem;
+  font-size: 0.8125rem;
+}
+
+.room-live {
+  margin-left: auto;
+}
+
+.room-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+/* The floor takes all the width and all the height that is left; the plan is scaled to fit inside. */
+.room-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 39.99rem) {
+  .room-stage {
+    flex: none;
+    height: 14rem;
+  }
 }
 
 .room-canvas {
+  position: relative;
   width: 100%;
+  height: 100%;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 1rem;
-  background: var(--room-floor);
-  box-shadow: var(--lift);
+  border-radius: 0.75rem;
+  background: var(--background);
 }
 
-/* The compact band of a phone: the whiteboard figures, the tray, the button that shows the room. */
+/* The text of the floor: HTML over the canvas, in the page fonts, never drawn in the canvas. */
+.room-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: var(--font-wall-body), system-ui, sans-serif;
+}
+
+.room-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  line-height: 1.2;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  will-change: transform;
+}
+
+.room-label[hidden] {
+  display: none !important;
+}
+
+.room-label[data-display] {
+  font-family: var(--font-wall-display), var(--font-wall-body), system-ui, sans-serif;
+}
+
+.room-label[data-tone="ink"] {
+  color: var(--foreground);
+}
+
+.room-label[data-tone="muted"] {
+  color: var(--muted);
+}
+
+.room-label[data-tone="accent"] {
+  color: var(--accent);
+}
+
+.room-label[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.room-label[data-tone="onDanger"] {
+  color: #fff;
+}
+
+.room-label[data-box="plate"] {
+  padding: 0.12em 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 0.4em;
+  background: var(--card);
+}
+
+.room-label[data-box="bubble"] {
+  padding: 0.3em 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 0.8em;
+  background: var(--card);
+  white-space: normal;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.room-label[data-box="badge"] {
+  display: grid;
+  place-items: center;
+  width: 2.2em;
+  height: 2.2em;
+  border-radius: 50%;
+  background: var(--danger);
+  line-height: 1;
+}
+
+.room-canvas canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* The compact band of a phone: the whiteboard figures, the tray, the button that shows the floor. */
 .room-band {
   display: flex;
   flex-direction: column;
@@ -1377,45 +1526,70 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The agents under the floor: one button each, name and state, in a wrapping row. */
+.room-strip {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
 .room-agents {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-@media (min-width: 40rem) {
+@media (max-width: 39.99rem) {
   .room-agents {
-    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+    flex-direction: column;
+    width: 100%;
   }
 }
 
 .room-agent {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "name open"
-    "status open";
-  align-items: center;
-  gap: 0.1rem 0.75rem;
-  padding: 0.6rem 0.6rem 0.6rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 6.5rem;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.8rem;
   border: 1px solid var(--line);
-  border-radius: 0.75rem;
+  border-radius: 0.6rem;
   background: var(--card);
+  text-align: left;
+}
+
+@media (max-width: 39.99rem) {
+  .room-agent {
+    width: 100%;
+  }
+}
+
+.room-agent:hover {
+  border-color: var(--muted);
+}
+
+.room-agent[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .room-agent-name {
-  grid-area: name;
+  font-size: 0.875rem;
   font-weight: 700;
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 
 .room-agent-status {
-  grid-area: status;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 
 .room-agent[data-state="failed"] .room-agent-status,
@@ -1424,37 +1598,12 @@ body {
   font-weight: 600;
 }
 
-.room-agent-open {
-  display: inline-flex;
-  grid-area: open;
-  align-items: center;
-  gap: 0.2rem;
-  min-height: 2.75rem;
-  padding: 0 0.75rem 0 1rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  font-size: 0.875rem;
+.room-strip-tray {
+  margin: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8125rem;
   font-weight: 600;
-}
-
-.room-agent-open:hover {
-  border-color: var(--muted);
-}
-
-.room-agent-open[aria-expanded="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.room-agent-open svg {
-  width: 1rem;
-  height: 1rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* The sheet of an agent: a side panel on a wide screen, the whole screen on a phone. */

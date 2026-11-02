@@ -475,14 +475,24 @@ mcp add --help`):
 
 ## 7. The room view
 
-`/room` (linked from the header of `/`, with a link back) is a top-down
-office: a desk per agent (three per row at most, automatic), a coffee corner, a
+`/room` (linked from the header of `/`, with a link back) is the floor of a
+project, drawn as a plan: a corridor with a closed office per agent on each
+side (walls as thick lines, a door gap onto the corridor, the name on a plate
+on the back wall, the desk inside), a meeting room whose wall holds the
 whiteboard (runs of the day against the cap, cost, share of the weekly budget,
 routines armed, next fire and last firing: the numbers of `/api/usage` and
-`/api/routines`), and at the back the user's desk with the "to approve" tray
-and its count. It is a separate page because the canvas weighs something and
-must be able to stop; `/` stays the desk that works everywhere. When the home
-has several rooms, buttons choose the room shown.
+`/api/routines`), a coffee corner, and at the end of the corridor the larger
+office of the user with the "to approve" tray and its count. The plan is built
+from the number of agents (`layoutRoom`): offices alternate between the two
+sides, the corridor lengthens, the offices deepen or widen so the plan keeps
+the shape of a wide screen, and nothing is fixed to a count (an odd number
+leaves one shaded slot). The canvas takes the whole width and the height that
+is left under the header and above the strip of agents, so the floor fits on
+one screen with no scrolling; the plan is scaled uniformly and centered, and
+never past the scale at which a character is about 48 px on a 1080p screen. It
+is a separate page because the canvas weighs something and must be able to
+stop; `/` stays the desk that works everywhere. When the home has several
+rooms, buttons choose the floor shown.
 
 **Pieces.**
 
@@ -493,11 +503,22 @@ has several rooms, buttons choose the room shown.
   tests replay the fixtures (`test/room-model.test.ts`) on a fake clock.
   `src/ui/room-layout.ts` places the furniture; `src/ui/room-store.ts` keeps
   one model per room outside React.
-- `src/ui/room-renderer.ts`: PixiJS drawing behind a small interface (create,
-  draw a scene, resize, destroy). `src/ui/room-canvas.tsx` imports it
-  dynamically in an effect (never on the server), owns the frame loop and the
-  pointer. `src/ui/room.tsx` is the page: header, rooms, the canvas or the
-  compact band, the list of agents, the sheet.
+- `src/ui/room-renderer.ts`: PixiJS drawing of shapes and sprites behind a
+  small interface (create, draw a scene, resize, set the density, destroy).
+  `src/ui/room-labels.ts`: every piece of text of the floor (name plates, the
+  whiteboard, the tray count, bubbles, the name of a character that is away
+  from its office) is an HTML element over the canvas, placed from the same
+  world coordinates and scale, in the page fonts and colors (CSS variables),
+  with the box of a plate or a bubble drawn by CSS. Nothing is drawn as text
+  in the canvas, so text is sharp at any zoom and in both themes.
+  `src/ui/room-canvas.tsx` imports the renderer dynamically in an effect
+  (never on the server), owns the frame loop, the pointer and the density.
+  `src/ui/room.tsx` is the page: header, rooms, the canvas or the compact band,
+  the strip of agents, the sheet.
+- Walking follows routes of the layout (`routeToOffice`, `routeToUser`): from
+  the seat out of the office, through its door, along the center line of the
+  corridor, through the other door, to where a visitor stands. A test checks
+  that no route of a floor of 1 to 12 agents crosses a wall outside a door.
 - The neutral character is `public/sprites/neutral.png`, drawn by
   `scripts/build-neutral-sprite.mjs`; it is tinted per agent from a fixed
   palette. A home gives an agent its own sheet with `agents[].sprite` (contract
@@ -523,12 +544,15 @@ label (types, thinks, "drops an item"...) in `strings.ts`.
 it a list gives, for each agent, its name, its state in text and a button that
 opens its sheet. A single polite live region says the changes of a coarse state
 (asleep, working, visiting, carrying an item, stuck): typing and thinking come
-and go too often to be announced. The name of an agent is always written under
-its character, and the tints are colour-blind safe: colour never carries the
-identity alone.
+and go too often to be announced. The name of an agent is always written: on the plate of its office, and under
+its character when it walks away from it. The tints are colour-blind safe: colour
+never carries the identity alone.
 
-**Performance and motion.** Resolution is capped at 2 and textures are drawn
-without smoothing. The loop draws only while the tab is visible and the canvas
+**Performance and motion.** The canvas is drawn at the device pixel ratio
+(`autoDensity`, redrawn at the new density when a zoom changes it). Sprite
+sheets use nearest-neighbour scaling, except when a sheet is drawn well below
+its size (a 128 px cell shown at 46 px), where smoothing avoids jagged edges.
+The loop draws only while the tab is visible and the canvas
 on screen (`visibilitychange`, `IntersectionObserver`); the SSE stream keeps
 feeding the model, which is a function of time, so the room catches up on
 return. Idle, the room redraws at 10 frames per second (slow animations and the
@@ -536,9 +560,9 @@ coffee steam), walking at the screen rate. With `prefers-reduced-motion`
 nobody walks or sways: poses are held on their first frame, a move is a short
 crossfade, nothing flashes on the board, and the room is redrawn when its state
 changes (a timer at the next change), which is about no frame at all when idle.
-Under 40 rem of width the canvas is not mounted: a compact band (the board
-figures, the tray count, one agent per line) and a "Voir la pièce" button that
-mounts it on demand.
+Under 40 rem of width the page scrolls as before and the canvas is not
+mounted: a compact band (the board figures, the tray count, one agent per
+line) and a "Voir la pièce" button that mounts it on demand.
 
 **The sheet of an agent** (click on a character, or its list button): the team
 card (role, model, tools, routines and their arming switch, last run, run

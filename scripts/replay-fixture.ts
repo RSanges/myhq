@@ -30,14 +30,19 @@ const t = strings.replay;
 const MARKER = ".myhq-replay-home";
 const ROOM = "demo";
 
-const agents = [
+const baseAgents: { id: string; name: string; cron?: string; armed: boolean }[] = [
   { id: "scout", name: "Scout", cron: "0 7 * * 1-5", armed: true },
   { id: "writer", name: "Writer", armed: false },
   { id: "analyst", name: "Analyst", cron: "0 17 * * 5", armed: true },
 ];
 
-/** Writes the demo room unless the home already has it. */
-function ensureDemoHome(home: string): void {
+/** The demo agents: the three named ones, then generic ones when the floor should be bigger. */
+function demoAgents(count: number) {
+  return Array.from({ length: count }, (_, index) => baseAgents[index] ?? { id: `agent${index + 1}`, name: `Agent ${index + 1}`, armed: false });
+}
+
+/** Writes the demo room unless the home already has it (or when a number of agents is asked for). */
+function ensureDemoHome(home: string, agents: ReturnType<typeof demoAgents>, force: boolean): void {
   const marker = path.join(home, MARKER);
   if (fs.existsSync(home) && fs.readdirSync(home).length > 0 && !fs.existsSync(marker)) {
     throw new Error(t.notAReplayHome(home));
@@ -45,7 +50,7 @@ function ensureDemoHome(home: string): void {
   fs.mkdirSync(path.join(home, "rooms", ROOM, "roles"), { recursive: true });
   fs.writeFileSync(marker, "Created by scripts/replay-fixture.ts. Safe to delete.\n");
   const roomFile = path.join(home, "rooms", ROOM, "room.json");
-  if (fs.existsSync(roomFile)) return;
+  if (fs.existsSync(roomFile) && !force) return;
   for (const agent of agents) {
     fs.writeFileSync(
       path.join(home, "rooms", ROOM, "roles", `${agent.id}.md`),
@@ -74,7 +79,7 @@ function ensureDemoHome(home: string): void {
   );
 }
 
-type Options = { fixture: string; home: string; agent: string; intervalMs: number; delayS: number };
+type Options = { fixture: string; home: string; agent: string; intervalMs: number; delayS: number; agents: number | null };
 
 function parseArgs(argv: string[]): Options | null {
   const flags = new Map<string, string>();
@@ -96,6 +101,7 @@ function parseArgs(argv: string[]): Options | null {
     agent: flags.get("agent") || "scout",
     intervalMs: number("interval", 1000),
     delayS: number("delay", 8),
+    agents: flags.has("agents") ? Math.min(12, Math.max(2, Math.round(number("agents", 3)))) : null,
   };
 }
 
@@ -161,8 +167,10 @@ async function main(): Promise<void> {
   const events = fs.readFileSync(options.fixture, "utf8").split("\n").flatMap(parseStreamLine);
   if (events.length === 0) throw new Error(t.fixtureEmpty(options.fixture));
 
-  ensureDemoHome(options.home);
-  const known = agents.map((agent) => agent.id);
+  const agents = demoAgents(options.agents ?? 3);
+  ensureDemoHome(options.home, agents, options.agents !== null);
+  // The room of an existing demo home is the truth (it may have more agents than the default three).
+  const known = loadHome(options.home).rooms.find((room) => room.name === ROOM)?.agents.map((agent) => agent.id) ?? agents.map((agent) => agent.id);
   if (!known.includes(options.agent)) throw new Error(t.unknownAgent(options.agent, known.join(", ")));
   const db = openDb(path.join(options.home, "data", "hq.db"));
   syncHome(db, loadHome(options.home));
