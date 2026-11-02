@@ -159,7 +159,8 @@ restart.
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
   "approvals": { "pending": [], "history": [] },
-  "recent": { "events": [], "messages": [] }
+  "recent": { "events": [], "messages": [] },
+  "assistant": { "polling": false }
 }
 ```
 
@@ -168,6 +169,8 @@ restart.
 - `approvals.pending`: every pending item, oldest first. `approvals.history`:
   the 100 most recently decided items, newest first.
 - `recent.events` (last 200) and `recent.messages` (last 100), oldest first.
+- `assistant.polling`: true while this process reads the Telegram bot's updates
+  (`HQ_TELEGRAM_POLLING=true`, lock taken, polling loop running).
 
 ### `POST /api/runs`
 

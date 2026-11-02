@@ -5,9 +5,10 @@ bring you what needs your approval. It runs on your own machine: agents run
 through the official Claude Code binary (`claude -p`), and everything an agent
 wants to publish goes through your approval queue.
 
-**Status: pre-alpha.** The core of the first slice is in place (database, HQ
-MCP server, runner, HTTP API, Telegram notifications) and the one-page interface
-(approval desk, team, live feed, usage meter).
+**Status: pre-alpha.** The first slice is in place (database, HQ MCP server,
+runner, HTTP API, the one-page interface with approval desk, team, live feed
+and usage meter), and the assistant on Telegram of the second slice (commands,
+approval buttons, conversation, voice notes, files, extensions from the home).
 
 ## Concepts
 
@@ -46,12 +47,27 @@ data never mix with the code.
       room.json
       roles/
         <agent>.md
+  assistant.json      the Telegram assistant: chat, voice, files, extensions
   assistant/
     commands/         extensions for the Telegram assistant
   data/               SQLite database and work directories (ignored by Git)
 ```
 
-See [docs/home-layout.md](docs/home-layout.md) for the `room.json` schema.
+See [docs/home-layout.md](docs/home-layout.md) for the `room.json` and
+`assistant.json` schemas and the extension contract.
+
+## The assistant on Telegram
+
+Create a bot with BotFather, then set `HQ_TELEGRAM_BOT_TOKEN` and
+`HQ_TELEGRAM_CHAT_ID` (your own chat with the bot) in `.env.local`. From then
+on MyHQ sends you an alert when an item waits for your approval or a run fails.
+
+To talk to it, also set `HQ_TELEGRAM_POLLING=true`. MyHQ then reads the bot's
+messages by long polling (no inbound port, nothing exposed): `/pending`,
+`/approve`, `/reject`, `/revise`, `/run`, `/status`, buttons on approval
+alerts, and a conversation with `claude -p` configured in
+`<home>/assistant.json`. Polling is off by default because a bot can only
+have one reader: switch off any other program that reads the same bot first.
 
 ## Stack
 

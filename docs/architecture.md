@@ -2,7 +2,8 @@
 
 MyHQ is a local app: a Next.js server, a SQLite file, a small MCP server, and
 `claude -p` processes started on demand. This document describes how a run
-works, what the app stores, and how the work is split into delivery slices.
+works, what the app stores, how the work is split into delivery slices, and
+how the assistant on Telegram works.
 
 ## 1. How it runs
 
@@ -30,8 +31,11 @@ is built from the room and role definition in the home directory:
 The process starts in the agent's own working directory and receives the run
 context through environment variables (`HQ_DB_PATH`, `HQ_RUN_ID`,
 `HQ_AGENT_ID`, `HQ_ROOM`); the app's own variables, Telegram token included,
-are never passed on. Tool search is turned off (`ENABLE_TOOL_SEARCH=false`)
-so that the MCP tools are listed from the start. The Claude Code binary is not
+are never passed on. The one exception is `HQ_CLAUDE_OAUTH_TOKEN`: when set,
+it becomes the process's `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token from
+`claude setup-token`, to run unattended on a subscription). Tool search is
+turned off (`ENABLE_TOOL_SEARCH=false`) so that the MCP tools are listed from
+the start. The Claude Code binary is not
 modified and runs on the user's own plan, which is the frame the subscription
 terms allow. There is no Agent SDK.
 
@@ -128,13 +132,8 @@ through the approval queue.
 - **Rooms and roles**: `room.json` and `roles/*.md` in the home directory,
   loaded and validated at startup (see `home-layout.md`).
 - **The assistant on Telegram**: the Bot API through `fetch`, with the token and
-  chat id in `.env.local`. It sends a message when an item waits for approval or
-  a run fails, and (slice 2) reads the user's messages, shows Approve and Reject
-  buttons on items, answers in natural language, and loads extra commands from
-  the home's `assistant/commands/` directory. Only one reader of the bot may
-  run at a time: until a previous bot is switched off, MyHQ only sends. Without
-  a token, nothing is sent and nothing crashes. A system toast is an option,
-  never a requirement.
+  chat id in `.env.local`. Without a token, nothing is sent and nothing
+  crashes. A system toast is an option, never a requirement. See section 5.
 - **Portability**: relative paths, SQLite, no dependency on one OS apart from
   optional notifications.
 
@@ -185,6 +184,9 @@ described, and no mechanism is built before its first real use.
    conversation in natural language, and commands loaded from the home
    directory. Acceptance: from the phone, the user gets an answer, runs a
    command defined in their home, and approves an item.
+   Status: built (section 5) and covered by tests against a fake Bot API;
+   the acceptance is demonstrated once the previous reader of the bot is
+   switched off and polling is turned on.
 3. **The team and onboarding.** Any number of agents per room, with roles that
    become generic templates; cron, integrations through MCP servers, the
    per-agent lock and the daily cap, and an optional daily export of the
@@ -197,3 +199,70 @@ described, and no mechanism is built before its first real use.
    state of the routines and the user's key numbers. Acceptance: one can see an
    agent typing during its run, then walking to the user's desk to drop off a
    submission.
+
+## 5. The assistant on Telegram
+
+The code lives in `src/assistant/`. It has two modes, chosen by
+`HQ_TELEGRAM_POLLING`:
+
+- **Send only** (default). MyHQ sends plain text alerts: an item waits for
+  approval, a run failed. A bot can only have one reader (two `getUpdates`
+  loops on the same token steal each other's messages), so this is the mode
+  to keep while another program still reads the bot.
+- **Polling** (`HQ_TELEGRAM_POLLING=true`). The bridge starts with the app
+  (`instrumentation.ts`) and reads updates by long polling (`getUpdates`, no
+  inbound port). A lock file holding the process id
+  (`<home>/data/assistant/bridge.lock`) keeps a second MyHQ process from
+  polling the same home; a lock left by a dead process is taken over. The
+  position in the update queue is kept in `<home>/data/assistant/offset.txt`
+  and moves before an update is handled, so an update that crashes is never
+  replayed. At startup, `setMyCommands` publishes the core commands and the
+  extensions' commands. `GET /api/state` reports `assistant.polling`.
+
+Only the chat `HQ_TELEGRAM_CHAT_ID` is served; anything from another chat is
+logged and ignored. Every update is validated with zod; one that does not
+match is logged and skipped. Replies go out as plain text: Markdown marks
+(bold, headings, code) are removed, em and en dashes become commas or hyphens,
+and long replies are cut at 4000 characters, at a line break when possible.
+While a long action runs (chat turn, transcription) the "typing" indicator
+stays on.
+
+A text message (typed, or transcribed from a voice note) goes through, in
+order:
+
+1. **The pending question**, if any (see buttons below), unless the text is a
+   command: it becomes the reason or the comment of the decision. A question
+   expires after one hour; the user is told, and the message goes on.
+2. **Core commands**: `/start`, `/new` (the next chat turn starts a new
+   conversation), `/pending` (id, room and agent, title), `/approve <id>`,
+   `/reject <id> <reason>`, `/revise <id> <comment>`, `/run <room>/<agent>
+   [task]` (same lock and cap as the API), `/status` (runs and cost today and
+   this week, runs left under the cap, agents' states). Decisions go through
+   `decideApproval`, the same code as `PATCH /api/approvals/[id]`.
+3. **Extensions** of the home, in the order of `assistant.json`: the first
+   non-null answer is sent and nothing else runs (contract in
+   `home-layout.md`).
+4. **The chat**: `claude -p` in the configured working directory, the message
+   on stdin, `--continue` to resume the conversation (retried without it when
+   the CLI says there is nothing to continue), `--output-format json`, and the
+   same isolation as an agent run (environment cleaned, `--setting-sources
+   project,local`, `--strict-mcp-config`, `--tools` limited to the whitelist,
+   tool search off, deploy commands denied, `--max-budget-usd` from
+   `HQ_CHAT_MAX_BUDGET_USD`). The optional `afterReply` command runs after each
+   reply, its output logged only.
+
+Messages are handled one at a time, in order. Button presses are handled at
+once, even during a long chat turn. In polling mode a pending-approval alert
+carries three buttons: **Approuver** decides at once and edits the alert to
+show the decision (its buttons go away); **Refuser** and **À retravailler**
+ask for the reason or the comment, which the next text message answers.
+Failure alerts stay plain text.
+
+Voice notes and audio files are downloaded to `<home>/data/assistant/voice/`,
+transcribed by the home's `transcribe` command, deleted, then handled as text.
+Photos (largest size) and documents are saved into the home's `dropDir` under a
+free name, with a companion `.md` note holding the caption when there is one.
+The Bot API does not hand over files above 20 MB; the user is told.
+
+The assistant's chat is not a run: it does not count towards the daily cap and
+its cost is written to the log, not to the `runs` table.
