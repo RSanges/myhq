@@ -33,28 +33,39 @@ test("parses a real failed run: start, text, end failed with zero usage", () => 
   assert.equal(end.costUsd, 0);
 });
 
-// Same message shapes, written by hand for a successful run with one tool
-// call (no successful real run could be recorded yet, see docs/api.md).
-test("parses a run with a tool call, its result, and usage and cost", () => {
-  const events = parseFixture("stream-json-tool-run.synthetic.jsonl");
+// Real output of a successful run (CLI 2.1.183, haiku, 2026-11-02) through
+// the runner: init with only the hq tools, thinking_tokens and
+// rate_limit_event messages (ignored), one hq_task_update call, its result, the
+// final text and the result with usage and cost. Machine paths and account
+// details replaced.
+test("parses a real run with a tool call, its result, and usage and cost", () => {
+  const events = parseFixture("stream-json-tool-run.jsonl");
   assert.deepEqual(
     events.map((e) => e.type),
-    ["start", "text", "tool_call", "tool_result", "text", "end"],
+    ["start", "tool_call", "tool_result", "text", "end"],
   );
-  assert.deepEqual(events[2], {
+  const start = events[0] as Extract<RunEvent, { type: "start" }>;
+  assert.deepEqual(start.mcpServers, [{ name: "hq", status: "connected" }]);
+  assert.ok(start.tools.every((tool) => tool.startsWith("mcp__hq__")));
+  assert.deepEqual(events[1], {
     type: "tool_call",
-    id: "toolu_01",
+    id: "toolu_01WqrtjSwMeVa6Rbnk5cLvTK",
     name: "mcp__hq__hq_task_update",
-    input: { status: "done", note: "smoke test" },
+    input: { status: "done", note: "Smoke test probe run completed" },
   });
-  assert.deepEqual(events[3], { type: "tool_result", toolUseId: "toolu_01", isError: false, content: '{"updated":1}' });
-  assert.deepEqual(events[5], {
+  assert.deepEqual(events[2], {
+    type: "tool_result",
+    toolUseId: "toolu_01WqrtjSwMeVa6Rbnk5cLvTK",
+    isError: false,
+    content: '{"updated":1}',
+  });
+  assert.deepEqual(events[4], {
     type: "end",
     status: "done",
     reason: "success",
     summary: "OK",
-    usage: { inputTokens: 20, outputTokens: 60, cacheCreationInputTokens: 15000, cacheReadInputTokens: 15000 },
-    costUsd: 0.0213,
+    usage: { inputTokens: 20, outputTokens: 231, cacheCreationInputTokens: 8323, cacheReadInputTokens: 8061 },
+    costUsd: 0.019270100000000002,
   });
 });
 
