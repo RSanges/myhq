@@ -1,0 +1,247 @@
+import { z } from "zod";
+import type { Agent, Approval, HqEvent, Message, Run, State, Usage } from "./schemas";
+
+// Pure state of the page: a snapshot from /api/state, then upserts from the SSE
+// stream (every message is "upsert this entity by id", see docs/api.md).
+
+export const MAX_EVENTS = 300;
+export const MAX_MESSAGES = 150;
+export const MAX_HISTORY = 100;
+
+export type Model = {
+  loaded: boolean;
+  cursor: number;
+  rooms: State["rooms"];
+  invalidRooms: State["invalidRooms"];
+  latestRuns: Record<string, Run>;
+  approvals: Record<number, Approval>;
+  events: HqEvent[];
+  messages: Message[];
+  usage: Usage | null;
+};
+
+export type Action =
+  | { type: "state"; state: State }
+  | { type: "usage"; usage: Usage }
+  | { type: "run"; run: Run }
+  | { type: "event"; event: HqEvent }
+  | { type: "message"; message: Message }
+  | { type: "approval"; approval: Approval };
+
+export const initialModel: Model = {
+  loaded: false,
+  cursor: 0,
+  rooms: [],
+  invalidRooms: [],
+  latestRuns: {},
+  approvals: {},
+  events: [],
+  messages: [],
+  usage: null,
+};
+
+export const agentKey = (room: string, agentId: string): string => `${room}/${agentId}`;
+
+/** Replaces the item with the same id or inserts it in id order, keeping the `max` newest. */
+export function upsertById<T extends { id: number }>(list: T[], item: T, max: number): T[] {
+  const index = list.findIndex((existing) => existing.id === item.id);
+  if (index >= 0) {
+    const next = list.slice();
+    next[index] = item;
+    return next;
+  }
+  const next = [...list, item].sort((a, b) => a.id - b.id);
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+function indexApprovals(lists: Approval[][]): Record<number, Approval> {
+  const out: Record<number, Approval> = {};
+  for (const list of lists) for (const approval of list) out[approval.id] = approval;
+  return out;
+}
+
+export function reducer(model: Model, action: Action): Model {
+  switch (action.type) {
+    case "state": {
+      const { state } = action;
+      const latestRuns: Record<string, Run> = {};
+      for (const room of state.rooms) {
+        for (const agent of room.agents) {
+          if (agent.lastRun) latestRuns[agentKey(room.name, agent.id)] = agent.lastRun;
+        }
+      }
+      return {
+        ...model,
+        loaded: true,
+        cursor: state.cursor,
+        rooms: state.rooms,
+        invalidRooms: state.invalidRooms,
+        latestRuns,
+        approvals: indexApprovals([state.approvals.pending, state.approvals.history]),
+        events: state.recent.events,
+        messages: state.recent.messages,
+      };
+    }
+    case "usage":
+      return { ...model, usage: action.usage };
+    case "run": {
+      const key = agentKey(action.run.room, action.run.agentId);
+      const current = model.latestRuns[key];
+      if (current && current.id > action.run.id) return model;
+      return { ...model, latestRuns: { ...model.latestRuns, [key]: action.run } };
+    }
+    case "event":
+      return { ...model, events: upsertById(model.events, action.event, MAX_EVENTS) };
+    case "message":
+      return { ...model, messages: upsertById(model.messages, action.message, MAX_MESSAGES) };
+    case "approval":
+      return { ...model, approvals: { ...model.approvals, [action.approval.id]: action.approval } };
+  }
+}
+
+export type AgentState = "working" | "idle" | "failed";
+
+/** Computed from the latest run, like the server does. */
+export function agentState(lastRun: Run | null | undefined): AgentState {
+  if (lastRun?.status === "running") return "working";
+  if (lastRun?.status === "failed") return "failed";
+  return "idle";
+}
+
+export type TeamAgent = Agent & { room: string; key: string; state: AgentState };
+
+export function selectAgents(model: Model): TeamAgent[] {
+  return model.rooms.flatMap((room) =>
+    room.agents.map((agent) => {
+      const key = agentKey(room.name, agent.id);
+      const lastRun = model.latestRuns[key] ?? null;
+      return { ...agent, lastRun, room: room.name, key, state: agentState(lastRun) };
+    }),
+  );
+}
+
+/** Pending items, oldest first. */
+export function selectPending(model: Model): Approval[] {
+  return Object.values(model.approvals)
+    .filter((approval) => approval.status === "pending")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+}
+
+/** Decided items, most recently decided first. */
+export function selectHistory(model: Model): Approval[] {
+  return Object.values(model.approvals)
+    .filter((approval) => approval.status !== "pending")
+    .sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? "") || b.id - a.id)
+    .slice(0, MAX_HISTORY);
+}
+
+export type FeedEntry =
+  | { key: string; at: string; room: string; kind: "event"; event: HqEvent }
+  | { key: string; at: string; room: string; kind: "message"; message: Message };
+
+/** Events and messages merged, newest first, optionally limited to one agent (`room/agent`). */
+export function buildFeed(events: HqEvent[], messages: Message[], filter: string | null): FeedEntry[] {
+  const entries: FeedEntry[] = [];
+  for (const event of events) {
+    if (filter !== null && agentKey(event.room, event.agentId) !== filter) continue;
+    entries.push({ key: `event:${event.id}`, at: event.createdAt, room: event.room, kind: "event", event });
+  }
+  for (const message of messages) {
+    if (
+      filter !== null &&
+      agentKey(message.room, message.from) !== filter &&
+      agentKey(message.room, message.to) !== filter
+    ) {
+      continue;
+    }
+    entries.push({ key: `message:${message.id}`, at: message.createdAt, room: message.room, kind: "message", message });
+  }
+  return entries.sort((a, b) => b.at.localeCompare(a.at) || b.key.localeCompare(a.key));
+}
+
+// What an event says, without any wording (the wording lives in strings.ts).
+
+const textData = z.object({ text: z.string() });
+const startData = z.object({ model: z.string().nullable().optional() });
+const toolCallData = z.object({ name: z.string(), input: z.unknown().optional() });
+const toolResultData = z.object({ isError: z.boolean().optional(), content: z.string().optional() });
+const endData = z.object({
+  status: z.enum(["done", "failed"]).optional(),
+  summary: z.string().optional(),
+  costUsd: z.number().optional(),
+});
+
+export type EventView =
+  | { kind: "start"; model: string | null }
+  | { kind: "text"; text: string }
+  | { kind: "tool_call"; name: string; input: string }
+  | { kind: "tool_result"; isError: boolean; content: string }
+  | { kind: "end"; status: "done" | "failed" | null; summary: string; costUsd: number | null }
+  | { kind: "unknown"; type: string };
+
+function compactJson(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function viewEvent(event: HqEvent): EventView {
+  const unknown: EventView = { kind: "unknown", type: event.type };
+  switch (event.type) {
+    case "start": {
+      const parsed = startData.safeParse(event.data);
+      return parsed.success ? { kind: "start", model: parsed.data.model ?? null } : unknown;
+    }
+    case "text": {
+      const parsed = textData.safeParse(event.data);
+      return parsed.success ? { kind: "text", text: parsed.data.text } : unknown;
+    }
+    case "tool_call": {
+      const parsed = toolCallData.safeParse(event.data);
+      return parsed.success
+        ? { kind: "tool_call", name: parsed.data.name, input: compactJson(parsed.data.input) }
+        : unknown;
+    }
+    case "tool_result": {
+      const parsed = toolResultData.safeParse(event.data);
+      return parsed.success
+        ? { kind: "tool_result", isError: parsed.data.isError ?? false, content: parsed.data.content ?? "" }
+        : unknown;
+    }
+    case "end": {
+      const parsed = endData.safeParse(event.data);
+      return parsed.success
+        ? {
+            kind: "end",
+            status: parsed.data.status ?? null,
+            summary: parsed.data.summary ?? "",
+            costUsd: parsed.data.costUsd ?? null,
+          }
+        : unknown;
+    }
+  }
+}
+
+/** The `url` of an approval payload, only when it is a plain http(s) link. */
+export function payloadUrl(payload: Record<string, unknown>): string | null {
+  const raw = payload.url;
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** File name of a role path like `rooms/demo/roles/scout.md`. */
+export function roleFileName(role: string): string {
+  return role.split("/").pop() ?? role;
+}
+
+export function pendingTitle(base: string, pending: number): string {
+  return pending > 0 ? `(${pending}) ${base}` : base;
+}
