@@ -21,6 +21,9 @@ repository of its own.
 
 All paths written in `room.json` are relative to the home directory.
 
+`rooms/<room>/` is normally created by the onboarding agent when you approve
+its room proposal, and can also be written by hand.
+
 ## room.json
 
 ```json
@@ -71,4 +74,4 @@ hand and versioned with the rest of the home.
 
 Reserved for the Telegram assistant's extensions (commands that are specific to
 one user and do not belong in the core). The loading mechanism is designed in
-slice 4 (see `architecture.md`).
+slice 2 (see `architecture.md`).

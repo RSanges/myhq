@@ -112,14 +112,14 @@ through the approval queue.
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`) and a `summary`.
 - **Real time**: Server-Sent Events from the app to the browser.
-- **The room view** (slice 2): a 2D canvas (PixiJS) with sprite sheets and a
+- **The room view** (slice 4): a 2D canvas (PixiJS) with sprite sheets and a
   few animations per character (typing, walking, thinking, sleeping), driven by
   the real events of the stream-json output.
 - **Rooms and roles**: `room.json` and `roles/*.md` in the home directory,
   loaded and validated at startup (see `home-layout.md`).
 - **The assistant on Telegram**: the Bot API through `fetch`, with the token and
   chat id in `.env.local`. It sends a message when an item waits for approval or
-  a run fails, and (slice 4) reads the user's messages, shows Approve and Reject
+  a run fails, and (slice 2) reads the user's messages, shows Approve and Reject
   buttons on items, answers in natural language, and loads extra commands from
   the home's `assistant/commands/` directory. Only one reader of the bot may
   run at a time: until a previous bot is switched off, MyHQ only sends. Without
@@ -128,24 +128,62 @@ through the approval queue.
 - **Portability**: relative paths, SQLite, no dependency on one OS apart from
   optional notifications.
 
-## 3. Delivery slices
+## 3. Initialization and onboarding
+
+Starting with MyHQ happens at three levels, from the widest to the narrowest.
+The principle is the same everywhere: the first gesture of the HQ for a project
+is itself submitted to the user's approval.
+
+1. **Initialize the HQ (once per machine).** A `myhq init` command (or a
+   first-launch page) creates or points to the home directory (`MYHQ_HOME`),
+   checks that the `claude` CLI is installed and signed in, writes `.env.local`
+   (Telegram token, daily cap on runs, port), creates the SQLite database and
+   starts the service. When the home is already a separate repository, init
+   comes down to setting the variable and writing `.env.local`; otherwise it
+   creates an empty home with an example room.
+2. **Add a room (once per project).** Not a form: an onboarding agent. The
+   user gives the path of the target repository (from the UI or from the
+   Telegram assistant). A `claude -p` run reads the repository (README,
+   `CLAUDE.md`, `package.json`, docs, Git remote) and submits to the approval
+   queue a room proposal: a `room.json` (name, target repository, the roles
+   that make sense for this project, with a suggested model and schedule) and
+   the role prompts, instantiated from generic templates shipped with MyHQ
+   (watching, content, dev, analyst, and so on) with the project's context
+   injected. On approval, the files are written under `rooms/<name>/` in the
+   home and the room comes alive. Rejection and revision work as for any item.
+3. **Initialize the target project (minimal and standard).** The same
+   onboarding item proposes a short "HQ agents" block to add to the project's
+   `CLAUDE.md`: how to run the tests, where the docs live, what is forbidden
+   (deployment, migrations), the branch and pull request conventions, and the
+   reminder that everything public goes through the approval queue. On the
+   MyHQ side, the dedicated Git worktree of the dev agent is created and the
+   tool deny-list is registered. Nothing else lands in the project: no `.hq/`
+   directory, no dependency. A project can leave the HQ without a trace.
+
+## 4. Delivery slices
+
+Each slice ends with an acceptance criterion that is demonstrated, not
+described, and no mechanism is built before its first real use.
 
 1. **The core.** The app, the database, the HQ MCP server, one agent running
    headless, the live event feed, and the approval queue with approve, reject
-   and revise. Acceptance: a real run of the first agent submits an item, the
-   user approves it, and the item moves to `approved` with the information
+   and revise. The first room is written by hand: that is the price of a quick
+   first real run. Acceptance: a real run of the first agent submits an item,
+   the user approves it, and the item moves to `approved` with the information
    needed to act on it. The run shows tokens and cost.
-2. **The animated room.** The canvas, characters animated by the stream-json
+2. **The assistant on Telegram.** Notifications, approval from the phone,
+   conversation in natural language, and commands loaded from the home
+   directory. Acceptance: from the phone, the user gets an answer, runs a
+   command defined in their home, and approves an item.
+3. **The team and onboarding.** Any number of agents per room, with roles that
+   become generic templates; cron, integrations through MCP servers, the
+   per-agent lock and the daily cap, and an optional daily export of the
+   agents' journal to a folder of the user's choice. The onboarding agent and
+   `myhq init` arrive with this slice. Acceptance: three scheduled agents run
+   for a week with no intervention other than approvals, and a second room is
+   onboarded from an existing repository through the approval queue.
+4. **The animated room.** The canvas, characters animated by the stream-json
    events, the team feed (messages between agents) and a whiteboard with the
    state of the routines and the user's key numbers. Acceptance: one can see an
    agent typing during its run, then walking to the user's desk to drop off a
    submission.
-3. **The full team.** Any number of agents per room, cron, integrations through
-   MCP servers, the per-agent lock and the daily cap, and an optional daily
-   export of the agents' journal to a folder of the user's choice. Acceptance:
-   three scheduled agents run for a week with no intervention other than
-   approvals.
-4. **The assistant on Telegram.** Notifications, approval from the phone,
-   conversation in natural language, and commands loaded from the home
-   directory. Acceptance: from the phone, the user gets an answer, runs a
-   command defined in their home, and approves an item.

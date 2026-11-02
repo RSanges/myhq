@@ -24,6 +24,9 @@ the next thing to be built.
 - **HQ MCP server**: a small MCP server that is the agents' only door to the
   office (messages, submissions, task updates, memory). Everything that goes
   through it is logged.
+- **Onboarding**: adding a project is itself an agent run that submits the
+  proposed room to your approval queue. The project only gets a short block in
+  its `CLAUDE.md`, nothing else.
 - **The assistant on Telegram**: notifies you when an item waits for you or a
   run fails, lets you approve from your phone, and can be extended with
   commands of your own.
