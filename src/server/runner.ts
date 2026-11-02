@@ -241,7 +241,13 @@ async function execute(p: ExecuteParams): Promise<void> {
   try {
     fs.mkdirSync(agent.workDir, { recursive: true });
     fs.mkdirSync(config.runsDir, { recursive: true });
-    writeMcpConfig({ file: mcpConfigPath, repoRoot: config.repoRoot, hqEnv, extraServers: agent.mcpServers });
+    writeMcpConfig({
+      file: mcpConfigPath,
+      repoRoot: config.repoRoot,
+      hqEnv,
+      extraServers: agent.mcpServers,
+      env: process.env,
+    });
     const input: RunInput = {
       runId: run.id,
       room: room.name,

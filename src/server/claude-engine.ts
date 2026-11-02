@@ -5,6 +5,8 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } from "./engine";
+import type { Env } from "./config";
+import { HqError } from "./errors";
 import type { McpServerConfig } from "./rooms";
 
 /** Denied to every agent, whatever its whitelist says. */
@@ -35,17 +37,70 @@ export function hqMcpServerCommand(repoRoot: string): { command: string; args: s
   };
 }
 
-/** Writes the per-run `--mcp-config` file: the HQ server plus the agent's own servers. */
+const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/**
+ * Replaces every `${NAME}` of a string with the value of the variable `NAME`
+ * of `env`. A variable that is missing or empty is an error naming it (never
+ * an empty string); the error never carries any value.
+ */
+export function expandPlaceholders(text: string, env: Env, where: string): string {
+  return text.replace(PLACEHOLDER, (_match, name: string) => {
+    const value = env[name];
+    if (value === undefined || value.trim() === "") {
+      throw new HqError(
+        "MCP_ENV_MISSING",
+        422,
+        `MCP server config: ${where} uses \${${name}}, but the environment variable ${name} is not set (see .env.local).`,
+      );
+    }
+    return value;
+  });
+}
+
+/**
+ * Expands the placeholders of the `env` values and the `args` of the agent's
+ * MCP servers. Nothing else is touched (command, url, headers...).
+ */
+export function expandMcpServers(
+  servers: Record<string, McpServerConfig>,
+  env: Env,
+): Record<string, McpServerConfig> {
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, server] of Object.entries(servers)) {
+    const copy: Record<string, unknown> = { ...server };
+    if (Array.isArray(copy.args)) {
+      copy.args = copy.args.map((arg, i) => expandPlaceholders(String(arg), env, `${name}.args[${i}]`));
+    }
+    if (copy.env && typeof copy.env === "object") {
+      copy.env = Object.fromEntries(
+        Object.entries(copy.env as Record<string, string>).map(([key, value]) => [
+          key,
+          expandPlaceholders(value, env, `${name}.env.${key}`),
+        ]),
+      );
+    }
+    out[name] = copy as McpServerConfig;
+  }
+  return out;
+}
+
+/**
+ * Writes the per-run `--mcp-config` file: the HQ server plus the agent's own
+ * servers, with their `${NAME}` placeholders expanded from `env` (the app's
+ * environment). Throws before writing anything when a variable is missing.
+ */
 export function writeMcpConfig(params: {
   file: string;
   repoRoot: string;
   hqEnv: Record<string, string>;
   extraServers: Record<string, McpServerConfig>;
+  env?: Env;
 }): void {
   const hq = hqMcpServerCommand(params.repoRoot);
   const config = {
     mcpServers: {
-      ...params.extraServers,
+      ...expandMcpServers(params.extraServers, params.env ?? process.env),
       hq: { type: "stdio", command: hq.command, args: hq.args, env: params.hqEnv },
     },
   };

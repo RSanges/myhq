@@ -68,6 +68,36 @@ its room proposal, and can also be written by hand.
 MyHQ validates the file with zod at startup and refuses to start a room whose
 file is invalid, with an explicit error.
 
+#### Environment placeholders in `mcpServers`
+
+Any string value of an MCP server's `env`, and any entry of its `args`, may use
+`${NAME}` placeholders. They are expanded from the app's own environment
+(`.env.local`) when the per-run `--mcp-config` file is written, so a secret
+lives in `.env.local` and never in `room.json`:
+
+```json
+"mcpServers": {
+  "reddit": {
+    "command": "npx",
+    "args": ["-y", "some-reddit-mcp"],
+    "env": {
+      "REDDIT_CLIENT_ID": "${HQ_EXT_REDDIT_CLIENT_ID}",
+      "REDDIT_CLIENT_SECRET": "${HQ_EXT_REDDIT_CLIENT_SECRET}"
+    }
+  }
+}
+```
+
+- Only `env` values and `args` are expanded. `command`, `url`, `headers` and
+  every other field are passed as written.
+- A variable that is not set, or is empty, fails the run before it launches,
+  with an error naming the variable (`HQ_EXT_REDDIT_CLIENT_ID` here). It is
+  never replaced by an empty string.
+- Only the generated MCP config carries the expanded values. The agent's own
+  process environment is unchanged: the `HQ_*` and `MYHQ_*` variables are still
+  stripped from it. The config file is rewritten for each run, and the values
+  are never logged.
+
 ## roles/*.md
 
 Plain Markdown, passed as is to `--append-system-prompt-file`. It describes who

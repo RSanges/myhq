@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { buildClaudeArgs, builtInTools, parseStreamLine } from "../src/server/claude-engine";
+import os from "node:os";
+import {
+  buildClaudeArgs,
+  builtInTools,
+  expandMcpServers,
+  expandPlaceholders,
+  parseStreamLine,
+  writeMcpConfig,
+} from "../src/server/claude-engine";
 import type { RunEvent, RunInput } from "../src/server/engine";
 import { LocalEngine } from "../src/server/engine";
 
@@ -130,4 +138,69 @@ test("only whitelisted built-in tools are available", () => {
 test("LocalEngine is a skeleton that throws", async () => {
   const iterator = new LocalEngine().run({} as RunInput)[Symbol.asyncIterator]();
   await assert.rejects(iterator.next(), /not implemented/);
+});
+
+// --- Placeholders in the MCP servers of a room ---------------------------------
+
+test("placeholders are expanded in env values and args, nowhere else", () => {
+  const env = { HQ_EXT_ID: "abc", HQ_EXT_SECRET: "s3cr3t" };
+  const servers = expandMcpServers(
+    {
+      reddit: {
+        command: "npx",
+        args: ["-y", "reddit-mcp", "--id=${HQ_EXT_ID}"],
+        env: { CLIENT_ID: "${HQ_EXT_ID}", BOTH: "${HQ_EXT_ID}:${HQ_EXT_SECRET}", PLAIN: "x" },
+      },
+      remote: {
+        type: "http",
+        url: "https://example.com/${HQ_EXT_ID}",
+        headers: { Authorization: "Bearer ${HQ_EXT_SECRET}" },
+      },
+    },
+    env,
+  );
+  assert.deepEqual(servers.reddit, {
+    command: "npx",
+    args: ["-y", "reddit-mcp", "--id=abc"],
+    env: { CLIENT_ID: "abc", BOTH: "abc:s3cr3t", PLAIN: "x" },
+  });
+  assert.deepEqual(servers.remote, {
+    type: "http",
+    url: "https://example.com/${HQ_EXT_ID}",
+    headers: { Authorization: "Bearer ${HQ_EXT_SECRET}" },
+  });
+});
+
+test("a missing or empty variable is an error naming it, without any value", () => {
+  assert.throws(
+    () => expandPlaceholders("${HQ_EXT_NOPE}", { HQ_EXT_OTHER: "leaked?" }, "reddit.env.CLIENT_ID"),
+    (error: unknown) => {
+      const message = (error as Error).message;
+      assert.match(message, /HQ_EXT_NOPE/);
+      assert.match(message, /reddit\.env\.CLIENT_ID/);
+      assert.doesNotMatch(message, /leaked/);
+      return true;
+    },
+  );
+  assert.throws(() => expandPlaceholders("${HQ_EXT_EMPTY}", { HQ_EXT_EMPTY: " " }, "x"), /HQ_EXT_EMPTY/);
+  // Text that is not a placeholder is left alone.
+  assert.equal(expandPlaceholders("$HQ_X ${} ${1A} plain", {}, "x"), "$HQ_X ${} ${1A} plain");
+});
+
+test("writeMcpConfig writes the expanded values, and nothing when a variable is missing", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-mcp-"));
+  const file = path.join(dir, "1.mcp.json");
+  const extraServers = { reddit: { command: "npx", env: { CLIENT_ID: "${HQ_EXT_ID}" } } };
+  const hqEnv = { HQ_RUN_ID: "1" };
+  assert.throws(
+    () => writeMcpConfig({ file, repoRoot: process.cwd(), hqEnv, extraServers, env: {} }),
+    /HQ_EXT_ID/,
+  );
+  assert.equal(fs.existsSync(file), false);
+  writeMcpConfig({ file, repoRoot: process.cwd(), hqEnv, extraServers, env: { HQ_EXT_ID: "abc" } });
+  const written = JSON.parse(fs.readFileSync(file, "utf8")) as {
+    mcpServers: Record<string, { env: Record<string, string> }>;
+  };
+  assert.equal(written.mcpServers.reddit!.env.CLIENT_ID, "abc");
+  assert.deepEqual(written.mcpServers.hq!.env, hqEnv);
 });

@@ -186,3 +186,43 @@ test("HQ_CLAUDE_OAUTH_TOKEN reaches the agent as CLAUDE_CODE_OAUTH_TOKEN, and no
   );
   assert.deepEqual(env, { PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "long-lived", HQ_RUN_ID: "3" });
 });
+
+test("a run fails before launch when an MCP placeholder variable is missing, and expands it otherwise", async () => {
+  const roomJson = {
+    name: "demo",
+    targetRepo: "../demo-project",
+    agents: [
+      {
+        id: "scout",
+        name: "Scout",
+        role: "roles/scout.md",
+        model: "haiku",
+        allowedTools: ["mcp__hq__*"],
+        mcpServers: { reddit: { command: "npx", env: { CLIENT_ID: "${HQ_EXT_TEST_CLIENT_ID}" } } },
+      },
+    ],
+  };
+  const config = makeHome({}, roomJson);
+  const seen: RunInput[] = [];
+  delete process.env.HQ_EXT_TEST_CLIENT_ID;
+  const failed = startRun({ room: "demo", agent: "scout" }, { config, engine: fakeEngine(doneEvents, undefined, seen), send: async () => true });
+  const db = getDbAt(config.dbPath);
+  const row = await waitForRun(db, failed.id);
+  assert.equal(row.status, "failed");
+  assert.match(row.summary ?? "", /HQ_EXT_TEST_CLIENT_ID/);
+  assert.equal(seen.length, 0);
+
+  process.env.HQ_EXT_TEST_CLIENT_ID = "client-123";
+  try {
+    const ok = startRun({ room: "demo", agent: "scout" }, { config, engine: fakeEngine(doneEvents, undefined, seen), send: async () => true });
+    assert.equal((await waitForRun(db, ok.id)).status, "done");
+  } finally {
+    delete process.env.HQ_EXT_TEST_CLIENT_ID;
+  }
+  const mcp = JSON.parse(fs.readFileSync(seen[0]!.mcpConfigPath, "utf8")) as {
+    mcpServers: { reddit: { env: Record<string, string> } };
+  };
+  assert.equal(mcp.mcpServers.reddit.env.CLIENT_ID, "client-123");
+  // The agent's own environment still never carries the HQ_* variables.
+  assert.equal(seen[0]!.env.HQ_EXT_TEST_CLIENT_ID, undefined);
+});
