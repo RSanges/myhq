@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { roadmapSchema, type Roadmap } from "@/server/roadmap-schema";
 import { strings } from "./strings";
 import {
   approvalResponseSchema,
@@ -64,6 +65,8 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
 });
 
 export const fetchState = (): Promise<State> => request("/api/state", stateSchema);
+
+export const fetchRoadmap = (): Promise<Roadmap> => request("/api/roadmap", roadmapSchema);
 
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
 

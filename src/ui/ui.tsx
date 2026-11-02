@@ -44,11 +44,12 @@ export function ErrorNote({ children }: { children: ReactNode }) {
   );
 }
 
-export function Badge({ tone, children }: { tone: "ok" | "warn" | "danger" | "neutral"; children: ReactNode }) {
+export function Badge({ tone, children }: { tone: "ok" | "warn" | "danger" | "accent" | "neutral"; children: ReactNode }) {
   const tones = {
     ok: "bg-ok-soft text-ok",
     warn: "bg-warn-soft text-warn",
     danger: "bg-danger-soft text-danger",
+    accent: "bg-accent-soft text-accent",
     neutral: "bg-soft text-muted",
   };
   return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>{children}</span>;

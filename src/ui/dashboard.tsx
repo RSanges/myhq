@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo } from "react";
 import { Desk } from "./desk";
 import { Feed } from "./feed";
@@ -27,10 +28,18 @@ export function Dashboard() {
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6">
       <header className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{strings.app.title}</h1>
-        <p role="status" className="flex items-center gap-2 text-sm text-muted">
-          <span aria-hidden className={`inline-block size-2 rounded-full ${connectionTone}`} />
-          {strings.app.connection[connection]}
-        </p>
+        <div className="flex items-center gap-4">
+          <Link
+            href="/roadmap"
+            className="text-sm text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            {strings.app.roadmapLink}
+          </Link>
+          <p role="status" className="flex items-center gap-2 text-sm text-muted">
+            <span aria-hidden className={`inline-block size-2 rounded-full ${connectionTone}`} />
+            {strings.app.connection[connection]}
+          </p>
+        </div>
       </header>
 
       {loadError && (

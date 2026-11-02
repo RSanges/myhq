@@ -6,6 +6,7 @@ const dateTime = new Intl.DateTimeFormat(strings.locale, {
   hour: "2-digit",
   minute: "2-digit",
 });
+const day = new Intl.DateTimeFormat(strings.locale, { day: "numeric", month: "short", year: "numeric" });
 const time = new Intl.DateTimeFormat(strings.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const integer = new Intl.NumberFormat(strings.locale);
 const compact = new Intl.NumberFormat(strings.locale, { notation: "compact", maximumFractionDigits: 1 });
@@ -24,6 +25,13 @@ function toDate(iso: string): Date | null {
 export function formatDateTime(iso: string): string {
   const date = toDate(iso);
   return date ? dateTime.format(date) : iso;
+}
+
+/** A calendar date: `2026-11-02` is shown as is in the local calendar, never shifted by a time zone. */
+export function formatDay(value: string): string {
+  const plain = /^(d{4})-(d{2})-(d{2})$/.exec(value);
+  const date = plain ? new Date(Number(plain[1]), Number(plain[2]) - 1, Number(plain[3])) : toDate(value);
+  return date ? day.format(date) : value;
 }
 
 export function formatTime(iso: string): string {
