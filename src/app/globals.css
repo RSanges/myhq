@@ -65,3 +65,1228 @@ body {
   color: var(--foreground);
   font-family: system-ui, sans-serif;
 }
+
+/* ==========================================================================
+   The wall: /roadmap, the whiteboard of the office.
+   Everything lives under .wall. The shared tokens (--card, --line, --accent...)
+   are redefined there, so the desk page keeps its own look untouched.
+   Neutrals are tinted green-grey (a dry-erase board), the single accent is a
+   cobalt marker, and statuses have their own hues so they never read as accent.
+   ========================================================================== */
+
+.wall {
+  --background: #edf0ee;
+  --hero: #e0e7e3;
+  --foreground: #131d19;
+  --card: #fbfcfb;
+  --soft: #e1e7e4;
+  --line: #c6d0ca;
+  --muted: #4a5a53;
+  --track: #d3dbd7;
+  --dot: rgb(19 29 25 / 0.1);
+  --accent: #2543c4;
+  --accent-fg: #ffffff;
+  --accent-soft: #dfe5fb;
+  --ok: #17703f;
+  --ok-soft: #d6eddf;
+  --doing: #8f4f00;
+  --doing-soft: #fbe6c4;
+  --todo: #4f5f58;
+  --todo-soft: #e1e7e4;
+  --danger: #a82525;
+  --danger-soft: #f9dcdc;
+  --flash: rgb(37 67 196 / 0.16);
+  --note-open: #fbe98f;
+  --note-open-ink: #2e2600;
+  --note-settled: #cfe8d4;
+  --note-settled-ink: #17301c;
+  --tape: rgb(255 255 255 / 0.55);
+  --lift: 0 1px 1px rgb(19 29 25 / 0.08), 0 10px 18px -10px rgb(19 29 25 / 0.35);
+  --owner-s: 38%;
+  --owner-l: 84%;
+  --owner-fg-l: 24%;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-wall-body), system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wall {
+    --background: #0d1311;
+    --hero: #111a17;
+    --foreground: #e6ede9;
+    --card: #151e1b;
+    --soft: #1c2723;
+    --line: #2d3a35;
+    --muted: #9fb0a8;
+    --track: #26332e;
+    --dot: rgb(230 237 233 / 0.07);
+    --accent: #93a5ff;
+    --accent-fg: #0d1311;
+    --accent-soft: #1b2452;
+    --ok: #5fd69a;
+    --ok-soft: #12372a;
+    --doing: #f2b865;
+    --doing-soft: #3a2a0e;
+    --todo: #9fb0a8;
+    --todo-soft: #1c2723;
+    --danger: #ff9090;
+    --danger-soft: #451818;
+    --flash: rgb(147 165 255 / 0.22);
+    --note-open: #4a4220;
+    --note-open-ink: #f3e9b9;
+    --note-settled: #28402d;
+    --note-settled-ink: #d3e8d6;
+    --tape: rgb(255 255 255 / 0.12);
+    --lift: 0 1px 1px rgb(0 0 0 / 0.4), 0 12px 20px -10px rgb(0 0 0 / 0.7);
+    --owner-s: 30%;
+    --owner-l: 24%;
+    --owner-fg-l: 82%;
+  }
+}
+
+.wall :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.wall button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.wall-display {
+  font-family: var(--font-wall-display), var(--font-wall-body), system-ui, sans-serif;
+  font-optical-sizing: auto;
+}
+
+.wall-page {
+  min-height: 100dvh;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.3px);
+  background-size: 24px 24px;
+}
+
+.wall-wrap {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+@media (min-width: 40rem) {
+  .wall-wrap {
+    padding-inline: 1.5rem;
+  }
+}
+
+.wall-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+  padding-block: 2rem 4rem;
+}
+
+.wall-empty-text {
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+/* ---- Hero band ---------------------------------------------------------- */
+
+.wall-hero {
+  background: var(--hero);
+  border-bottom: 1px solid var(--line);
+}
+
+.wall-hero-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-top: 1rem;
+}
+
+.wall-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2.75rem;
+  margin-left: -0.25rem;
+  padding-inline: 0.25rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.wall-back:hover {
+  color: var(--foreground);
+}
+
+.wall-back svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.wall-live {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.wall-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.wall-live[data-connected] .wall-live-dot {
+  background: var(--accent);
+}
+
+.wall-live-ping {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: wall-ping 1.5s cubic-bezier(0, 0.4, 0.3, 1) forwards;
+}
+
+.wall-updated {
+  font-variant-numeric: tabular-nums;
+  border-radius: 0.25rem;
+}
+
+.wall-title {
+  margin: 0.5rem 0 0;
+  font-size: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+}
+
+.wall-overall {
+  padding-block: 0.5rem 1.75rem;
+}
+
+.wall-overall-figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 1.5rem;
+}
+
+.wall-big {
+  display: flex;
+  align-items: baseline;
+  margin: 0;
+  font-size: clamp(4.5rem, 2rem + 12vw, 9.5rem);
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-big-value {
+  border-radius: 0.5rem;
+  padding-inline: 0.05em;
+}
+
+.wall-big-unit {
+  margin-left: 0.08em;
+  color: var(--accent);
+  font-size: 0.42em;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.wall-overall-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-bottom: 0.6rem;
+}
+
+.wall-overall-caption {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.wall-overall-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1.25rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-segments {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.wall-segment-track {
+  display: block;
+  height: 0.7rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--track);
+}
+
+.wall-segment-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--s);
+  transform-origin: left center;
+  transition: transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.wall-segment-label {
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.wall-segment-label b {
+  color: var(--s);
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-segment-label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 39.99rem) {
+  .wall-segment-label span {
+    display: none;
+  }
+}
+
+/* ---- Status language (shared by chips, ring, segments) ------------------- */
+
+.wall [data-status="done"] {
+  --s: var(--ok);
+  --s-soft: var(--ok-soft);
+}
+
+.wall [data-status="doing"] {
+  --s: var(--doing);
+  --s-soft: var(--doing-soft);
+}
+
+.wall [data-status="todo"] {
+  --s: var(--todo);
+  --s-soft: var(--todo-soft);
+}
+
+.wall [data-status="blocked"] {
+  --s: var(--danger);
+  --s-soft: var(--danger-soft);
+}
+
+.wall-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.6rem 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--s-soft);
+  color: var(--s);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* A different shape per status, so that colour is never the only signal. */
+.wall-chip::before {
+  content: "";
+  flex: none;
+  box-sizing: border-box;
+  width: 0.55rem;
+  height: 0.55rem;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.wall-chip[data-status="doing"]::before {
+  background: conic-gradient(currentColor 0 50%, transparent 0);
+  border: 1.5px solid currentColor;
+}
+
+.wall-chip[data-status="todo"]::before {
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
+
+.wall-chip[data-status="blocked"]::before {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 1px;
+  rotate: 45deg;
+}
+
+/* ---- Stepper ------------------------------------------------------------- */
+
+.wall-steps {
+  display: grid;
+  gap: 1.75rem;
+  margin: 0;
+  padding: 0.75rem 0 0;
+  list-style: none;
+}
+
+@media (min-width: 64rem) {
+  .wall-steps {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 1.75rem;
+  }
+}
+
+.wall-step {
+  position: relative;
+  animation: wall-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+/* The connector to the next step: a line in the gap, solid once the step is done. */
+.wall-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 2.25rem;
+  top: 100%;
+  width: 0;
+  height: 1.75rem;
+  border-left: 2px dashed var(--line);
+}
+
+.wall-step[data-status="done"]:not(:last-child)::after {
+  border-left-style: solid;
+  border-left-color: var(--ok);
+}
+
+@media (min-width: 64rem) {
+  .wall-step:not(:last-child)::after {
+    left: 100%;
+    top: 3.25rem;
+    width: 1.75rem;
+    height: 0;
+    border-left: 0;
+    border-top: 2px dashed var(--line);
+  }
+
+  .wall-step[data-status="done"]:not(:last-child)::after {
+    border-top-style: solid;
+    border-top-color: var(--ok);
+  }
+}
+
+.wall-step-card {
+  --base-shadow: 0 0 #0000;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  height: 100%;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--card);
+  box-shadow: var(--base-shadow);
+  text-align: left;
+  transition:
+    translate 0.2s ease-out,
+    border-color 0.2s ease-out,
+    background-color 0.2s ease-out;
+}
+
+.wall-step-card:hover {
+  translate: 0 -2px;
+  border-color: var(--muted);
+}
+
+.wall-step[data-current] .wall-step-card {
+  --base-shadow: 0 14px 28px -16px var(--accent);
+  border-color: var(--accent);
+  border-width: 2px;
+  padding: calc(1rem - 1px);
+}
+
+.wall-step-card[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.wall-step-flag {
+  position: absolute;
+  top: -0.7rem;
+  right: 1rem;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wall-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.wall-step-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.wall-step-index {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wall-step-name {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.wall-step-criterion {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.wall-step-criterion-label {
+  display: block;
+  margin-bottom: 0.1rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wall-stamp {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 0.15rem 0.5rem;
+  border: 2px solid var(--ok);
+  border-radius: 0.35rem;
+  outline: 1px solid var(--ok);
+  outline-offset: 2px;
+  color: var(--ok);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  rotate: -3deg;
+  opacity: 0.92;
+}
+
+.wall-ring {
+  position: relative;
+  flex: none;
+  width: 4.5rem;
+  height: 4.5rem;
+}
+
+.wall-ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 6;
+}
+
+.wall-ring-track {
+  stroke: var(--track);
+}
+
+.wall-ring-arc {
+  stroke: var(--s);
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.wall-ring-value {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  margin: 0.8rem;
+  border-radius: 50%;
+  font-family: var(--font-wall-display), var(--font-wall-body), system-ui, sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* ---- Panels (items, notes, journal) -------------------------------------- */
+
+.wall-panel {
+  min-width: 0;
+}
+
+.wall-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.wall-panel-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.wall-panel-head .wall-panel-title {
+  margin: 0;
+}
+
+.wall-panel-count {
+  color: var(--muted);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.wall-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.wall-search {
+  position: relative;
+  display: block;
+  flex: 1 1 12rem;
+}
+
+.wall-search svg {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  width: 1rem;
+  height: 1rem;
+  translate: 0 -50%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.wall-search input {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem 0.5rem 2.2rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.wall-search input::placeholder {
+  color: var(--muted);
+}
+
+@media (min-width: 40rem) {
+  .wall-search {
+    flex: 0 1 14rem;
+  }
+}
+
+.wall-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.wall-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition:
+    background-color 0.15s ease-out,
+    border-color 0.15s ease-out;
+}
+
+.wall-filter:hover {
+  border-color: var(--muted);
+}
+
+.wall-filter[aria-pressed="true"] {
+  background: var(--foreground);
+  border-color: var(--foreground);
+  color: var(--background);
+}
+
+.wall-filter-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-filter[aria-pressed="true"] .wall-filter-count {
+  color: inherit;
+  opacity: 0.75;
+}
+
+@media (pointer: coarse) {
+  .wall-filter,
+  .wall-search input {
+    min-height: 2.75rem;
+  }
+}
+
+.wall-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  border: 1px dashed var(--line);
+  border-radius: 1rem;
+  color: var(--muted);
+}
+
+.wall-empty p {
+  margin: 0;
+}
+
+.wall-link {
+  min-height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.wall-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wall-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--card);
+  animation: wall-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+.wall-group-heading {
+  margin: 0;
+  font-size: inherit;
+}
+
+.wall-group-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
+  min-height: 3.25rem;
+  padding: 0.9rem 1rem 1rem;
+  border: 0;
+  background: var(--soft);
+  text-align: left;
+}
+
+.wall-group-head:hover .wall-group-title {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+
+.wall-group-chevron {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: rotate 0.2s ease-out;
+}
+
+.wall-group-head[aria-expanded="true"] .wall-group-chevron {
+  rotate: 90deg;
+}
+
+.wall-group-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.wall-group-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-group-bar {
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--track);
+}
+
+.wall-group-bar span {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  transform-origin: left center;
+  transition: transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.wall-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wall-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "status side"
+    "main main";
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.wall-row:first-child {
+  border-top: 0;
+}
+
+.wall-row:hover {
+  background: color-mix(in srgb, var(--soft) 55%, transparent);
+}
+
+.wall-row-status {
+  grid-area: status;
+}
+
+.wall-row-main {
+  display: flex;
+  grid-area: main;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.wall-row-side {
+  display: flex;
+  grid-area: side;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+@media (min-width: 40rem) {
+  .wall-row {
+    grid-template-columns: 6.75rem minmax(0, 1fr) auto;
+    grid-template-areas: "status main side";
+    align-items: start;
+    gap: 0.75rem 1rem;
+  }
+
+  .wall-row-status {
+    padding-top: 0.1rem;
+  }
+
+  .wall-row-side {
+    min-width: 6rem;
+  }
+}
+
+.wall-row-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wall-row-note {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.wall-row-date {
+  min-width: 3.25rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wall-owner {
+  display: inline-grid;
+  flex: none;
+  place-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: hsl(var(--h, 200) var(--owner-s) var(--owner-l));
+  color: hsl(var(--h, 200) var(--owner-s) var(--owner-fg-l));
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.wall-owner[data-tint="0"] {
+  --h: 205;
+}
+
+.wall-owner[data-tint="1"] {
+  --h: 160;
+}
+
+.wall-owner[data-tint="2"] {
+  --h: 38;
+}
+
+.wall-owner[data-tint="3"] {
+  --h: 335;
+}
+
+.wall-owner[data-tint="4"] {
+  --h: 255;
+}
+
+.wall-owner[data-empty] {
+  border: 1.5px dashed var(--line);
+  background: transparent;
+}
+
+/* ---- Notes and journal ---------------------------------------------------- */
+
+.wall-board {
+  display: grid;
+  gap: 2.5rem;
+}
+
+@media (min-width: 64rem) {
+  .wall-board {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 3rem;
+    align-items: start;
+  }
+}
+
+.wall-notes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 1.5rem 1.25rem;
+  margin: 0;
+  padding: 0.75rem 0.25rem 0.5rem;
+  list-style: none;
+}
+
+.wall-note {
+  --base-shadow: var(--lift);
+  --tilt: -1.2deg;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 7.5rem;
+  padding: 1.25rem 1rem 1rem;
+  background: var(--note-open);
+  color: var(--note-open-ink);
+  box-shadow: var(--base-shadow);
+  rotate: var(--tilt);
+  transition:
+    rotate 0.25s ease-out,
+    translate 0.25s ease-out;
+  animation: wall-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.wall-note:nth-child(6n + 2) {
+  --tilt: 0.9deg;
+}
+
+.wall-note:nth-child(6n + 3) {
+  --tilt: -0.5deg;
+}
+
+.wall-note:nth-child(6n + 4) {
+  --tilt: 1.4deg;
+}
+
+.wall-note:nth-child(6n + 5) {
+  --tilt: -1deg;
+}
+
+.wall-note:nth-child(6n) {
+  --tilt: 0.4deg;
+}
+
+.wall-note:hover {
+  rotate: 0deg;
+  translate: 0 -3px;
+}
+
+.wall-note[data-status="settled"] {
+  background: var(--note-settled);
+  color: var(--note-settled-ink);
+}
+
+/* A strip of tape holds the note on the wall. */
+.wall-note::before {
+  content: "";
+  position: absolute;
+  top: -0.55rem;
+  left: 50%;
+  width: 3.5rem;
+  height: 1.1rem;
+  translate: -50% 0;
+  rotate: -2deg;
+  background: var(--tape);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06);
+}
+
+.wall-note-tag {
+  align-self: flex-start;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.wall-note-name {
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.wall-note-text {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  opacity: 0.85;
+  overflow-wrap: anywhere;
+}
+
+.wall-days {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wall-day-label {
+  margin: 1.25rem 0 0.5rem;
+  padding-left: 4.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wall-day:first-child .wall-day-label {
+  margin-top: 0;
+}
+
+.wall-entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wall-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  column-gap: 1.5rem;
+  padding-bottom: 1.1rem;
+}
+
+/* The rail, and the dot of each entry. */
+.wall-entry::before {
+  content: "";
+  position: absolute;
+  top: 0.6rem;
+  bottom: -0.1rem;
+  left: calc(3rem + 0.75rem - 1px);
+  width: 2px;
+  background: var(--line);
+}
+
+.wall-entry:last-child::before {
+  bottom: auto;
+  height: 0;
+}
+
+.wall-entry::after {
+  content: "";
+  position: absolute;
+  top: 0.3rem;
+  left: calc(3rem + 0.75rem - 0.3rem);
+  box-sizing: border-box;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+  background: var(--background);
+}
+
+.wall-entry[data-latest]::after {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.wall-entry-time {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.wall-entry[data-latest] .wall-entry-time {
+  color: var(--accent);
+}
+
+.wall-entry-text {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Motion --------------------------------------------------------------- */
+
+@keyframes wall-rise {
+  from {
+    opacity: 0;
+    translate: 0 0.6rem;
+  }
+}
+
+@keyframes wall-ping {
+  from {
+    opacity: 0.55;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 3.6;
+  }
+}
+
+/* A row, note or number that just changed lights up, then fades. */
+@keyframes wall-flash {
+  from {
+    box-shadow:
+      var(--base-shadow, 0 0 #0000),
+      inset 0 0 0 100vmax var(--flash);
+  }
+  to {
+    box-shadow:
+      var(--base-shadow, 0 0 #0000),
+      inset 0 0 0 100vmax transparent;
+  }
+}
+
+.wall-flash {
+  animation: wall-flash 2.8s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wall *,
+  .wall *::before,
+  .wall *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .wall-flash {
+    box-shadow:
+      var(--base-shadow, 0 0 #0000),
+      inset 0 0 0 100vmax var(--flash);
+  }
+
+  .wall-step-card:hover,
+  .wall-note:hover {
+    translate: none;
+  }
+}

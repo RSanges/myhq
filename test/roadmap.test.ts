@@ -12,7 +12,25 @@ import {
   subscribeRoadmap,
   watchRoadmap,
 } from "../src/server/roadmap";
-import { filterItems, newestFirst } from "../src/ui/roadmap-model";
+import {
+  currentSlice,
+  diffRoadmap,
+  eventKey,
+  eventParts,
+  filterItems,
+  groupBySlice,
+  groupEventsByDay,
+  itemKeys,
+  newestFirst,
+  openPointKeys,
+  overallKey,
+  overallProgress,
+  ownerInitial,
+  ownerTint,
+  sliceKey,
+  statusCounts,
+  updatedKey,
+} from "../src/ui/roadmap-model";
 
 const sample = () => ({
   updatedAt: "2026-01-02T10:00:00+01:00",
@@ -173,5 +191,96 @@ test("items are filtered by slice and status, and the journal is newest first", 
   assert.deepEqual(
     newestFirst(doc.events).map((e) => e.text),
     ["second", "first"],
+  );
+});
+
+test("search folds accents and case, and counts per status follow it", () => {
+  const doc = roadmapSchema.parse({
+    ...sample(),
+    items: [
+      { slice: 1, name: "Étape finale", status: "fait", owner: "Zoé", note: "" },
+      { slice: 1, name: "Other", status: "à faire", owner: "", note: "about the ETAPE" },
+    ],
+  });
+  assert.deepEqual(
+    filterItems(doc.items, { slice: "all", status: "all", query: " etape " }).map((i) => i.name),
+    ["Étape finale", "Other"],
+  );
+  assert.deepEqual(
+    filterItems(doc.items, { slice: "all", status: "all", query: "zoe" }).map((i) => i.name),
+    ["Étape finale"],
+  );
+  assert.deepEqual(statusCounts(doc.items), { all: 2, fait: 1, "en cours": 0, "à faire": 1, bloqué: 0 });
+});
+
+test("overall progress, current slice and grouping", () => {
+  const doc = roadmapSchema.parse(sample());
+  assert.equal(overallProgress(doc.slices), 70);
+  assert.equal(overallProgress([]), 0);
+  assert.equal(currentSlice(doc.slices)?.name, "Beta");
+  assert.equal(currentSlice(doc.slices.slice(0, 1)), null);
+  const groups = groupBySlice(doc.slices, [...doc.items, { slice: 9, name: "Lost", status: "fait", owner: "", date: "", note: "" }]);
+  assert.deepEqual(
+    groups.map((g) => [g.id, g.slice?.name ?? null, g.items.length]),
+    [
+      [1, "Alpha", 1],
+      [2, "Beta", 2],
+      [9, null, 1],
+    ],
+  );
+});
+
+test("journal times are read as written, and grouped by day", () => {
+  assert.deepEqual(eventParts("2026-11-02T14:27"), { day: "2026-11-02", time: "14:27" });
+  assert.deepEqual(eventParts("2026-11-02T14:27:10+01:00"), { day: "2026-11-02", time: "14:27" });
+  assert.deepEqual(eventParts("2026-11-02"), { day: "2026-11-02", time: null });
+  assert.deepEqual(eventParts("soon"), { day: null, time: null });
+  const days = groupEventsByDay(
+    newestFirst([
+      { at: "2026-01-01T09:00", text: "a" },
+      { at: "2026-01-02T09:30", text: "b" },
+      { at: "2026-01-02T08:00", text: "c" },
+    ]),
+  );
+  assert.deepEqual(
+    days.map((d) => [d.day, d.events.map((e) => e.text)]),
+    [
+      ["2026-01-02", ["b", "c"]],
+      ["2026-01-01", ["a"]],
+    ],
+  );
+});
+
+test("owner initials and tints are stable", () => {
+  assert.equal(ownerInitial("  sonnet"), "S");
+  assert.equal(ownerInitial(""), "");
+  assert.equal(ownerTint("Opus", 5), ownerTint(" opus ", 5));
+  assert.ok(ownerTint("Fable", 5) >= 0 && ownerTint("Fable", 5) < 5);
+});
+
+test("a live update flags only what changed", () => {
+  const before = roadmapSchema.parse(sample());
+  assert.equal(diffRoadmap(before, roadmapSchema.parse(sample())).size, 0);
+
+  const next = roadmapSchema.parse(sample());
+  next.updatedAt = "2026-01-02T11:00:00+01:00";
+  next.slices[1]!.progress = 100;
+  next.slices[1]!.status = "fait";
+  next.items[1]!.status = "fait";
+  next.openPoints.push({ name: "New question", status: "ouvert", note: "" });
+  next.events.push({ at: "2026-01-02T10:30", text: "third" });
+
+  const changed = diffRoadmap(before, next);
+  const keys = itemKeys(next.items);
+  assert.deepEqual(
+    [...changed].sort(),
+    [
+      updatedKey,
+      overallKey,
+      sliceKey(2),
+      keys.get(next.items[1]!)!,
+      openPointKeys(next.openPoints).get(next.openPoints[1]!)!,
+      eventKey(next.events[2]!),
+    ].sort(),
   );
 });
