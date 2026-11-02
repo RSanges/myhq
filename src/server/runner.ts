@@ -76,7 +76,7 @@ export function runsToday(db: Db): number {
   return row.n;
 }
 
-function findAgent(config: HqConfig, roomName: string, agentId: string): { room: Room; agent: Agent } {
+export function findAgent(config: HqConfig, roomName: string, agentId: string): { room: Room; agent: Agent } {
   const home = loadHome(config.home);
   const room = home.rooms.find((r) => r.name === roomName);
   if (!room) {

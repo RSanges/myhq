@@ -8,7 +8,7 @@ export async function GET() {
   await connection();
   try {
     const { config, db } = app();
-    return Response.json(getUsage(db, config.maxRunsPerDay));
+    return Response.json(getUsage(db, config.maxRunsPerDay, config.weeklyBudgetUsd));
   } catch (error) {
     return errorResponse(error);
   }

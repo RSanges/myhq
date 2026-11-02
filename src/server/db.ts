@@ -16,6 +16,22 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const EVENT_TYPES = ["start", "text", "tool_call", "tool_result", "end"] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
+export const FIRING_OUTCOMES = ["started", "skipped_busy", "skipped_cap", "skipped_unarmed", "error"] as const;
+export type FiringOutcome = (typeof FIRING_OUTCOMES)[number];
+
+export type FiringRow = {
+  id: number;
+  room: string;
+  agent_id: string;
+  cron: string;
+  task: string | null;
+  scheduled_at: string;
+  outcome: FiringOutcome;
+  run_id: number | null;
+  detail: string | null;
+  created_at: string;
+};
+
 export type RunRow = {
   id: number;
   room: string;
@@ -222,6 +238,29 @@ CREATE TRIGGER IF NOT EXISTS approvals_changed_insert AFTER INSERT ON approvals
 BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
 CREATE TRIGGER IF NOT EXISTS approvals_changed_update AFTER UPDATE OF status ON approvals
 BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
+`,
+  },
+  {
+    version: 2,
+    sql: `
+-- Armed state of an agent's routines: NULL until changed from the interface
+-- or the assistant, in which case room.json's "armed" applies.
+ALTER TABLE agents ADD COLUMN armed INTEGER;
+
+-- One row per routine that came due: what the scheduler did with it.
+CREATE TABLE IF NOT EXISTS routine_firings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  cron TEXT NOT NULL,
+  task TEXT,
+  scheduled_at TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN (${list(FIRING_OUTCOMES)})),
+  run_id INTEGER REFERENCES runs(id),
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS routine_firings_agent ON routine_firings (room, agent_id);
 `,
   },
 ];

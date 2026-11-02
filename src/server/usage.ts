@@ -15,6 +15,8 @@ export type UsageDto = {
   week: Totals & { start: string };
   days: (Totals & { date: string })[];
   cap: { maxRunsPerDay: number; runsToday: number; remaining: number };
+  /** Share of the user's weekly budget spent this week (HQ_WEEKLY_BUDGET_USD), or null when not set. */
+  budget: { weeklyUsd: number; spentUsd: number; share: number } | null;
 };
 
 const TOTALS = `COUNT(r.id) AS runs,
@@ -28,7 +30,7 @@ const TOTALS = `COUNT(r.id) AS runs,
  * Tokens and cost of the runs, by local calendar day (the server's time zone).
  * The week starts on Monday.
  */
-export function getUsage(db: Db, maxRunsPerDay: number): UsageDto {
+export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number | null = null): UsageDto {
   const days = db
     .prepare(
       `WITH RECURSIVE d(date, n) AS (
@@ -53,5 +55,9 @@ export function getUsage(db: Db, maxRunsPerDay: number): UsageDto {
     week,
     days,
     cap: { maxRunsPerDay, runsToday: count, remaining: Math.max(0, maxRunsPerDay - count) },
+    budget:
+      weeklyBudgetUsd === null
+        ? null
+        : { weeklyUsd: weeklyBudgetUsd, spentUsd: week.costUsd, share: week.costUsd / weeklyBudgetUsd },
   };
 }

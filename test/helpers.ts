@@ -39,6 +39,10 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     defaultMaxBudgetUsd: 1,
     runTimeoutMs: 60_000,
     claudeBin: "claude",
+    scheduler: false,
+    timeZone: "Europe/Paris",
+    weeklyBudgetUsd: null,
+    onboardingMaxBudgetUsd: 0.3,
     ...overrides,
   };
 }

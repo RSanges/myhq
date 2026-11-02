@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { isValidTimeZone, systemTimeZone } from "./time";
 
 /**
  * Runtime configuration, read from the environment (Next.js loads `.env.local`).
@@ -15,6 +16,15 @@ const envSchema = z.object({
   HQ_DEFAULT_MAX_BUDGET_USD: z.coerce.number().positive().default(1),
   HQ_RUN_TIMEOUT_MINUTES: z.coerce.number().positive().default(30),
   HQ_CLAUDE_BIN: z.string().trim().min(1).default("claude"),
+  HQ_SCHEDULER: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .pipe(z.enum(["on", "off"]))
+    .default("off"),
+  HQ_TIMEZONE: z.string().trim().refine(isValidTimeZone, "an IANA time zone such as Europe/Paris").optional(),
+  HQ_WEEKLY_BUDGET_USD: z.coerce.number().positive().optional(),
+  HQ_ONBOARDING_MAX_BUDGET_USD: z.coerce.number().positive().default(0.5),
 });
 
 export type HqConfig = {
@@ -30,6 +40,14 @@ export type HqConfig = {
   defaultMaxBudgetUsd: number;
   runTimeoutMs: number;
   claudeBin: string;
+  /** HQ_SCHEDULER=on: routines start runs on their own. */
+  scheduler: boolean;
+  /** Time zone of the routines and of the daily export. */
+  timeZone: string;
+  /** The user's weekly budget, to show the share consumed. Null when not set. */
+  weeklyBudgetUsd: number | null;
+  /** --max-budget-usd of an onboarding run. */
+  onboardingMaxBudgetUsd: number;
 };
 
 function emptyToUndefined(env: Env): Record<string, string | undefined> {
@@ -64,6 +82,10 @@ export function getConfig(env: Env = process.env): HqConfig {
     defaultMaxBudgetUsd: vars.HQ_DEFAULT_MAX_BUDGET_USD,
     runTimeoutMs: vars.HQ_RUN_TIMEOUT_MINUTES * 60_000,
     claudeBin: vars.HQ_CLAUDE_BIN,
+    scheduler: vars.HQ_SCHEDULER === "on",
+    timeZone: vars.HQ_TIMEZONE ?? systemTimeZone(),
+    weeklyBudgetUsd: vars.HQ_WEEKLY_BUDGET_USD ?? null,
+    onboardingMaxBudgetUsd: vars.HQ_ONBOARDING_MAX_BUDGET_USD,
   };
 }
 

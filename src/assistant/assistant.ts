@@ -7,6 +7,7 @@ import type { Db, RunRow } from "../server/db";
 import { HqError } from "../server/errors";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
+import { schedulerInfo } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
 import { getUsage } from "../server/usage";
 import { formatCost } from "../ui/format";
@@ -293,8 +294,8 @@ export class Assistant {
 
   private statusText(): string {
     const t = strings.assistant.status;
-    const usage = getUsage(this.deps.db, this.deps.config.maxRunsPerDay);
-    const state = getState(this.deps.db, loadHome(this.deps.config.home));
+    const usage = getUsage(this.deps.db, this.deps.config.maxRunsPerDay, this.deps.config.weeklyBudgetUsd);
+    const state = getState(this.deps.db, loadHome(this.deps.config.home), schedulerInfo(this.deps.config));
     const agents = state.rooms.flatMap((room) =>
       room.agents.map((agent) => t.agent({ room: room.name, agent: agent.name, state: strings.team.state[agent.state] })),
     );

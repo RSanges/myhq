@@ -10,6 +10,7 @@ import type {
   RunRow,
   RunStatus,
 } from "./db";
+import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { toPosix, type Home } from "./rooms";
 
 // Shapes returned by the API (documented in docs/api.md).
@@ -169,18 +170,30 @@ export type StateDto = {
       model: string;
       role: string;
       allowedTools: string[];
-      cron: string | null;
+      /** Armed state of the routines (the database value, or room.json's until changed). */
+      armed: boolean;
+      routines: { cron: string; task: string | null; nextAt: string | null }[];
       state: AgentState;
       lastRun: RunDto | null;
     }[];
   }[];
   invalidRooms: { room: string; error: string }[];
+  scheduler: SchedulerInfo;
+  firings: FiringDto[];
   approvals: { pending: ApprovalDto[]; history: ApprovalDto[] };
   recent: { events: EventDto[]; messages: MessageDto[] };
 };
 
+export type SchedulerInfo = {
+  /** HQ_SCHEDULER=on. */
+  enabled: boolean;
+  /** This process runs the routines (enabled, and the lock of the home taken). */
+  running: boolean;
+  timeZone: string;
+};
+
 /** Snapshot for the interface: load it once, then follow /api/events from `cursor`. */
-export function getState(db: Db, home: Home): StateDto {
+export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date = new Date()): StateDto {
   const cursor = currentCursor(db);
   const lastRun = db.prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? ORDER BY id DESC LIMIT 1");
   return {
@@ -198,13 +211,20 @@ export function getState(db: Db, home: Home): StateDto {
           model: agent.model,
           role: toPosix(path.relative(home.root, agent.rolePath)),
           allowedTools: agent.allowedTools,
-          cron: agent.routines[0]?.cron ?? null,
+          armed: isArmed(db, room.name, agent),
+          routines: agent.routines.map((routine) => ({
+            cron: routine.cron,
+            task: routine.task,
+            nextAt: nextRoutineFire(routine, at, scheduler.timeZone)?.toISOString() ?? null,
+          })),
           state,
           lastRun: row ? toRun(row) : null,
         };
       }),
     })),
     invalidRooms: home.invalid.map((r) => ({ room: path.basename(r.dir), error: r.error })),
+    scheduler,
+    firings: listFirings(db, 50),
     approvals: {
       pending: (db.prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY id").all() as ApprovalRow[]).map(
         toApproval,
