@@ -13,6 +13,7 @@ import {
   hqMemoryRead,
   hqMemoryWrite,
   hqMessage,
+  hqPending,
   hqReadDecisions,
   hqSubmit,
   hqTaskUpdate,
@@ -88,6 +89,15 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_memory_write,
     },
     async (args) => respond(() => hqMemoryWrite(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_pending",
+    {
+      description:
+        "List the items waiting for the user's decision, in every room, oldest first: id, room, agent, type, title and submission time (no body). Read-only.",
+      inputSchema: inputs.hq_pending,
+    },
+    async () => respond(() => hqPending(db)),
   );
 
   await server.connect(new StdioServerTransport());

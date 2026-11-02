@@ -34,7 +34,7 @@ export function readContext(env: Env): HqContext {
   };
 }
 
-/** Input shapes of the six tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the seven tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent of this room to write to."),
@@ -64,6 +64,7 @@ export const inputs = {
     key: z.string().min(1).max(200).describe("Key of the value to write."),
     value: z.string().max(100_000).describe("Value to store (text or JSON)."),
   },
+  hq_pending: {},
 } as const;
 
 type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K]>>;
@@ -157,6 +158,26 @@ export function hqReadDecisions(db: Db, ctx: HqContext) {
       })),
     };
   })();
+}
+
+/**
+ * The items waiting for the user's decision, in every room, oldest first:
+ * what an agent that writes a brief needs, without the bodies. Read-only.
+ */
+export function hqPending(db: Db) {
+  const rows = db
+    .prepare("SELECT id, room, agent_id, type, title, created_at FROM approvals WHERE status = 'pending' ORDER BY id")
+    .all() as Pick<ApprovalRow, "id" | "room" | "agent_id" | "type" | "title" | "created_at">[];
+  return {
+    pending: rows.map((row) => ({
+      id: row.id,
+      room: row.room,
+      agent: row.agent_id,
+      type: row.type,
+      title: row.title,
+      submittedAt: row.created_at,
+    })),
+  };
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {

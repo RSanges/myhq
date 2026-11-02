@@ -61,12 +61,13 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return content.map((part) => part.text).join("");
 }
 
-test("lists the six hq tools", async () => {
+test("lists the seven hq tools", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "hq_memory_read",
     "hq_memory_write",
     "hq_message",
+    "hq_pending",
     "hq_read_decisions",
     "hq_submit",
     "hq_task_update",
@@ -95,6 +96,30 @@ test("hq_submit creates a pending approval", async () => {
     url: "https://example.com/thread/1",
     forum: "example",
   });
+});
+
+test("hq_pending lists the pending items of every room, without their bodies", async () => {
+  const at = "2026-11-03T07:00:00.000Z";
+  const insert = db.prepare(
+    "INSERT INTO approvals (room, agent_id, type, title, body, status, created_at) VALUES (?, ?, ?, ?, 'secret body', ?, ?)",
+  );
+  const other = Number(insert.run("other", "mailer", "mail_reply", "Reply to Alice", "pending", at).lastInsertRowid);
+  insert.run("demo", "writer", "community_reply", "Already decided", "approved", at);
+  const result = await client.callTool({ name: "hq_pending", arguments: {} });
+  assert.notEqual(result.isError, true, textOf(result));
+  const { pending } = JSON.parse(textOf(result)) as { pending: Record<string, unknown>[] };
+  assert.ok(pending.length >= 2);
+  assert.deepEqual(pending.at(-1), {
+    id: other,
+    room: "other",
+    agent: "mailer",
+    type: "mail_reply",
+    title: "Reply to Alice",
+    submittedAt: at,
+  });
+  assert.ok(pending.every((item) => !("body" in item)));
+  assert.equal(pending.some((item) => item.title === "Already decided"), false);
+  assert.ok(pending.some((item) => item.room === "demo" && item.type === "community_reply"));
 });
 
 test("hq_submit rejects invalid input", async () => {
