@@ -185,7 +185,7 @@ function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at:
   const target = officeOf(model.layout, targetKey);
   const targetAgent = model.agents.find((candidate) => candidate.key === targetKey);
   if (!self || !target || !targetAgent || targetKey === agent.key) return agent;
-  const path = routeToOffice(self, target);
+  const path = routeToOffice(model.layout, self, target);
   const to = path[path.length - 1]!;
   return withTrip(
     agent,

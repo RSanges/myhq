@@ -476,23 +476,33 @@ mcp add --help`):
 ## 7. The room view
 
 `/room` (linked from the header of `/`, with a link back) is the floor of a
-project, drawn as a plan: a corridor with a closed office per agent on each
-side (walls as thick lines, a door gap onto the corridor, the name on a plate
-on the back wall, the desk inside), a meeting room whose wall holds the
-whiteboard (runs of the day against the cap, cost, share of the weekly budget,
-routines armed, next fire and last firing: the numbers of `/api/usage` and
-`/api/routines`), a coffee corner, and at the end of the corridor the larger
-office of the user with the "to approve" tray and its count. The plan is built
-from the number of agents (`layoutRoom`): offices alternate between the two
-sides, the corridor lengthens, the offices deepen or widen so the plan keeps
-the shape of a wide screen, and nothing is fixed to a count (an odd number
-leaves one shaded slot). The canvas takes the whole width and the height that
-is left under the header and above the strip of agents, so the floor fits on
-one screen with no scrolling; the plan is scaled uniformly and centered, and
-never past the scale at which a character is about 48 px on a 1080p screen. It
+project, drawn as the plan of a small agency: offices of different sizes (a
+cell for one agent, a double office for two who talk often, a corner office),
+closed by walls with a door gap onto corridors that loop around a lobby, a
+meeting room with a long table and the whiteboard (runs of the day against the
+cap, cost, share of the weekly budget, routines armed, next fire and last
+firing: the numbers of `/api/usage` and `/api/routines`), an open kitchen with
+the coffee machine, a lounge, storage, windows along the outer walls, and the
+user's own office next to a lobby whose console holds the "to approve" tray and
+its count. Each office is sized to its desk and furnished (desk, chair, shelf,
+plant, sofa), the name of its agent is on a plate beside its door. The canvas
+takes the whole width and the height that is left under the header and above the
+strip of agents, so the floor fits on one screen with no scrolling; the plan is
+scaled uniformly and centered, characters are about 60 px on a 1080p screen. It
 is a separate page because the canvas weighs something and must be able to
 stop; `/` stays the desk that works everywhere. When the home has several
 rooms, buttons choose the floor shown.
+
+**Templates.** The plan is not computed from a grid: it is one of three
+hand-designed templates by number of agents, data in
+`src/ui/floor-templates.ts` (small for 1 to 3 agents, medium for 4 to 7, large
+for 8 to 12). A template lists its rooms with their position, size, door,
+desks and furniture, the center lines of its corridors, its windows and its
+lobby; agents fill the desks in order, and the desks left empty are drawn
+vacant. `layoutRoom` (`room-layout.ts`) turns the template into walls,
+furniture, offices and a graph of the corridors. A template can be refined, or
+a fourth one added, without touching the renderer or the model. More than 12
+agents are listed under the floor but have no office on it.
 
 **Pieces.**
 
@@ -501,8 +511,8 @@ rooms, buttons choose the floor shown.
   and `approval` messages) and gives a visual state per agent. No canvas, no
   real clock: time is a number of milliseconds passed in by the caller, so the
   tests replay the fixtures (`test/room-model.test.ts`) on a fake clock.
-  `src/ui/room-layout.ts` places the furniture; `src/ui/room-store.ts` keeps
-  one model per room outside React.
+  `src/ui/room-layout.ts` builds the plan from a template and plans the routes;
+  `src/ui/room-store.ts` keeps one model per room outside React.
 - `src/ui/room-renderer.ts`: PixiJS drawing of shapes and sprites behind a
   small interface (create, draw a scene, resize, set the density, destroy).
   `src/ui/room-labels.ts`: every piece of text of the floor (name plates, the
@@ -516,9 +526,11 @@ rooms, buttons choose the floor shown.
   `src/ui/room.tsx` is the page: header, rooms, the canvas or the compact band,
   the strip of agents, the sheet.
 - Walking follows routes of the layout (`routeToOffice`, `routeToUser`): from
-  the seat out of the office, through its door, along the center line of the
-  corridor, through the other door, to where a visitor stands. A test checks
-  that no route of a floor of 1 to 12 agents crosses a wall outside a door.
+  the seat round the desk, through the door of the office, along the shortest
+  way of the corridors (a graph built from their center lines, Dijkstra), then
+  through the other door to where a visitor stands, or to the tray in the
+  lobby; two agents of the same office just cross it. A test checks that no
+  route of any template crosses a wall, whatever the number of agents.
 - The neutral character is `public/sprites/neutral.png`, drawn by
   `scripts/build-neutral-sprite.mjs`; it is tinted per agent from a fixed
   palette. A home gives an agent its own sheet with `agents[].sprite` (contract

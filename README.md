@@ -12,7 +12,8 @@ approval buttons, conversation, voice notes, files, extensions from the home),
 and the third slice on the MyHQ side: routines with an armed state and a
 journal, generic role templates, `npm run init`, onboarding a project through
 the approval queue, and a daily export. The fourth slice adds the animated
-floor (`/room`): a plan of closed offices along a corridor where agents type,
+floor (`/room`): the plan of a small agency, with its offices, corridors and meeting
+room, where agents type,
 think, walk to a colleague's office or to yours as their runs happen.
 
 ## Concepts

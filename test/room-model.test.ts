@@ -6,13 +6,13 @@ import { parseStreamLine } from "../src/server/claude-engine";
 import type { HqEvent } from "../src/ui/schemas";
 import { agentKey } from "../src/ui/model";
 import {
-  CORRIDOR_H,
   layoutRoom,
   officeOf,
   pointOnRoute,
   routeLength,
   routeToOffice,
   routeToUser,
+  type Office,
   type Point,
   type RoomLayout,
 } from "../src/ui/room-layout";
@@ -141,7 +141,8 @@ test("a room of three agents starts asleep, offices on both sides of the corrido
   assert.deepEqual(view.agents.map((a) => a.pose), ["sleep", "sleep", "sleep"]);
   assert.equal(view.agents[0]!.bubble?.kind, "zzz");
   assert.equal(view.pending, 0);
-  assert.deepEqual(view.layout.offices.map((o) => o.side), ["top", "bottom", "top"]);
+  assert.equal(view.layout.template, "small");
+  assert.equal(view.layout.offices.length, 3);
   assert.equal(view.fps, IDLE_FPS);
   assert.equal(view.nextChangeAt, Number.POSITIVE_INFINITY);
 });
@@ -239,7 +240,7 @@ test("an hq_message walks to the table of the recipient, stays there, and comes 
   const model = hydrated();
   const scout = model.layout.offices[0]!;
   const writer = model.layout.offices[1]!;
-  const route = routeToOffice(scout, writer);
+  const route = routeToOffice(model.layout, scout, writer);
   const stand = last(route);
   const leg = legMs(route);
   const messageAt = T0 + 3 * STEP;
@@ -255,8 +256,8 @@ test("an hq_message walks to the table of the recipient, stays there, and comes 
   assert.deepEqual(leaving.status, { kind: "visiting", target: "Writer" });
   assert.equal(leaving.pose, "walk");
   assert.deepEqual(leaving.coarse, { kind: "visiting", target: "Writer" });
-  assert.ok(Math.hypot(middle.x - scout.seat.x, middle.y - scout.seat.y) > 20, "on its way");
-  assert.ok(Math.hypot(middle.x - stand.x, middle.y - stand.y) > 20);
+  assert.ok(Math.hypot(middle.x - scout.seat.x, middle.y - scout.seat.y) > 5, "on its way");
+  assert.ok(Math.hypot(middle.x - stand.x, middle.y - stand.y) > 5);
   assert.deepEqual(arrived.status, { kind: "talking", target: "Writer" });
   assert.equal(arrived.pose, "stand");
   assert.deepEqual(arrived.bubble, { kind: "talk" });
@@ -387,8 +388,8 @@ test("reduced motion: no walking, held poses, a move is a crossfade and nothing 
   const model = hydrated();
   const scout = model.layout.offices[0]!;
   const writer = model.layout.offices[1]!;
-  const stand = last(routeToOffice(scout, writer));
-  const leg = legMs(routeToOffice(scout, writer));
+  const stand = last(routeToOffice(model.layout, scout, writer));
+  const leg = legMs(routeToOffice(model.layout, scout, writer));
   const messageAt = T0 + 3 * STEP;
   const times = [messageAt + 10, messageAt + leg / 2, messageAt + leg - 10, messageAt + leg + 500];
   const { views } = probe(model, replaySteps(events), times, true);
@@ -449,58 +450,61 @@ test("an event of another room, or of an agent that is not in the room, changes 
 const inRect = (p: Point, r: { x: number; y: number; w: number; h: number }) =>
   p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 
-/** A route never crosses the wall of the corridor or of the user's office outside a door. */
-function assertThroughDoors(layout: RoomLayout, route: Point[], label: string) {
-  const sides = [layout.corridor.y, layout.corridor.y + CORRIDOR_H];
-  const gaps = layout.offices.map((o) => o.door);
+/** Whether two segments cross (touching at an end is not crossing). */
+function crosses(a: Point, b: Point, c: Point, d: Point): boolean {
+  const side = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = side(c, d, a);
+  const d2 = side(c, d, b);
+  const d3 = side(a, b, c);
+  const d4 = side(a, b, d);
+  return d1 * d2 < -1e-9 && d3 * d4 < -1e-9;
+}
+
+/** A route never crosses a wall: it goes through the doors. */
+function assertNoWallCrossed(layout: RoomLayout, route: Point[], label: string) {
   for (let i = 1; i < route.length; i += 1) {
-    const a = route[i - 1]!;
-    const b = route[i]!;
-    for (const wallY of sides) {
-      if ((a.y - wallY) * (b.y - wallY) < 0) {
-        const t = (wallY - a.y) / (b.y - a.y);
-        const x = a.x + (b.x - a.x) * t;
-        if (x >= layout.user.room.x) continue; // inside the user's office
-        assert.ok(
-          gaps.some((door) => door.y === wallY && Math.abs(x - door.x) <= door.w / 2),
-          `${label}: crosses a wall at ${x.toFixed(0)},${wallY}`,
-        );
-      }
-    }
-    const wallX = layout.user.room.x;
-    if ((a.x - wallX) * (b.x - wallX) < 0) {
-      const t = (wallX - a.x) / (b.x - a.x);
-      const y = a.y + (b.y - a.y) * t;
-      assert.ok(Math.abs(y - layout.user.door.y) <= layout.user.door.w / 2, `${label}: crosses the user's wall at ${y.toFixed(0)}`);
+    for (const wall of layout.walls) {
+      assert.ok(!crosses(route[i - 1]!, route[i]!, wall.a, wall.b), `${label}: crosses a wall near ${route[i]!.x.toFixed(0)},${route[i]!.y.toFixed(0)}`);
     }
   }
 }
 
-test("layout: offices on both sides of a corridor, built from the number of agents, routes through the doors", () => {
+test("layout: a template by size, agents in the desks in order, routes through the doors only", () => {
+  const expected = (count: number) => (count <= 3 ? "small" : count <= 7 ? "medium" : "large");
   for (let count = 1; count <= 12; count += 1) {
     const layout = layoutRoom(Array.from({ length: count }, (_, i) => `r/a${i}`));
+    assert.equal(layout.template, expected(count));
     assert.equal(layout.offices.length, count);
-    assert.equal(layout.vacant.length, count % 2);
-    assert.equal(new Set(layout.offices.map((o) => `${o.room.x},${o.room.y}`)).size, count, "no two offices share a place");
-    for (const [index, office] of layout.offices.entries()) {
-      assert.equal(office.side, index % 2 === 0 ? "top" : "bottom");
+    assert.equal(new Set(layout.offices.map((o) => `${o.seat.x},${o.seat.y}`)).size, count, "no two agents share a desk");
+    for (const office of layout.offices) {
       for (const p of [office.seat, office.plate, ...office.exit, ...office.visit]) {
-        assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height);
+        assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height, `${office.key} inside the plan`);
       }
       assert.ok(inRect(office.seat, office.room), "the desk is inside the office");
-      assert.equal(office.exit[office.exit.length - 1]!.y, layout.lineY);
-      assertThroughDoors(layout, office.exit, `exit of ${office.key}`);
-      assertThroughDoors(layout, routeToUser(layout, office), `to the user from ${office.key}`);
+      assertNoWallCrossed(layout, office.exit, `exit of ${office.key}`);
+      assertNoWallCrossed(layout, office.visit, `visit of ${office.key}`);
+      assertNoWallCrossed(layout, routeToUser(layout, office), `to the user from ${office.key}`);
       for (const other of layout.offices) {
-        if (other !== office) assertThroughDoors(layout, routeToOffice(office, other), `${office.key} to ${other.key}`);
+        if (other !== office) assertNoWallCrossed(layout, routeToOffice(layout, office, other), `${office.key} to ${other.key}`);
       }
     }
-    assert.ok(inRect(layout.user.stand, layout.user.room));
-    assert.ok(layout.user.room.w > layout.offices[0]!.room.w, "the user's office is the larger one");
-    assert.ok(layout.width / layout.height > 1.4 && layout.width / layout.height < 4.5, "a plan that fits a wide screen");
+    assert.ok(layout.meeting && layout.coffee, "a meeting room with its board and a coffee machine");
+    assert.ok(layout.width / layout.height > 1.3 && layout.width / layout.height < 3, "a plan that fits a wide screen");
   }
-  assert.ok(layoutRoom(Array.from({ length: 9 }, (_, i) => `r/a${i}`)).width > layoutRoom(["r/a", "r/b"]).width);
+  // Every agent of a full large floor has its own desk; nobody is left without one up to 12.
+  assert.equal(layoutRoom(Array.from({ length: 12 }, (_, i) => `r/a${i}`)).vacantDesks.length, 0);
+  assert.ok(layoutRoom(["r/a"]).vacantDesks.length >= 1 && layoutRoom(["r/a"]).rooms.some((room) => room.vacant === false));
+  assert.equal(layoutRoom(["r/a", "r/b", "r/c", "r/d"]).template, "medium");
   assert.equal(officeOf(layoutRoom(["r/a"]), "r/zzz"), null);
+});
+
+test("agents of the same double office cross it, the others go out by the door and along the corridor", () => {
+  const layout = layoutRoom(Array.from({ length: 9 }, (_, i) => `r/a${i}`));
+  const [one, two, three] = layout.offices as [Office, Office, Office];
+  assert.equal(one.room, two.room);
+  assert.notEqual(one.room, three.room);
+  assert.equal(routeToOffice(layout, one, two).length, 2);
+  assert.ok(routeLength(routeToOffice(layout, one, three)) > 2 * routeLength(routeToOffice(layout, one, two)));
 });
 
 test("a route is walked at a fraction of its length, facing the way it goes", () => {

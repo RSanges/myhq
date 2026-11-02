@@ -1,89 +1,90 @@
-// The floor plan, in world units (one unit is one pixel at a scale of 1): a
-// corridor with a closed office per agent on each side, a meeting room with
-// the whiteboard and a coffee corner at one end, the user's office at the
-// other. Pure: no canvas, no clock. The room view draws it and the animation
-// model walks along its routes (through doors and along the corridor, never
-// through a wall). The plan is built from the number of agents: nothing in it
-// is fixed to a given count.
+import {
+  templateFor,
+  type FloorTemplate,
+  type Item,
+  type Point,
+  type Rect,
+  type RoomKind,
+  type RoomSpec,
+  type Side,
+} from "./floor-templates";
 
-export type Point = { x: number; y: number };
-export type Rect = { x: number; y: number; w: number; h: number };
+// The floor plan the room view draws and the agents walk in, in world units
+// (one unit is one pixel at a scale of 1). It is built from a hand-designed
+// template (floor-templates.ts) chosen by the number of agents; agents fill the
+// desks in order. Pure: no canvas, no clock. Routes go out of an office through
+// its door, along the corridors (a graph built from their center lines) and in
+// through the other door, never through a wall.
 
-/** Outer margin of the plan. */
-export const MARGIN = 14;
+export type { Item, Point, Rect, RoomKind, Side };
+
 /** Thickness of a wall. */
-export const WALL = 3;
-export const CORRIDOR_H = 60;
-export const OFFICE_W = 120;
-/** Offices widen up to this when there are few of them, so that a small floor still fills a wide screen. */
-export const MAX_OFFICE_W = 180;
-/** Width of the meeting room and of the coffee corner, at the entrance end. */
-export const SIDE_W = 200;
-export const USER_W = 210;
-export const DOOR_W = 30;
+export const WALL = 2.4;
 /** Displayed size of a character, in world units (its sheet cell is drawn at this size). */
 export const SPRITE_SIZE = 26;
-/** The plan is shaped for a screen about this much wider than tall (depth of the offices follows). */
-export const TARGET_ASPECT = 2;
-export const MIN_DEPTH = 130;
-export const MAX_DEPTH = 230;
+/** Width of a door gap unless a room says otherwise. */
+export const DOOR_W = 22;
+export const DESK_W = 38;
+export const DESK_H = 15;
 
-export type Door = {
-  /** Center of the gap, on the wall. */
-  x: number;
-  y: number;
-  /** Length of the gap. */
-  w: number;
-  /** The wall the gap is cut in. */
-  wall: "top" | "bottom" | "left";
-};
+export type Segment = { a: Point; b: Point };
+
+export type Door = { x: number; y: number; w: number; wall: Side };
 
 export type Office = {
   key: string;
   room: Rect;
-  side: "top" | "bottom";
   door: Door;
   desk: Rect;
   chair: Point;
   /** Where the character's feet are when it sits (center, bottom). */
   seat: Point;
-  /** The name plate, on the back wall. */
-  plate: Point;
-  /** From the seat out to the corridor, ending on its center line. */
+  /** The name plate, on the wall outside the door. `ax` 1 puts the plate to the left of the door, 0 to the right. */
+  plate: { x: number; y: number; ax: 0 | 1 };
+  /** From the seat out of the office, ending just outside the door (a node of the corridors). */
   exit: Point[];
-  /** From the corridor center line to where a visitor stands inside. */
+  /** From just outside the door to where a visitor stands inside. */
   visit: Point[];
+  outside: number;
 };
 
+export type PlacedRoom = { kind: RoomKind; rect: Rect; vacant: boolean };
+
 export type RoomLayout = {
+  template: FloorTemplate["id"];
   width: number;
   height: number;
-  corridor: Rect;
-  /** y of the center line of the corridor, where every route runs. */
-  lineY: number;
+  outline: Point[];
+  rooms: PlacedRoom[];
+  walls: Segment[];
+  windows: Segment[];
+  /** Furniture drawn behind the characters (chairs, shelves, sofas, plants, tables). */
+  items: Item[];
+  /** Desks of agents with nobody at them (drawn like the others). */
+  vacantDesks: Rect[];
   offices: Office[];
-  /** Empty slots of the plan (an odd number of agents leaves one). */
-  vacant: Rect[];
-  meeting: { room: Rect; door: Door; board: Rect };
-  coffee: { room: Rect; door: Door; machine: Rect; table: Point; plant: Point };
+  meeting: { rect: Rect; board: Rect } | null;
+  coffee: Rect | null;
   user: {
     room: Rect;
-    door: Door;
     desk: Rect;
     chair: Point;
     monitor: Rect;
-    /** The "to approve" tray on the desk. */
+    /** Where the name of the user's office is written. */
+    plate: Point;
+    /** The console of the lobby with the "to approve" tray. */
+    console: Rect;
     tray: Rect;
-    /** Where an agent stands to drop a folder in the tray. */
+    /** Where an agent stands to drop a folder in the tray (a node of the corridors). */
     stand: Point;
-    /** From the corridor center line, in front of the user's door, to `stand`. */
-    approach: Point[];
+    standNode: number;
   };
+  graph: Graph;
 };
 
-export function columnsFor(count: number): number {
-  return Math.max(1, Math.ceil(count / 2));
-}
+type Graph = { nodes: Point[]; edges: [number, number][] };
+
+// ---- Routes -----------------------------------------------------------------------------------
 
 const same = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01;
 
@@ -92,99 +93,211 @@ export function tidy(points: Point[]): Point[] {
   return points.filter((point, index) => index === 0 || !same(point, points[index - 1]!));
 }
 
-/** The floor plan for the given agent keys, in order: they alternate between the two sides of the corridor. */
-export function layoutRoom(keys: string[]): RoomLayout {
-  const cols = columnsFor(keys.length);
-  const officesX = MARGIN + SIDE_W;
-  const baseWidth = officesX + cols * OFFICE_W + USER_W + MARGIN;
-  const depth = Math.max(
-    MIN_DEPTH,
-    Math.min(MAX_DEPTH, Math.round((baseWidth / TARGET_ASPECT - 2 * MARGIN - CORRIDOR_H) / 2)),
-  );
-  const height = 2 * MARGIN + 2 * depth + CORRIDOR_H;
-  // Few offices: widen them until the plan has the shape of a wide screen.
-  const officeW = Math.min(MAX_OFFICE_W, Math.max(OFFICE_W, Math.round((height * TARGET_ASPECT - baseWidth) / cols) + OFFICE_W));
-  const userX = officesX + cols * officeW;
-  const width = userX + USER_W + MARGIN;
-  const topY = MARGIN;
-  const bottomY = MARGIN + depth + CORRIDOR_H;
-  const lineY = MARGIN + depth + CORRIDOR_H / 2;
+function nodeAt(graph: Graph, point: Point): number {
+  const found = graph.nodes.findIndex((node) => same(node, point));
+  if (found >= 0) return found;
+  graph.nodes.push({ ...point });
+  return graph.nodes.length - 1;
+}
 
-  const offices = keys.map((key, index): Office => {
-    const col = Math.floor(index / 2);
-    const side = index % 2 === 0 ? "top" : "bottom";
-    const room: Rect = { x: officesX + col * officeW, y: side === "top" ? topY : bottomY, w: officeW, h: depth };
-    const cx = room.x + room.w / 2;
-    const seatY = side === "top" ? room.y + 52 : room.y + depth - 34;
-    const doorY = side === "top" ? room.y + depth : room.y;
-    const doorIn = { x: cx, y: side === "top" ? room.y + depth - 14 : room.y + 14 };
-    const entry = { x: cx, y: lineY };
-    return {
-      key,
-      room,
-      side,
-      door: { x: cx, y: doorY, w: DOOR_W, wall: side === "top" ? "bottom" : "top" },
-      desk: { x: cx - 30, y: seatY - 6, w: 60, h: 20 },
-      chair: { x: cx, y: seatY - 7 },
-      seat: { x: cx, y: seatY },
-      plate: { x: cx, y: side === "top" ? room.y + 11 : room.y + depth - 11 },
-      exit: tidy([
-        { x: cx, y: seatY },
-        { x: cx + 42, y: seatY },
-        { x: cx + 42, y: doorIn.y },
-        doorIn,
-        entry,
-      ]),
-      visit: tidy([entry, doorIn, { x: cx - 42, y: doorIn.y }, { x: cx - 42, y: seatY + 3 }]),
-    };
+/** Joins a point to the nearest place of a corridor (splitting it there) and returns the point's node. */
+function attach(graph: Graph, point: Point): number {
+  let best: { edge: number; q: Point; distance: number } | null = null;
+  graph.edges.forEach(([i, j], edge) => {
+    const a = graph.nodes[i]!;
+    const b = graph.nodes[j]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const t = Math.min(1, Math.max(0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy)));
+    const q = { x: a.x + dx * t, y: a.y + dy * t };
+    const distance = Math.hypot(point.x - q.x, point.y - q.y);
+    if (!best || distance < best.distance) best = { edge, q, distance };
   });
+  const own = nodeAt(graph, point);
+  if (!best) return own;
+  const { edge, q } = best as { edge: number; q: Point };
+  const [i, j] = graph.edges[edge]!;
+  let qId = graph.nodes.findIndex((node) => same(node, q));
+  if (qId < 0) {
+    qId = nodeAt(graph, q);
+    graph.edges.splice(edge, 1, [i, qId], [qId, j]);
+  }
+  if (qId !== own) graph.edges.push([own, qId]);
+  return own;
+}
 
-  const vacant: Rect[] = [];
-  if (keys.length % 2 === 1) {
-    vacant.push({ x: officesX + (cols - 1) * officeW, y: bottomY, w: officeW, h: depth });
+/** The shortest way along the corridors between two nodes, as points (Dijkstra). */
+function graphRoute(graph: Graph, from: number, to: number): Point[] {
+  const count = graph.nodes.length;
+  const distance = new Array<number>(count).fill(Number.POSITIVE_INFINITY);
+  const previous = new Array<number>(count).fill(-1);
+  const done = new Array<boolean>(count).fill(false);
+  distance[from] = 0;
+  for (;;) {
+    let current = -1;
+    for (let i = 0; i < count; i += 1) if (!done[i] && distance[i]! < Number.POSITIVE_INFINITY && (current < 0 || distance[i]! < distance[current]!)) current = i;
+    if (current < 0 || current === to) break;
+    done[current] = true;
+    for (const [a, b] of graph.edges) {
+      const other = a === current ? b : b === current ? a : -1;
+      if (other < 0 || done[other]) continue;
+      const length = Math.hypot(graph.nodes[a]!.x - graph.nodes[b]!.x, graph.nodes[a]!.y - graph.nodes[b]!.y);
+      if (distance[current]! + length < distance[other]!) {
+        distance[other] = distance[current]! + length;
+        previous[other] = current;
+      }
+    }
+  }
+  const route: Point[] = [];
+  for (let node = to; node >= 0; node = previous[node]!) {
+    route.unshift(graph.nodes[node]!);
+    if (node === from) break;
+  }
+  return route;
+}
+
+// ---- Building a layout from a template ------------------------------------------------------------
+
+function deskRects(spec: RoomSpec): Rect[] {
+  if (Array.isArray(spec.desks)) return spec.desks;
+  const count = spec.desks ?? 0;
+  const { rect } = spec;
+  const y = spec.door.wall === "bottom" ? rect.y + 26 : rect.y + rect.h - 22;
+  return Array.from({ length: count }, (_, i) => ({ x: rect.x + (rect.w * (i + 0.5)) / count - DESK_W / 2, y, w: DESK_W, h: DESK_H }));
+}
+
+function doorOf(spec: RoomSpec): Door {
+  const { rect, door } = spec;
+  const w = door.w ?? DOOR_W;
+  if (door.wall === "top") return { x: door.at, y: rect.y, w, wall: "top" };
+  if (door.wall === "bottom") return { x: door.at, y: rect.y + rect.h, w, wall: "bottom" };
+  if (door.wall === "left") return { x: rect.x, y: door.at, w, wall: "left" };
+  return { x: rect.x + rect.w, y: door.at, w, wall: "right" };
+}
+
+/** The walls of a room: four sides minus the open ones, with a gap where the door is. */
+function wallsOf(spec: RoomSpec, door: Door): Segment[] {
+  const { x, y, w, h } = spec.rect;
+  const open = new Set(spec.open ?? []);
+  const segments: Segment[] = [];
+  const horizontal = (wy: number, side: "top" | "bottom") => {
+    if (open.has(side)) return;
+    if (door.wall === side) {
+      segments.push({ a: { x, y: wy }, b: { x: door.x - door.w / 2, y: wy } }, { a: { x: door.x + door.w / 2, y: wy }, b: { x: x + w, y: wy } });
+    } else segments.push({ a: { x, y: wy }, b: { x: x + w, y: wy } });
+  };
+  const vertical = (wx: number, side: "left" | "right") => {
+    if (open.has(side)) return;
+    if (door.wall === side) {
+      segments.push({ a: { x: wx, y }, b: { x: wx, y: door.y - door.w / 2 } }, { a: { x: wx, y: door.y + door.w / 2 }, b: { x: wx, y: y + h } });
+    } else segments.push({ a: { x: wx, y }, b: { x: wx, y: y + h } });
+  };
+  horizontal(y, "top");
+  horizontal(y + h, "bottom");
+  vertical(x, "left");
+  vertical(x + w, "right");
+  return segments;
+}
+
+function buildOffice(graph: Graph, key: string, spec: RoomSpec, door: Door, desk: Rect, index: number, count: number): Office {
+  const { rect } = spec;
+  const seat = { x: desk.x + desk.w / 2, y: desk.y + 6 };
+  const south = door.wall === "bottom";
+  const inside = { x: door.x, y: south ? rect.y + rect.h - 11 : rect.y + 11 };
+  const outsidePoint = { x: door.x, y: south ? rect.y + rect.h + 7 : rect.y - 7 };
+  const outside = attach(graph, outsidePoint);
+  // The way round the desk: on the side that faces the door.
+  const sx = inside.x >= seat.x ? desk.x + desk.w + 8 : desk.x - 8;
+  const exit = south
+    ? tidy([seat, { x: sx, y: seat.y }, { x: sx, y: inside.y }, inside, outsidePoint])
+    : tidy([seat, inside, outsidePoint]);
+  const visit = tidy([outsidePoint, inside, { x: sx, y: inside.y }, { x: sx, y: seat.y + 6 }]);
+  const ax = count === 1 || index === 1 ? 0 : 1;
+  return {
+    key,
+    room: rect,
+    door,
+    desk,
+    chair: { x: seat.x, y: seat.y - 7 },
+    seat,
+    plate: { x: door.x + (ax === 0 ? 1 : -1) * (door.w / 2 + 3), y: south ? rect.y + rect.h + 8 : rect.y - 8, ax },
+    exit,
+    visit,
+    outside,
+  };
+}
+
+/** The floor plan for the given agent keys, in order, from the smallest template that seats them. */
+export function layoutRoom(keys: string[]): RoomLayout {
+  const template = templateFor(keys.length);
+  const graph: Graph = { nodes: [], edges: [] };
+  for (const line of template.corridors) {
+    for (let i = 1; i < line.length; i += 1) graph.edges.push([nodeAt(graph, line[i - 1]!), nodeAt(graph, line[i]!)]);
   }
 
-  const meetingRoom: Rect = { x: MARGIN, y: topY, w: SIDE_W, h: depth };
-  const coffeeRoom: Rect = { x: MARGIN, y: bottomY, w: SIDE_W, h: depth };
+  const walls: Segment[] = [];
+  const items: Item[] = [...template.lobby.items];
+  const offices: Office[] = [];
+  const vacantDesks: Rect[] = [];
+  const rooms: PlacedRoom[] = [];
+  let meeting: RoomLayout["meeting"] = null;
+  let coffee: Rect | null = null;
+  let userSpec: RoomSpec | null = null;
+  let next = 0;
 
-  const userRoom: Rect = { x: userX, y: topY, w: USER_W, h: 2 * depth + CORRIDOR_H };
-  const deskX = userX + USER_W / 2 - 50;
-  const deskY = topY + 40;
-  const userDesk: Rect = { x: deskX, y: deskY, w: 100, h: 26 };
-  const tray: Rect = { x: deskX + 6, y: deskY + 3, w: 34, h: 20 };
-  const stand = { x: tray.x + tray.w / 2, y: deskY + userDesk.h + 24 };
-  const doorOutside = { x: userX - 14, y: lineY };
-  const doorInside = { x: userX + 26, y: lineY };
+  for (const spec of template.rooms) {
+    const door = doorOf(spec);
+    walls.push(...wallsOf(spec, door));
+    items.push(...(spec.items ?? []));
+    const desks = deskRects(spec);
+    let seated = 0;
+    desks.forEach((desk, index) => {
+      const key = keys[next];
+      next += 1;
+      if (key === undefined) {
+        vacantDesks.push(desk);
+        return;
+      }
+      offices.push(buildOffice(graph, key, spec, door, desk, index, desks.length));
+      seated += 1;
+    });
+    rooms.push({ kind: spec.kind, rect: spec.rect, vacant: desks.length > 0 && seated === 0 });
+    if (spec.kind === "meeting" && spec.board) meeting = { rect: spec.rect, board: spec.board };
+    if (spec.machine) coffee = spec.machine;
+    if (spec.kind === "user") userSpec = spec;
+  }
+  if (!userSpec?.userDesk) throw new Error(`template ${template.id} has no user office`);
 
+  const outline = template.outline;
+  for (let i = 0; i < outline.length; i += 1) walls.push({ a: outline[i]!, b: outline[(i + 1) % outline.length]! });
+
+  const standNode = attach(graph, template.lobby.stand);
+  const user = userSpec.userDesk;
   return {
-    width,
-    height,
-    corridor: { x: MARGIN, y: MARGIN + depth, w: userX - MARGIN, h: CORRIDOR_H },
-    lineY,
+    template: template.id,
+    width: template.width,
+    height: template.height,
+    outline,
+    rooms,
+    walls,
+    windows: template.windows.map(([a, b]) => ({ a, b })),
+    items,
+    vacantDesks,
     offices,
-    vacant,
-    meeting: {
-      room: meetingRoom,
-      door: { x: meetingRoom.x + meetingRoom.w / 2, y: topY + depth, w: DOOR_W, wall: "bottom" },
-      board: { x: meetingRoom.x + 8, y: topY + 8, w: SIDE_W - 16, h: depth - 40 },
-    },
-    coffee: {
-      room: coffeeRoom,
-      door: { x: coffeeRoom.x + coffeeRoom.w / 2, y: bottomY, w: DOOR_W * 2, wall: "top" },
-      machine: { x: coffeeRoom.x + 18, y: bottomY + depth - 52, w: 30, h: 38 },
-      table: { x: coffeeRoom.x + SIDE_W - 56, y: bottomY + depth - 44 },
-      plant: { x: coffeeRoom.x + SIDE_W - 20, y: bottomY + 30 },
-    },
+    meeting,
+    coffee,
     user: {
-      room: userRoom,
-      door: { x: userX, y: lineY, w: DOOR_W + 6, wall: "left" },
-      desk: userDesk,
-      chair: { x: deskX + 70, y: deskY - 6 },
-      monitor: { x: deskX + 58, y: deskY + 4, w: 28, h: 16 },
-      tray,
-      stand,
-      approach: tidy([doorOutside, doorInside, { x: stand.x, y: lineY }, stand]),
+      room: userSpec.rect,
+      desk: user.desk,
+      chair: user.chair,
+      monitor: user.monitor,
+      plate: { x: userSpec.rect.x + userSpec.rect.w - 46, y: userSpec.rect.y + 11 },
+      console: template.lobby.console,
+      tray: template.lobby.tray,
+      stand: template.lobby.stand,
+      standNode,
     },
+    graph,
   };
 }
 
@@ -193,13 +306,17 @@ export function officeOf(layout: RoomLayout, key: string): Office | null {
 }
 
 /** The route from an agent's seat to where a visitor stands in another agent's office. */
-export function routeToOffice(from: Office, to: Office): Point[] {
-  return tidy([...from.exit, ...to.visit]);
+export function routeToOffice(layout: RoomLayout, from: Office, to: Office): Point[] {
+  // Two agents of the same office just cross it.
+  if (from.room === to.room) return tidy([from.seat, to.visit[to.visit.length - 1]!]);
+  const along = graphRoute(layout.graph, from.outside, to.outside);
+  return tidy([...from.exit, ...along.slice(1), ...to.visit.slice(1)]);
 }
 
-/** The route from an agent's seat to the tray of the user's desk. */
+/** The route from an agent's seat to the tray of the lobby. */
 export function routeToUser(layout: RoomLayout, from: Office): Point[] {
-  return tidy([...from.exit, ...layout.user.approach]);
+  const along = graphRoute(layout.graph, from.outside, layout.user.standNode);
+  return tidy([...from.exit, ...along.slice(1)]);
 }
 
 /** Total length of a route. */
