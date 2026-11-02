@@ -199,6 +199,9 @@ described, and no mechanism is built before its first real use.
    state of the routines and the user's key numbers. Acceptance: one can see an
    agent typing during its run, then walking to the user's desk to drop off a
    submission.
+   A first version of the whiteboard already exists: the `/roadmap` page shows
+   `<home>/docs/roadmap.json` (slices, items, open points, journal) and updates
+   live when the file changes (a `roadmap` event on the SSE feed, see `api.md`).
 
 ## 5. The assistant on Telegram
 

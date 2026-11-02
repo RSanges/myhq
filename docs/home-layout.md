@@ -13,6 +13,7 @@ repository of its own.
       roles/
         <agent>.md       one system prompt per agent
   assistant.json         the Telegram assistant (optional, schema below)
+  docs/roadmap.json      the live roadmap shown at /roadmap (optional, see api.md)
   assistant/
     commands/            extensions for the Telegram assistant
   data/                  created at first launch, ignored by Git

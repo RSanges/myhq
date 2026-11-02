@@ -3,6 +3,7 @@ import { z } from "zod";
 import { app } from "@/server/app";
 import { errorResponse, HqError } from "@/server/errors";
 import { changesSince, currentCursor } from "@/server/feed";
+import { subscribeRoadmap } from "@/server/roadmap";
 
 const POLL_MS = 1_000;
 const KEEPALIVE_MS = 15_000;
@@ -15,7 +16,7 @@ const cursorSchema = z.coerce.number().int().min(0);
 export async function GET(request: NextRequest) {
   await connection();
   try {
-    const { db } = app();
+    const { config, db } = app();
     const raw = request.nextUrl.searchParams.get("since") ?? request.headers.get("last-event-id");
     let cursor: number;
     if (raw === null || raw === "") {
@@ -29,9 +30,11 @@ export async function GET(request: NextRequest) {
     const encoder = new TextEncoder();
     let poll: ReturnType<typeof setInterval> | undefined;
     let keepalive: ReturnType<typeof setInterval> | undefined;
+    let unsubscribeRoadmap: (() => void) | undefined;
     const stop = () => {
       clearInterval(poll);
       clearInterval(keepalive);
+      unsubscribeRoadmap?.();
     };
 
     const stream = new ReadableStream<Uint8Array>({
@@ -53,6 +56,10 @@ export async function GET(request: NextRequest) {
         tick();
         poll = setInterval(tick, POLL_MS);
         keepalive = setInterval(() => send(": keepalive\n\n"), KEEPALIVE_MS);
+        // Not part of the changes table: no id, so the stream cursor does not move.
+        unsubscribeRoadmap = subscribeRoadmap(config.home, () => {
+          send(`event: roadmap\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
+        });
         request.signal.addEventListener("abort", () => {
           stop();
           try {

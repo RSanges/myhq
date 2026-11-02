@@ -23,6 +23,7 @@ Every error has the same shape and an HTTP status:
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
+| `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `INTERNAL` | 500 | Unexpected error. |
 
 The `message` is in English and meant for logs; the interface shows its own
@@ -236,6 +237,7 @@ data: {Run}
 | `event` | Event | the runner stores an event of a run |
 | `message` | Message | an agent sends a message |
 | `approval` | Approval | an agent submits an item, and when the item is decided |
+| `roadmap` | `{ "at": string }` | `docs/roadmap.json` of the home was created, edited, replaced or removed (see `GET /api/roadmap`) |
 
 `data` is the entity as it is when the message is sent, so an older change may
 already carry a later state (for example an approval created then approved
@@ -243,12 +245,49 @@ within the same second arrives twice as `approved`). Treat every message as
 "upsert this entity by id". The `id` of a message is the stream cursor, not
 the entity id.
 
+The `roadmap` message is not a stored change: it carries no `id` (the cursor does
+not move, and it is never replayed on reconnect), and it only goes to the
+connections open when the file changes. `at` is the time the server noticed
+(ISO 8601, UTC). Consumers should simply fetch `GET /api/roadmap` again; an
+older client that does not listen to `roadmap` is not affected.
+
 Browser usage:
 
 ```js
 const source = new EventSource(`/api/events?since=${state.cursor}`);
 source.addEventListener("approval", (e) => upsertApproval(JSON.parse(e.data)));
 ```
+
+### `GET /api/roadmap`
+
+The roadmap of the home: `<home>/docs/roadmap.json`, validated (the path is a
+constant for now). Unknown extra fields are dropped, and text fields left out
+are returned as empty strings.
+
+```json
+{
+  "updatedAt": "2026-11-02T18:46:00+01:00",
+  "slices": [
+    { "id": 1, "name": "Slice", "status": "en cours", "progress": 60, "criterion": "What proves it", "proved": "", "note": "" }
+  ],
+  "items": [
+    { "slice": 1, "name": "Item", "status": "fait", "owner": "Someone", "date": "2026-11-02", "note": "" }
+  ],
+  "openPoints": [{ "name": "Question", "status": "ouvert", "note": "" }],
+  "events": [{ "at": "2026-11-02T14:27", "text": "What happened" }]
+}
+```
+
+- `status` of a slice or an item: `fait`, `en cours`, `à faire` or `bloqué`.
+- `status` of an open point: `ouvert` or `tranché`.
+- `slices[].progress` is a percentage (0 to 100); `items[].slice` is the `id`
+  of a slice; `proved` and `items[].date` are dates (`YYYY-MM-DD`) or empty;
+  `events[].at` is a local date and time (`2026-11-02T14:27`), not
+  necessarily ordered (the interface shows the newest first).
+
+Errors: `ROADMAP_NOT_FOUND` (404) when the file is missing, is not JSON or
+fails validation (the reason is also logged by the server). The file is watched,
+and every change is announced as a `roadmap` event on `GET /api/events`.
 
 ### `PATCH /api/approvals/[id]`
 
