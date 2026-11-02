@@ -5,9 +5,9 @@ bring you what needs your approval. It runs on your own machine: agents run
 through the official Claude Code binary (`claude -p`), and everything an agent
 wants to publish goes through your approval queue.
 
-**Status: early, pre-alpha, nothing runnable yet.** This repository currently
-holds the project rules and the architecture. The first slice (the core) is
-the next thing to be built.
+**Status: pre-alpha.** The core of the first slice is in place (database, HQ
+MCP server, runner, HTTP API, Telegram notifications); the interface comes
+next.
 
 ## Concepts
 
@@ -61,6 +61,65 @@ macOS and Linux, and it is meant to stay up as a service (pm2) on port 4242.
 
 More in [docs/architecture.md](docs/architecture.md) and
 [CLAUDE.md](CLAUDE.md) (working rules for Claude Code sessions in this repo).
+
+## Getting started
+
+Requirements: Node.js 22 or later, and the Claude Code CLI installed natively
+and signed in (`claude` in your PATH).
+
+```sh
+npm install
+cp .env.example .env.local   # then set MYHQ_HOME and the optional variables
+npm run dev                  # http://127.0.0.1:4242
+npm test                     # Node test runner, no network, no Claude run
+```
+
+Every variable is documented in [.env.example](.env.example). The HTTP API is
+described in [docs/api.md](docs/api.md). The raw output of each run is kept in
+`<home>/data/runs/<run>.jsonl`.
+
+## Running as a service
+
+MyHQ is meant to stay up, not to live in a terminal. It runs under
+[pm2](https://pm2.keymetrics.io/) with [ecosystem.config.cjs](ecosystem.config.cjs)
+(`next start` on 127.0.0.1:4242).
+
+```sh
+npm install -g pm2
+npm run build
+pm2 start ecosystem.config.cjs
+pm2 save                     # remember the process list for resurrect
+```
+
+From then on, closing the terminal does not stop the app. Useful commands:
+`pm2 status`, `pm2 logs myhq`, `pm2 restart myhq`. After pulling new code:
+`npm install`, `npm run build`, then `pm2 restart myhq`.
+
+### Restart at boot on Windows
+
+pm2 has no startup hook on Windows: a scheduled task runs `pm2 resurrect` when
+you log on. In PowerShell, once:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command pm2 resurrect"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+Register-ScheduledTask -TaskName "MyHQ (pm2 resurrect)" -Action $action -Trigger $trigger -Settings $settings -Description "Restarts MyHQ at logon"
+```
+
+The task runs as your user, so agents find your Claude Code login and pm2 its
+saved process list (`%USERPROFILE%\.pm2`). To start before anyone logs on, use
+`New-ScheduledTaskTrigger -AtStartup` instead, and register the task with
+`-User $env:USERNAME -Password <your password>` (run whether the user is logged
+on or not). Test it with `Start-ScheduledTask "MyHQ (pm2 resurrect)"` then
+`pm2 status`; remove it with `Unregister-ScheduledTask "MyHQ (pm2 resurrect)"`.
+
+### Restart at boot on Linux
+
+```sh
+pm2 startup                  # prints a command to run once with sudo
+pm2 save
+```
 
 ## Why not the Agent SDK
 
