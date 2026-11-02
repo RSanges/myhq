@@ -15,7 +15,7 @@ function describeEvent(event: HqEvent): Line {
   const view = viewEvent(event);
   switch (view.kind) {
     case "start":
-      return { label: strings.feed.start(view.model), detail: "", tone: "normal" };
+      return { label: strings.feed.start(view.model, view.reason), detail: "", tone: "normal" };
     case "text":
       return { label: "", detail: view.text, tone: "normal" };
     case "tool_call":

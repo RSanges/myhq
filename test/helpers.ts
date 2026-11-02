@@ -44,6 +44,7 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     timeZone: "Europe/Paris",
     weeklyBudgetUsd: null,
     onboardingMaxBudgetUsd: 0.3,
+    triggerToken: null,
     ...overrides,
   };
 }

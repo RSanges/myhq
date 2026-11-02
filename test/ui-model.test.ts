@@ -204,6 +204,12 @@ test("viewEvent reads each event type and falls back on unexpected data", () => 
   assert.deepEqual(viewEvent(event({ type: "start", data: { model: "sonnet" } })), {
     kind: "start",
     model: "sonnet",
+    reason: null,
+  });
+  assert.deepEqual(viewEvent(event({ type: "start", data: { model: "haiku", reason: "mail" } })), {
+    kind: "start",
+    model: "haiku",
+    reason: "mail",
   });
   assert.deepEqual(viewEvent(event({ type: "tool_call", data: { name: "WebSearch", input: { q: "x" } } })), {
     kind: "tool_call",

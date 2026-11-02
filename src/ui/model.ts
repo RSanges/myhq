@@ -188,7 +188,7 @@ export function buildFeed(events: HqEvent[], messages: Message[], filter: string
 // What an event says, without any wording (the wording lives in strings.ts).
 
 const textData = z.object({ text: z.string() });
-const startData = z.object({ model: z.string().nullable().optional() });
+const startData = z.object({ model: z.string().nullable().optional(), reason: z.string().optional() });
 const toolCallData = z.object({ name: z.string(), input: z.unknown().optional() });
 const toolResultData = z.object({ isError: z.boolean().optional(), content: z.string().optional() });
 const endData = z.object({
@@ -198,7 +198,7 @@ const endData = z.object({
 });
 
 export type EventView =
-  | { kind: "start"; model: string | null }
+  | { kind: "start"; model: string | null; reason: string | null }
   | { kind: "text"; text: string }
   | { kind: "tool_call"; name: string; input: string }
   | { kind: "tool_result"; isError: boolean; content: string }
@@ -219,7 +219,9 @@ export function viewEvent(event: HqEvent): EventView {
   switch (event.type) {
     case "start": {
       const parsed = startData.safeParse(event.data);
-      return parsed.success ? { kind: "start", model: parsed.data.model ?? null } : unknown;
+      return parsed.success
+        ? { kind: "start", model: parsed.data.model ?? null, reason: parsed.data.reason ?? null }
+        : unknown;
     }
     case "text": {
       const parsed = textData.safeParse(event.data);

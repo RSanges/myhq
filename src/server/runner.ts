@@ -11,10 +11,14 @@ import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
+/** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
+export const reasonSchema = z.string().regex(/^[a-z_]{1,40}$/, "lowercase letters and underscores, 40 at most");
+
 export const startRunSchema = z.strictObject({
   room: z.string().min(1),
   agent: z.string().min(1),
   task: z.string().max(20_000).optional(),
+  reason: reasonSchema.optional(),
 });
 export type StartRunRequest = z.infer<typeof startRunSchema>;
 
@@ -146,6 +150,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     room,
     agent,
     task,
+    reason: request.reason ?? null,
     prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox }),
   });
 }
@@ -161,6 +166,8 @@ export function launchRun(params: {
   room: Room;
   agent: Agent;
   task: string;
+  /** Stored on the run (`runs.reason`); null for a run started by hand or a routine. */
+  reason?: string | null;
   prompt: (runId: number, mailbox: TaskRow[]) => string;
 }): RunRow {
   const { config, deps, room, agent, task } = params;
@@ -192,9 +199,9 @@ export function launchRun(params: {
       const runId = Number(
         db
           .prepare(
-            "INSERT INTO runs (room, agent_id, engine, task, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)",
+            "INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason) VALUES (?, ?, ?, ?, 'running', ?, ?)",
           )
-          .run(room.name, agent.id, engine.name, task, at).lastInsertRowid,
+          .run(room.name, agent.id, engine.name, task, at, params.reason ?? null).lastInsertRowid,
       );
       db.prepare(
         `INSERT INTO tasks (room, agent_id, source, text, status, run_id, created_at, updated_at)
@@ -232,7 +239,9 @@ type ExecuteParams = {
 };
 
 function storeEvent(db: Db, run: RunRow, event: RunEvent): void {
-  const { type, ...data } = event;
+  const { type, ...rest } = event;
+  // The start event carries the run's reason, so that the feed can show it.
+  const data = type === "start" && run.reason ? { ...rest, reason: run.reason } : rest;
   db.prepare("INSERT INTO events (run_id, room, agent_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
     run.id,
     run.room,

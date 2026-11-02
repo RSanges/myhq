@@ -25,6 +25,7 @@ const envSchema = z.object({
   HQ_TIMEZONE: z.string().trim().refine(isValidTimeZone, "an IANA time zone such as Europe/Paris").optional(),
   HQ_WEEKLY_BUDGET_USD: z.coerce.number().positive().optional(),
   HQ_ONBOARDING_MAX_BUDGET_USD: z.coerce.number().positive().default(0.5),
+  HQ_TRIGGER_TOKEN: z.string().trim().min(1).optional(),
 });
 
 export type HqConfig = {
@@ -48,6 +49,8 @@ export type HqConfig = {
   weeklyBudgetUsd: number | null;
   /** --max-budget-usd of an onboarding run. */
   onboardingMaxBudgetUsd: number;
+  /** HQ_TRIGGER_TOKEN: required by POST /api/runs for a request that carries a `reason`. Null when not set. */
+  triggerToken: string | null;
 };
 
 function emptyToUndefined(env: Env): Record<string, string | undefined> {
@@ -86,6 +89,7 @@ export function getConfig(env: Env = process.env): HqConfig {
     timeZone: vars.HQ_TIMEZONE ?? systemTimeZone(),
     weeklyBudgetUsd: vars.HQ_WEEKLY_BUDGET_USD ?? null,
     onboardingMaxBudgetUsd: vars.HQ_ONBOARDING_MAX_BUDGET_USD,
+    triggerToken: vars.HQ_TRIGGER_TOKEN ?? null,
   };
 }
 

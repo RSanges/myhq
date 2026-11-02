@@ -20,6 +20,7 @@ export const runSchema = z.object({
   startedAt: z.string(),
   endedAt: z.string().nullable(),
   summary: z.string().nullable(),
+  reason: z.string().nullable().optional(),
 });
 
 export const eventSchema = z.object({

@@ -135,7 +135,8 @@ export const strings = {
     empty: "Rien à signaler pour l'instant.",
     showMore: "Tout afficher",
     showLess: "Réduire",
-    start: (model: string | null) => (model ? `Début du tour (${model})` : "Début du tour"),
+    start: (model: string | null, reason: string | null = null) =>
+      (model ? `Début du tour (${model})` : "Début du tour") + (reason ? `, motif : ${reason}` : ""),
     toolCall: (name: string) => `Outil : ${name}`,
     toolResult: "Résultat d'outil",
     toolResultError: "Résultat d'outil (erreur)",

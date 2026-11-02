@@ -13,6 +13,10 @@ export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export const TASK_STATUSES = ["pending", "in_progress", "done", "blocked"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+/** Where a task comes from: a run's own instruction, a message, a revision, an approved item. */
+export const TASK_SOURCES = ["manual", "message", "revise", "approval"] as const;
+export type TaskSource = (typeof TASK_SOURCES)[number];
+
 export const EVENT_TYPES = ["start", "text", "tool_call", "tool_result", "end"] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -48,6 +52,8 @@ export type RunRow = {
   ended_at: string | null;
   summary: string | null;
   session_id: string | null;
+  /** Why the run was started (`mail`, `approval`, `message`...), null for a run started by hand or a routine. */
+  reason: string | null;
 };
 
 export type EventRow = {
@@ -74,7 +80,7 @@ export type TaskRow = {
   id: number;
   room: string;
   agent_id: string;
-  source: "manual" | "message" | "revise";
+  source: TaskSource;
   ref_id: number | null;
   text: string;
   status: TaskStatus;
@@ -261,6 +267,38 @@ CREATE TABLE IF NOT EXISTS routine_firings (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS routine_firings_agent ON routine_firings (room, agent_id);
+`,
+  },
+  {
+    version: 3,
+    sql: `
+-- Why a run was started (POST /api/runs "reason", or MyHQ's own wake-ups).
+ALTER TABLE runs ADD COLUMN reason TEXT;
+`,
+  },
+  {
+    version: 4,
+    sql: `
+-- Tasks may come from an approved item (agents[].onApproval): SQLite cannot
+-- widen a CHECK constraint, so the table is rebuilt with the same rows.
+CREATE TABLE tasks_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN (${list(TASK_SOURCES)})),
+  ref_id INTEGER,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (${list(TASK_STATUSES)})),
+  note TEXT,
+  run_id INTEGER REFERENCES runs(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO tasks_new (id, room, agent_id, source, ref_id, text, status, note, run_id, created_at, updated_at)
+  SELECT id, room, agent_id, source, ref_id, text, status, note, run_id, created_at, updated_at FROM tasks;
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+CREATE INDEX IF NOT EXISTS tasks_agent ON tasks (room, agent_id, status);
 `,
   },
 ];

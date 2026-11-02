@@ -31,6 +31,8 @@ export type RunDto = {
   startedAt: string;
   endedAt: string | null;
   summary: string | null;
+  /** Why the run was started (POST /api/runs `reason`, `approval`, `message`), null otherwise. */
+  reason: string | null;
 };
 
 export type EventDto = {
@@ -83,6 +85,7 @@ export const toRun = (r: RunRow): RunDto => ({
   startedAt: r.started_at,
   endedAt: r.ended_at,
   summary: r.summary,
+  reason: r.reason ?? null,
 });
 
 export const toEvent = (r: EventRow): EventDto => ({
