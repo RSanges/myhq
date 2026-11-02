@@ -12,6 +12,7 @@ import type {
 } from "./db";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { toPosix, type Home } from "./rooms";
+import { spriteUrl } from "./sprites";
 
 // Shapes returned by the API (documented in docs/api.md).
 
@@ -170,6 +171,8 @@ export type StateDto = {
       model: string;
       role: string;
       allowedTools: string[];
+      /** URL of the character sheet of the room view, or null for the neutral one. */
+      sprite: string | null;
       /** Armed state of the routines (the database value, or room.json's until changed). */
       armed: boolean;
       routines: { cron: string; task: string | null; nextAt: string | null }[];
@@ -211,6 +214,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           model: agent.model,
           role: toPosix(path.relative(home.root, agent.rolePath)),
           allowedTools: agent.allowedTools,
+          sprite: spriteUrl(room.name, agent),
           armed: isArmed(db, room.name, agent),
           routines: agent.routines.map((routine) => ({
             cron: routine.cron,

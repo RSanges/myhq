@@ -37,6 +37,19 @@ const routineSchema = z.strictObject({
   task: z.string().trim().min(1).max(20_000),
 });
 
+/** Extensions of a character sheet (docs/home-layout.md). */
+export const SPRITE_EXTENSIONS = [".png", ".webp"] as const;
+
+/** A path relative to the home, never absolute and never leaving it, ending in .png or .webp. */
+const spriteSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !path.posix.isAbsolute(value) && !path.win32.isAbsolute(value), "must be relative to the home")
+  .refine(
+    (value) => (SPRITE_EXTENSIONS as readonly string[]).includes(path.extname(value).toLowerCase()),
+    "must be a .png or .webp file",
+  );
+
 const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
@@ -59,6 +72,8 @@ const agentSchema = z.strictObject({
   /** Extra directories the agent may read (`--add-dir`), relative to the home. */
   addDirs: z.array(z.string().min(1)).optional(),
   maxBudgetUsd: z.number().positive().optional(),
+  /** Character sheet of the room view, relative to the home (the neutral one when left out). */
+  sprite: spriteSchema.optional(),
 });
 
 export const roomFileSchema = z.strictObject({
@@ -93,6 +108,8 @@ export type Agent = {
   /** Built-in tools that exist for the agent when they differ from its whitelist (MyHQ's own agents only). */
   tools?: string[];
   maxBudgetUsd: number | null;
+  /** Absolute path of the agent's character sheet, always inside the home, or null for the neutral one. */
+  sprite: string | null;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -175,6 +192,11 @@ export function loadRoom(home: string, roomDir: string): Room {
       throw new Error(`${file}: "${agent.id}" works in its worktree: workingDirectory must be left out or equal to it`);
     }
 
+    const sprite = agent.sprite ? path.resolve(home, agent.sprite) : null;
+    if (sprite && !isInside(home, sprite)) {
+      throw new Error(`${file}: sprite of "${agent.id}" must stay inside the home`);
+    }
+
     return {
       id: agent.id,
       name: agent.name,
@@ -194,6 +216,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       disallowedTools: agent.disallowedTools ?? [],
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
+      sprite,
     };
   });
 

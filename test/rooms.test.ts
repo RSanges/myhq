@@ -53,6 +53,21 @@ for (const [label, roomJson, pattern] of [
     { name: "demo", targetRepo: "x", agents: [{ ...agent, worktree: "data/wt/scout", workingDirectory: "data/other" }] },
     /works in its worktree/,
   ],
+  [
+    "a sprite that leaves the home",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, sprite: "../../elsewhere/scout.png" }] },
+    /sprite of "scout" must stay inside the home/,
+  ],
+  [
+    "an absolute sprite path",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, sprite: "/etc/scout.png" }] },
+    /must be relative to the home/,
+  ],
+  [
+    "a sprite that is not a png or a webp",
+    { name: "demo", targetRepo: "x", agents: [{ ...agent, sprite: "rooms/demo/sprites/scout.gif" }] },
+    /must be a \.png or \.webp file/,
+  ],
   ["a duplicate agent id", { name: "demo", targetRepo: "x", agents: [agent, agent] }, /duplicate agent id/],
   [
     "a server named hq",
@@ -117,4 +132,20 @@ test("routines, armed state, worktree, deny list and read directories", () => {
   assert.deepEqual(dev.disallowedTools, ["Bash(git push *)"]);
   assert.deepEqual(writer.routines, []);
   assert.deepEqual(writer.addDirs, [path.resolve(config.home, "../notes")]);
+});
+
+test("an optional sprite is resolved inside the home, and absent by default", () => {
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "x",
+      agents: [{ ...agent, sprite: "rooms/demo/sprites/scout.PNG" }, { ...agent, id: "writer", name: "Writer" }],
+    },
+  );
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  const [scout, writer] = home.rooms[0]!.agents;
+  assert.equal(scout!.sprite, path.join(config.home, "rooms", "demo", "sprites", "scout.PNG"));
+  assert.equal(writer!.sprite, null);
 });

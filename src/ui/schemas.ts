@@ -68,6 +68,9 @@ export const agentSchema = z.object({
   name: z.string(),
   model: z.string(),
   role: z.string(),
+  allowedTools: z.array(z.string()).default([]),
+  /** URL of the agent's character sheet, or null for the neutral one. */
+  sprite: z.string().nullable().default(null),
   armed: z.boolean().default(false),
   routines: z.array(routineSchema).default([]),
   lastRun: runSchema.nullable(),

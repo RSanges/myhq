@@ -28,6 +28,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
 | `PROPOSAL_INVALID` | 422 | Approving a room proposal that fails validation (payload, paths, target repository). Nothing is written; the item stays pending. |
 | `WORKTREE_FAILED` | 422 | Approving a room proposal whose agent worktree cannot be created. Nothing is written; the item stays pending. |
+| `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` for an agent that declares no sprite, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
@@ -186,6 +187,7 @@ restart.
           "model": "sonnet",
           "role": "rooms/demo/roles/scout.md",
           "allowedTools": ["WebSearch", "WebFetch", "mcp__hq__*"],
+          "sprite": null,
           "armed": false,
           "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
           "state": "idle",
@@ -204,6 +206,9 @@ restart.
 ```
 
 - `role` and `targetRepo` are relative to the home.
+- `sprite`: `/api/sprites/<room>/<agent>` when the agent declares a character
+  sheet in `room.json` and the file exists, `null` otherwise (the room view
+  then draws the neutral character shipped with the app).
 - `lastRun` is a Run or `null`.
 - `armed`: whether the agent's routines may start runs (the database value
   once changed, the `armed` of `room.json` until then). `routines`: one entry
@@ -303,6 +308,21 @@ Browser usage:
 const source = new EventSource(`/api/events?since=${state.cursor}`);
 source.addEventListener("approval", (e) => upsertApproval(JSON.parse(e.data)));
 ```
+
+### `GET /api/sprites/[room]/[agent]`
+
+The character sheet of an agent for the room view (`/room`): a PNG or WebP
+image (see `home-layout.md` for the grid). The file is the one declared in the
+agent's `sprite` field of the validated `room.json`: the path is never read
+from the URL, must stay inside the home (symbolic links are resolved), must end
+in `.png` or `.webp`, must not exceed 2 MiB and must really start like a PNG
+or a WebP. `ETag` follows the modification time and `Cache-Control: no-cache`
+makes the browser revalidate, so a redrawn sheet shows up at the next load
+(`304` when it did not change).
+
+Errors: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `SPRITE_NOT_FOUND`
+(no sprite declared, file missing, too large or not an image). The room view
+treats any error as "use the neutral character".
 
 ### `GET /api/roadmap`
 

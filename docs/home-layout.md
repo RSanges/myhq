@@ -51,7 +51,8 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
       "workingDirectory": "data/work/example/scout",
       "cron": "0 7 * * 1-5",
       "armed": true,
-      "maxBudgetUsd": 2
+      "maxBudgetUsd": 2,
+      "sprite": "rooms/example/sprites/scout.png"
     },
     {
       "id": "analyst",
@@ -97,6 +98,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. |
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
+| `agents[].sprite` | no | Character sheet of the room view (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing, the neutral character shipped with MyHQ is drawn, tinted per agent. |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
 `8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
@@ -106,6 +108,28 @@ not fire.
 
 MyHQ validates the file with zod at startup and refuses to start a room whose
 file is invalid, with an explicit error.
+
+#### Character sheets
+
+The room view draws each agent as a small character. MyHQ ships one neutral
+silhouette (`public/sprites/neutral.png`, tinted per agent from a fixed
+palette); a home can give an agent its own with `sprite`. The sheet is served
+by `GET /api/sprites/<room>/<agent>`, from the path in the validated
+`room.json` only.
+
+- A transparent PNG (or WebP) of **4 columns by 4 rows of square cells**. The
+  cell size is the width divided by 4, for example 128 px cells (512 by 512
+  image) displayed at 64 px, which stays sharp on dense screens. The height
+  must equal the width.
+- Rows, top to bottom: **sit and type** (2 frames), **walk** (4 frames),
+  **think** (2 frames), **sleep** (2 frames). Unused cells stay empty.
+- The character **faces right** (walking left is drawn by mirroring). The feet
+  are at the **horizontal center of the bottom of the cell**; a seated
+  character is drawn as if the desk hid its legs.
+- Row 1, first frame, doubles as the standing pose (talking to a colleague,
+  dropping a folder).
+- A custom sheet is drawn as is. Only the neutral sheet is tinted.
+- The file must stay under 2 MiB. Textures are drawn without smoothing.
 
 #### Environment placeholders in `mcpServers`
 

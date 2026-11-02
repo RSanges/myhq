@@ -106,6 +106,7 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
     worktree: null,
     disallowedTools: [],
     maxBudgetUsd: config.onboardingMaxBudgetUsd,
+    sprite: null,
   };
 }
 
