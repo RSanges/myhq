@@ -254,6 +254,36 @@ export const strings = {
         "Les routines restent éteintes tant que HQ_SCHEDULER n'est pas à on dans .env.local.",
       ].join("\n"),
   },
+  /** `npx tsx scripts/replay-fixture.ts` (scripts/replay-fixture.ts), in the terminal. */
+  replay: {
+    usage: [
+      "Usage : npx tsx scripts/replay-fixture.ts <fixture.jsonl> [options]",
+      "  --home <dossier>    home jetable (par défaut : <tmp>/myhq-replay-home)",
+      "  --agent <id>        agent qui joue le tour (par défaut : scout)",
+      "  --interval <ms>     délai entre deux événements (par défaut : 1000)",
+      "  --delay <s>         attente avant le premier événement (par défaut : 8)",
+      "Les fixtures sont dans test/fixtures/*.jsonl.",
+    ].join("\n"),
+    notAReplayHome: (dir: string) =>
+      `Ce dossier n'est pas un home de démonstration créé par ce script : je ne l'utilise pas (${dir}). Prends un dossier vide ou inexistant.`,
+    fixtureMissing: (file: string) => `Fixture introuvable : ${file}`,
+    fixtureEmpty: (file: string) => `Aucun événement lisible dans ${file}.`,
+    unknownAgent: (agent: string, known: string) => `Agent inconnu : ${agent}. Agents de la salle : ${known}.`,
+    ready: (p: { home: string; room: string; agents: string; delay: number; events: number }) =>
+      [
+        `Home de démonstration : ${p.home} (salle ${p.room} : ${p.agents})`,
+        "Dans un autre terminal, lance l'app dessus (jamais sur ton vrai home) :",
+        `  MYHQ_HOME="${p.home}" HQ_TELEGRAM_POLLING=false npm run dev -- -p 4343`,
+        "Ouvre http://127.0.0.1:4343/room, puis laisse tourner.",
+        `${p.events} événements à rejouer, début dans ${p.delay} s...`,
+      ].join("\n"),
+    started: (runId: number, agent: string) => `Tour #${runId} démarré (${agent}).`,
+    event: (index: number, total: number, type: string, detail: string) =>
+      `  ${index}/${total} ${type}${detail ? ` ${detail}` : ""}`,
+    approval: (id: number) => `  item #${id} déposé dans la file`,
+    message: (to: string) => `  message envoyé à ${to}`,
+    finished: (runId: number, status: string) => `Tour #${runId} terminé : ${status}.`,
+  },
   errors: {
     generic: "Une erreur est survenue.",
     network: "Le serveur est injoignable.",

@@ -112,6 +112,30 @@ agent (the switch on its card, or `/arm <room>/<agent>`). The HTTP API is
 described in [docs/api.md](docs/api.md). The raw output of each run is kept in
 `<home>/data/runs/<run>.jsonl`.
 
+## Trying the room without a real run
+
+`/room` animates the agents from the real event stream. To see it move without
+spending a run, `scripts/replay-fixture.ts` plays a recorded run (the files of
+`test/fixtures/*.jsonl`) into a **throwaway** home, one event per second, and
+a MyHQ pointed at that home streams it like a real one:
+
+```sh
+# terminal 1: prepares <tmp>/myhq-replay-home (a neutral room of three agents) and waits 8 seconds
+npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl
+
+# terminal 2: an app on another port, on that home, never on your real one
+MYHQ_HOME=<the folder the script printed> HQ_TELEGRAM_POLLING=false npm run dev -- -p 4343
+# then open http://127.0.0.1:4343/room before the wait is over
+```
+
+The onboarding fixture has reads and an `hq_submit` (the agent walks to your
+desk and drops a folder in the tray), `stream-json-message.synthetic.jsonl`
+an `hq_message` (a walk to a colleague's table, a synthetic file, see its first
+line), `stream-json-auth-error.jsonl` a failed run (a question mark). Options:
+`--agent <id>` (scout, writer or analyst), `--interval <ms>`, `--delay <s>`,
+`--home <dir>`. The script refuses a folder it did not create, so it never
+writes into your real home, and it never starts `claude`.
+
 ## Running as a service
 
 MyHQ is meant to stay up, not to live in a terminal. It runs under
