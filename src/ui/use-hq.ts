@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { errorText, fetchRoutines, fetchState, fetchUsage } from "./api";
 import { initialModel, reducer, type Action, type Model } from "./model";
 import { approvalSchema, eventSchema, messageSchema, readySchema, runSchema } from "./schemas";
+import type { HqChange } from "./room-store";
 
 export type Connection = "connecting" | "live" | "reconnecting";
 
@@ -26,13 +27,20 @@ export type Hq = {
  * cursor. Reconnection is handled here (rather than by EventSource itself) so
  * that it resumes from the last id received: the server gives `since` priority
  * over Last-Event-ID, and the URL of an automatic retry would never change.
+ *
+ * `onChange`, when given, also receives every entity as it arrives (the room
+ * view feeds its animation model with it, outside React's rendering).
  */
-export function useHq(): Hq {
+export function useHq(onChange?: (change: HqChange) => void): Hq {
   const [model, dispatch] = useReducer(reducer, initialModel);
   const [connection, setConnection] = useState<Connection>("connecting");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [usageFailed, setUsageFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const listener = useRef(onChange);
+  useEffect(() => {
+    listener.current = onChange;
+  });
 
   useEffect(() => {
     let closed = false;
@@ -85,15 +93,24 @@ export function useHq(): Hq {
       follow("run", (data) => {
         const run = runSchema.parse(data);
         dispatch({ type: "run", run });
+        listener.current?.({ kind: "run", run });
         clearTimeout(usageTimer);
         usageTimer = setTimeout(() => {
           void refreshUsage();
           void refreshRoutines();
         }, USAGE_DEBOUNCE_MS);
       });
-      follow("event", (data) => dispatch({ type: "event", event: eventSchema.parse(data) }));
+      follow("event", (data) => {
+        const event = eventSchema.parse(data);
+        dispatch({ type: "event", event });
+        listener.current?.({ kind: "event", event });
+      });
       follow("message", (data) => dispatch({ type: "message", message: messageSchema.parse(data) }));
-      follow("approval", (data) => dispatch({ type: "approval", approval: approvalSchema.parse(data) }));
+      follow("approval", (data) => {
+        const approval = approvalSchema.parse(data);
+        dispatch({ type: "approval", approval });
+        listener.current?.({ kind: "approval", approval });
+      });
 
       stream.onopen = () => setConnection("live");
       stream.onerror = () => {
@@ -111,6 +128,7 @@ export function useHq(): Hq {
         setLoadError(null);
         cursor = state.cursor;
         dispatch({ type: "state", state });
+        listener.current?.({ kind: "state", state });
         connect();
       } catch (error) {
         if (!closed) setLoadError(errorText(error));

@@ -43,7 +43,7 @@ function describeMessage(message: Message): Line {
   return { label: strings.feed.message(message.from, message.to), detail: message.text, tone: "message" };
 }
 
-function FeedRow({ entry }: { entry: FeedEntry }) {
+export function FeedRow({ entry }: { entry: FeedEntry }) {
   const [expanded, setExpanded] = useState(false);
   const line = entry.kind === "event" ? describeEvent(entry.event) : describeMessage(entry.message);
   const who = entry.kind === "event" ? entry.event.agentId : entry.message.from;

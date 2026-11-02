@@ -31,6 +31,12 @@ export function Dashboard() {
         <h1 className="text-xl font-semibold">{strings.app.title}</h1>
         <div className="flex items-center gap-4">
           <Link
+            href="/room"
+            className="text-sm text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            {strings.app.roomLink}
+          </Link>
+          <Link
             href="/roadmap"
             className="text-sm text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >

@@ -10,7 +10,7 @@ export const MAX_COLUMNS = 3;
 export const CELL_W = 192;
 export const CELL_H = 136;
 /** Height of the band above the first row: the whiteboard and the user's desk. */
-export const TOP_H = 148;
+export const TOP_H = 156;
 /** Height of the band under the last row: the coffee corner. */
 export const BOTTOM_H = 64;
 export const WORLD_W = MAX_COLUMNS * CELL_W;
@@ -64,20 +64,20 @@ export function layoutRoom(keys: string[]): RoomLayout {
     const cx = ox + CELL_W / 2;
     return {
       key,
-      desk: { x: cx - 50, y: oy + 68, w: 100, h: 38 },
-      chair: { x: cx, y: oy + 80 },
+      desk: { x: cx - 50, y: oy + 80, w: 100, h: 36 },
+      chair: { x: cx, y: oy + 82 },
       seat: { x: cx, y: oy + 92 },
-      label: { x: cx, y: oy + 112 },
-      standLeft: { x: cx - VISIT_OFFSET, y: oy + 100 },
-      standRight: { x: cx + VISIT_OFFSET, y: oy + 100 },
+      label: { x: cx, y: oy + 119 },
+      standLeft: { x: cx - VISIT_OFFSET, y: oy + 106 },
+      standRight: { x: cx + VISIT_OFFSET, y: oy + 106 },
     };
   });
-  const userDesk: Rect = { x: WORLD_W - 200, y: 42, w: 168, h: 44 };
+  const userDesk: Rect = { x: WORLD_W - 200, y: 46, w: 168, h: 44 };
   return {
     width: WORLD_W,
     height,
     desks,
-    board: { x: 16, y: 12, w: 340, h: 108 },
+    board: { x: 16, y: 10, w: 340, h: 104 },
     userDesk,
     userChair: { x: userDesk.x + userDesk.w - 40, y: userDesk.y - 10 },
     tray: { x: userDesk.x + 10, y: userDesk.y + 6, w: 44, h: 30 },

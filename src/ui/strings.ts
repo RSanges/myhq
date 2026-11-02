@@ -17,6 +17,7 @@ export const strings = {
     },
     invalidRoomsTitle: "Salles invalides",
     roadmapLink: "Feuille de route",
+    roomLink: "La pièce",
   },
   desk: {
     title: "Le bureau",
@@ -254,6 +255,81 @@ export const strings = {
         "Les routines restent éteintes tant que HQ_SCHEDULER n'est pas à on dans .env.local.",
       ].join("\n"),
   },
+  /** The room view (/room): the animated office, its whiteboard and the sheet of an agent. */
+  room: {
+    title: "La pièce",
+    pageTitle: "La pièce | MyHQ",
+    back: "Retour au bureau",
+    roomsLabel: "Salles",
+    noAgents: "Aucun agent dans cette salle. Ajoutez-en une depuis le bureau.",
+    listTitle: "Les agents",
+    openCard: (name: string) => `Ouvrir la fiche de ${name}`,
+    openShort: "Fiche",
+    status: {
+      asleep: "dort",
+      seated: "à sa table",
+      typing: "tape",
+      thinking: "réfléchit",
+      visiting: (target: string) => `va voir ${target}`,
+      talking: (target: string) => `parle à ${target}`,
+      carrying: "apporte un item",
+      dropping: "dépose un item",
+      returning: "revient à sa table",
+      failed: "tour échoué",
+      blocked: "bloqué, attend une réponse",
+    },
+    /** Said by the screen reader when the coarse state of an agent changes. */
+    announce: {
+      asleep: (name: string) => `${name} dort.`,
+      working: (name: string) => `${name} est au travail.`,
+      visiting: (name: string, target: string) => `${name} va voir ${target}.`,
+      carrying: (name: string) => `${name} apporte un item à valider.`,
+      stuck: (name: string) => `${name} est bloqué.`,
+    },
+    userDesk: "Votre bureau",
+    tray: "À valider",
+    trayCount: (count: number) =>
+      count === 0 ? "Rien à valider" : count === 1 ? "1 item à valider" : `${count} items à valider`,
+    board: {
+      title: "Tableau blanc",
+      runs: "Tours du jour",
+      runsValue: (runs: number, max: number) => `${runs} sur ${max}`,
+      cost: "Coût du jour",
+      week: "Coût de la semaine",
+      budget: "Budget de la semaine",
+      routines: "Routines",
+      routinesValue: (armed: number, total: number) =>
+        total === 0 ? "aucune" : `${armed} armée${armed > 1 ? "s" : ""} sur ${total}`,
+      next: "Prochain",
+      nextOff: "planificateur éteint",
+      nextNone: "aucun",
+      nextValue: (agent: string, date: string) => `${agent}, ${date}`,
+      last: "Dernier",
+      lastNone: "aucun",
+      lastValue: (agent: string, date: string, outcome: string) => `${agent}, ${date} (${outcome})`,
+      unknown: "...",
+    },
+    band: {
+      title: "En un coup d'œil",
+      show: "Voir la pièce",
+      hide: "Masquer la pièce",
+    },
+    rendering: {
+      loading: "Chargement de la pièce...",
+      failed: "Le dessin de la pièce n'a pas pu démarrer sur ce navigateur. La liste des agents reste complète.",
+    },
+    sheet: {
+      label: (name: string) => `Fiche de ${name}`,
+      close: "Fermer la fiche",
+      tools: "Outils",
+      noTools: "Aucun outil autorisé.",
+      recentRuns: "Tours récents",
+      noRuns: "Aucun tour récent dans le fil.",
+      run: (p: { id: number; status: string; date: string }) => `Tour #${p.id} : ${p.status}, ${p.date}`,
+      runCost: (cost: string) => `Coût ${cost}`,
+      events: (count: number) => (count === 1 ? "1 événement" : `${count} événements`),
+    },
+  },
   /** `npx tsx scripts/replay-fixture.ts` (scripts/replay-fixture.ts), in the terminal. */
   replay: {
     usage: [
@@ -273,7 +349,7 @@ export const strings = {
       [
         `Home de démonstration : ${p.home} (salle ${p.room} : ${p.agents})`,
         "Dans un autre terminal, lance l'app dessus (jamais sur ton vrai home) :",
-        `  MYHQ_HOME="${p.home}" HQ_TELEGRAM_POLLING=false npm run dev -- -p 4343`,
+        `  MYHQ_HOME="${p.home}" HQ_TELEGRAM_POLLING=false HQ_TELEGRAM_BOT_TOKEN= HQ_TELEGRAM_CHAT_ID= npm run dev -- -p 4343`,
         "Ouvre http://127.0.0.1:4343/room, puis laisse tourner.",
         `${p.events} événements à rejouer, début dans ${p.delay} s...`,
       ].join("\n"),

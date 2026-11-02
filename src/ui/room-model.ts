@@ -437,7 +437,7 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
     const p = elapsed < middle ? from : to;
     return { x: p.x, y: p.y, facing: facing, alpha };
   };
-  const dropped = t - trip.legMs >= FOLDER_DROP_MS;
+  const dropped = at >= tripDropAt(trip);
   if (t < trip.legMs) {
     return { ...leg(t / trip.legMs, trip.from, trip.to, arrival), stage: "out", carrying: trip.kind === "submit" };
   }

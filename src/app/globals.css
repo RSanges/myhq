@@ -105,6 +105,15 @@ body {
   --owner-s: 38%;
   --owner-l: 84%;
   --owner-fg-l: 24%;
+  /* The room (/room): a light, neutral floor (never pink), wood and a dark appliance grey. */
+  --room-floor: #e7eae6;
+  --room-floor-line: #d3d9d3;
+  --room-wall: #d8dfda;
+  --room-wall-edge: #b3bfb8;
+  --room-wood: #dcc9a6;
+  --room-wood-edge: #a68d66;
+  --room-paper: #f4e9c3;
+  --room-appliance: #3c4844;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-wall-body), system-ui, sans-serif;
@@ -142,6 +151,14 @@ body {
     --owner-s: 30%;
     --owner-l: 24%;
     --owner-fg-l: 82%;
+    --room-floor: #17211e;
+    --room-floor-line: #22302b;
+    --room-wall: #1e2a26;
+    --room-wall-edge: #364640;
+    --room-wood: #66563b;
+    --room-wood-edge: #8f7a52;
+    --room-paper: #cdc39d;
+    --room-appliance: #080c0b;
   }
 }
 
@@ -1288,5 +1305,203 @@ body {
   .wall-step-card:hover,
   .wall-note:hover {
     translate: none;
+  }
+}
+
+/* ---- The room: /room ----------------------------------------------------- */
+
+.room-body {
+  gap: 1.5rem;
+}
+
+.room-canvas {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--room-floor);
+  box-shadow: var(--lift);
+}
+
+/* The compact band of a phone: the whiteboard figures, the tray, the button that shows the room. */
+.room-band {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--card);
+}
+
+.room-band-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.3rem;
+  width: 100%;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.room-band-board div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.room-band-board dt {
+  color: var(--muted);
+}
+
+.room-band-board dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.room-band-tray {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.room-band-count {
+  color: var(--accent);
+  font-family: var(--font-wall-display), var(--font-wall-body), system-ui, sans-serif;
+  font-size: 1.75rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-agents {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 40rem) {
+  .room-agents {
+    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  }
+}
+
+.room-agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name open"
+    "status open";
+  align-items: center;
+  gap: 0.1rem 0.75rem;
+  padding: 0.6rem 0.6rem 0.6rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--card);
+}
+
+.room-agent-name {
+  grid-area: name;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.room-agent-status {
+  grid-area: status;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.room-agent[data-state="failed"] .room-agent-status,
+.room-agent[data-state="blocked"] .room-agent-status {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.room-agent-open {
+  display: inline-flex;
+  grid-area: open;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 2.75rem;
+  padding: 0 0.75rem 0 1rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.room-agent-open:hover {
+  border-color: var(--muted);
+}
+
+.room-agent-open[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.room-agent-open svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The sheet of an agent: a side panel on a wide screen, the whole screen on a phone. */
+.room-sheet {
+  position: fixed;
+  inset-block: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(28rem, 100vw);
+  border-left: 1px solid var(--line);
+  background: var(--background);
+  box-shadow: -14px 0 32px -18px rgb(0 0 0 / 0.45);
+  animation: room-sheet-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (max-width: 39.99rem) {
+  .room-sheet {
+    inset: 0;
+    width: auto;
+    border-left: 0;
+  }
+}
+
+.room-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--hero);
+}
+
+.room-sheet-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+@keyframes room-sheet-in {
+  from {
+    opacity: 0;
+    translate: 1.5rem 0;
   }
 }

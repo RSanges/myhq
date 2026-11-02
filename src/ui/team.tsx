@@ -140,7 +140,17 @@ function Routines({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Ac
   );
 }
 
-function AgentCard({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
+/** One agent: its state, its routines and the last run, with the button that starts a run. */
+export function AgentCard({
+  agent,
+  dispatch,
+  showTools = false,
+}: {
+  agent: TeamAgent;
+  dispatch: (action: Action) => void;
+  /** Also list the tools the agent may use (the room view shows them). */
+  showTools?: boolean;
+}) {
   const [task, setTask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +188,22 @@ function AgentCard({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: A
         <dd className="break-all font-mono text-xs leading-5">{roleFileName(agent.role)}</dd>
         <dt className="text-muted">{strings.team.model}</dt>
         <dd>{agent.model}</dd>
+        {showTools && (
+          <>
+            <dt className="text-muted">{strings.room.sheet.tools}</dt>
+            <dd className="flex flex-wrap gap-1">
+              {agent.allowedTools.length === 0 ? (
+                <span className="text-muted">{strings.room.sheet.noTools}</span>
+              ) : (
+                agent.allowedTools.map((tool) => (
+                  <code key={tool} className="rounded bg-soft px-1.5 py-0.5 font-mono text-xs break-all">
+                    {tool}
+                  </code>
+                ))
+              )}
+            </dd>
+          </>
+        )}
       </dl>
 
       {agent.routines.length > 0 && <Routines agent={agent} dispatch={dispatch} />}
