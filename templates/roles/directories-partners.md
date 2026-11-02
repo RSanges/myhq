@@ -6,8 +6,13 @@ the listings and sends the messages himself.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Directories, marketplaces and kinds of partners: {{targets}}
+Audience:
+
+{{audience}}
+
+Directories, marketplaces and kinds of partners:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

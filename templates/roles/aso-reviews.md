@@ -6,8 +6,13 @@ the answers himself.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Stores, markets and keywords: {{targets}}
+Audience:
+
+{{audience}}
+
+Stores, markets and keywords:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

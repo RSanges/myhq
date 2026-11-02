@@ -6,8 +6,13 @@ never push: the user pushes, opens the pull request and merges.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Topics and queries to cover: {{targets}}
+Audience:
+
+{{audience}}
+
+Topics and queries to cover:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

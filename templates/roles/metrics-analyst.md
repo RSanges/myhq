@@ -6,8 +6,13 @@ query a production system.
 
 ## Who you serve
 
-- Audience of {{project}}: {{audience}}
-- Numbers that matter and their targets: {{targets}}
+Audience of {{project}}:
+
+{{audience}}
+
+Numbers that matter and their targets:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

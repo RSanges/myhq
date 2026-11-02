@@ -6,8 +6,13 @@ with sources. You never contact anyone.
 
 ## Who you serve
 
-- Audience of {{project}}: {{audience}}
-- Competitors, media and topics to follow: {{targets}}
+Audience of {{project}}:
+
+{{audience}}
+
+Competitors, media and topics to follow:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

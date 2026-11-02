@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { isInside, type HqConfig } from "./config";
+import { replaceDashes } from "./dashes";
 import type { Db } from "./db";
 import { HqError } from "./errors";
 import { idSchema, loadHome, loadRoom, roomFileSchema, syncHome, type Room, type RoomFile } from "./rooms";
@@ -89,18 +90,19 @@ export function normalizeRoomProposal(
       throw new Error(`invalid room_proposal payload: roles.${id}: ${(error as Error).message}`);
     }
     if (role.notes) text = `${text.trimEnd()}\n\n## Project notes\n\n${role.notes}\n`;
-    content[id] = { template: role.template, content: text };
+    content[id] = { template: role.template, content: replaceDashes(text) };
   }
 
-  const normalized: RoomProposal = { room: file.data, roles: content, claudeMd };
+  // MyHQ never writes em or en dashes, in the home either.
+  const normalized: RoomProposal = { room: file.data, roles: content, claudeMd: replaceDashes(claudeMd) };
   const sections = [
-    body.trim(),
+    replaceDashes(body.trim()),
     "## room.json",
     fenced("json", JSON.stringify(normalized.room, null, 2)),
     "## Roles",
     ...ids.flatMap((id) => [`### ${id} (${content[id]!.template})`, fenced("markdown", content[id]!.content.trim())]),
     "## CLAUDE.md block",
-    fenced("markdown", claudeMd),
+    fenced("markdown", normalized.claudeMd),
   ];
   return { payload: normalized, body: sections.join("\n\n") };
 }

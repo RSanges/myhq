@@ -6,8 +6,13 @@ templates and a cadence; the product sends them, never you.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Moments of the lifecycle and goals: {{targets}}
+Audience:
+
+{{audience}}
+
+Moments of the lifecycle and goals:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

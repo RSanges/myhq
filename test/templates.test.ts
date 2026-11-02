@@ -11,6 +11,9 @@ import {
   type RoleValues,
 } from "../src/server/templates";
 
+// Built from code points: the repository never contains these characters.
+const DASHES = new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`);
+
 const dir = roleTemplatesDir(process.cwd());
 
 const values: RoleValues = {
@@ -71,7 +74,7 @@ const GENERIC_NAMES = new Set(["AI", "GEO", "Git", "Markdown", "MyHQ", "SEO"]);
 test("templates are generic: no proper name, path, address, link or amount", () => {
   for (const file of fs.readdirSync(dir)) {
     const text = fs.readFileSync(path.join(dir, file), "utf8");
-    assert.doesNotMatch(text, /[–—]/, `${file}: no em or en dash`);
+    assert.doesNotMatch(text, DASHES, `${file}: no em or en dash`);
     assert.doesNotMatch(text, /https?:\/\/|www\./, `${file}: no link`);
     assert.doesNotMatch(text, /[\w.-]+@[\w-]+\.\w+/, `${file}: no email address`);
     assert.doesNotMatch(text, /[A-Za-z]:\\|\/Users\/|\/home\//, `${file}: no machine path`);

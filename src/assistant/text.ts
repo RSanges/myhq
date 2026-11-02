@@ -1,9 +1,7 @@
+import { replaceDashes } from "../server/dashes";
+
 /** Telegram refuses messages over 4096 characters; replies are cut at 4000. */
 export const MESSAGE_LIMIT = 4000;
-
-// Built from code points: the repository itself never contains these characters.
-const EM_DASH = String.fromCharCode(0x2014);
-const EN_DASH = String.fromCharCode(0x2013);
 
 /**
  * Turns a Markdown answer into plain text for Telegram (messages are sent
@@ -11,19 +9,7 @@ const EN_DASH = String.fromCharCode(0x2013);
  * become `-`, and em or en dashes become commas or hyphens.
  */
 export function stripMarkdown(text: string): string {
-  let out = text.replace(/\*\*/g, "").replace(/__/g, "");
-  for (const dash of [EM_DASH, EN_DASH]) {
-    out = out
-      .split(` ${dash} `)
-      .join(", ")
-      .split(`${dash} `)
-      .join(", ")
-      .split(` ${dash}`)
-      .join(",")
-      .split(dash)
-      .join("-");
-  }
-  out = out
+  const out = replaceDashes(text.replace(/\*\*/g, "").replace(/__/g, ""))
     .split("\n")
     .map((line) => line.replace(/^#{1,6}\s+/, "").replace(/^(\s*)\*\s+/, "$1- "))
     .join("\n");

@@ -4,14 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { hqSubmit, ToolError } from "../src/mcp/tools";
+import { parseStreamLine } from "../src/server/claude-engine";
 import { decideApproval } from "../src/server/approvals";
 import { getDbAt, type ApprovalRow, type Db } from "../src/server/db";
-import type { Engine, RunInput } from "../src/server/engine";
+import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
 import { ONBOARDING_AGENT, ONBOARDING_ROOM, startOnboarding, suggestRoomName } from "../src/server/onboarding";
+import { normalizeRoomProposal } from "../src/server/proposal";
 import { loadHome } from "../src/server/rooms";
 import { roleTemplatesDir } from "../src/server/templates";
 import { makeHome, makeRepo, waitForRun } from "./helpers";
+
+// Built from code points: the repository never contains these characters.
+const DASHES = new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`);
 
 const templatesDir = roleTemplatesDir(process.cwd());
 
@@ -202,4 +207,46 @@ test("onboarding refuses a path that is not a directory, and suggests room names
   );
   assert.equal(suggestRoomName("My Café App"), "my-cafe-app");
   assert.equal(suggestRoomName("..."), "project");
+});
+
+// Real output of one onboarding run (CLI 2.1.183, haiku, --max-budget-usd
+// 0.3, 2026-11-02) on a small scratch repository: it read the README, the
+// manifest and the docs with Read and Glob, submitted a room proposal once
+// through hq_submit and closed its task. Machine paths replaced, the
+// thinking_tokens messages reduced to one, dashes written as JSON escapes.
+test("a real onboarding stream: read-only tools, one submission, and a payload MyHQ accepts", () => {
+  const events = fs
+    .readFileSync(path.join(import.meta.dirname, "fixtures", "stream-json-onboarding.jsonl"), "utf8")
+    .split("\n")
+    .flatMap(parseStreamLine);
+  const start = events[0] as Extract<RunEvent, { type: "start" }>;
+  assert.equal(start.type, "start");
+  assert.deepEqual(start.mcpServers, [{ name: "hq", status: "connected" }]);
+  assert.deepEqual(
+    start.tools.filter((t) => !t.startsWith("mcp__")),
+    ["Glob", "Grep", "Read"],
+  );
+  const calls = events.filter((e): e is Extract<RunEvent, { type: "tool_call" }> => e.type === "tool_call");
+  assert.ok(calls.every((c) => ["Read", "Glob", "Grep", "mcp__hq__hq_submit", "mcp__hq__hq_task_update"].includes(c.name)));
+  const results = events.filter((e): e is Extract<RunEvent, { type: "tool_result" }> => e.type === "tool_result");
+  assert.ok(results.every((r) => !r.isError), "no tool call was refused");
+  const submits = calls.filter((c) => c.name === "mcp__hq__hq_submit");
+  assert.equal(submits.length, 1);
+  const end = events[events.length - 1] as Extract<RunEvent, { type: "end" }>;
+  assert.equal(end.status, "done");
+  assert.ok(end.costUsd > 0 && end.costUsd < 0.3);
+
+  const input = submits[0]!.input as { type: string; body: string; payload: unknown };
+  assert.equal(input.type, "room_proposal");
+  const { payload, body } = normalizeRoomProposal(input.payload, input.body, templatesDir);
+  assert.equal(payload.room.name, "tinylog");
+  assert.equal(payload.room.targetRepo, "../tinylog");
+  const dev = payload.room.agents.find((a) => a.id === "dev")!;
+  assert.equal(dev.worktree, "data/worktrees/tinylog/dev");
+  assert.equal(dev.armed, false);
+  assert.ok(dev.disallowedTools?.includes("Bash(git push *)"));
+  assert.match(payload.claudeMd, /^## HQ agents/);
+  const written = [body, payload.claudeMd, ...Object.values(payload.roles).map((r) => r.content)].join("\n");
+  assert.doesNotMatch(written, DASHES, "no em or en dash reaches the home");
+  assert.doesNotMatch(written, /\{\{\w+\}\}/);
 });

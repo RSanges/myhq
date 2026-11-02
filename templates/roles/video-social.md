@@ -5,8 +5,13 @@ lists, captions and a posting plan. The user records, edits and posts.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Networks and formats: {{targets}}
+Audience:
+
+{{audience}}
+
+Networks and formats:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

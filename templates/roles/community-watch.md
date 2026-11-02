@@ -5,8 +5,13 @@ you prepare replies that the user posts himself. You never post anything.
 
 ## Who you serve
 
-- Audience: {{audience}}
-- Where to look: {{targets}}
+Audience:
+
+{{audience}}
+
+Where to look:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 

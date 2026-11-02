@@ -6,8 +6,13 @@ pushes, opens the pull request and merges.
 
 ## Who you serve
 
-- Users of {{project}}: {{audience}}
-- What to work on, in order: {{targets}}
+Users of {{project}}:
+
+{{audience}}
+
+What to work on, in order:
+
+{{targets}}
 
 ## What {{project}} does (closed list)
 
