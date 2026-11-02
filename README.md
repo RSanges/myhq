@@ -11,7 +11,9 @@ and usage meter), the assistant on Telegram of the second slice (commands,
 approval buttons, conversation, voice notes, files, extensions from the home),
 and the third slice on the MyHQ side: routines with an armed state and a
 journal, generic role templates, `npm run init`, onboarding a project through
-the approval queue, and a daily export.
+the approval queue, and a daily export. The fourth slice adds the animated
+room (`/room`): a top-down office where agents type, think, walk to a
+colleague or to your desk as their runs happen.
 
 ## Concepts
 
@@ -84,7 +86,8 @@ have one reader: switch off any other program that reads the same bot first.
 ## Stack
 
 Next.js 16, TypeScript (strict), Tailwind, SQLite via `better-sqlite3`, zod, the
-official MCP SDK. No ORM and no UI library. It must run unchanged on Windows,
+official MCP SDK, and PixiJS for the room view (loaded on `/room` only). No ORM
+and no UI library. It must run unchanged on Windows,
 macOS and Linux, and it is meant to stay up as a service (pm2) on port 4242.
 
 More in [docs/architecture.md](docs/architecture.md) and
@@ -124,7 +127,7 @@ a MyHQ pointed at that home streams it like a real one:
 npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl
 
 # terminal 2: an app on another port, on that home, never on your real one
-MYHQ_HOME=<the folder the script printed> HQ_TELEGRAM_POLLING=false npm run dev -- -p 4343
+MYHQ_HOME=<the folder the script printed> HQ_TELEGRAM_POLLING=false HQ_TELEGRAM_BOT_TOKEN= HQ_TELEGRAM_CHAT_ID= npm run dev -- -p 4343
 # then open http://127.0.0.1:4343/room before the wait is over
 ```
 

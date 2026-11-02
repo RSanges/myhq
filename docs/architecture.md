@@ -225,9 +225,10 @@ through the approval queue.
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`) and a `summary`.
 - **Real time**: Server-Sent Events from the app to the browser.
-- **The room view** (slice 4): a 2D canvas (PixiJS) with sprite sheets and a
-  few animations per character (typing, walking, thinking, sleeping), driven by
-  the real events of the stream-json output.
+- **The room view** (slice 4): a 2D canvas (PixiJS, the one runtime dependency
+  added for it, pinned to an exact version and loaded only on `/room`) with
+  sprite sheets and a few animations per character (typing, walking, thinking,
+  sleeping), driven by the real events of the stream-json output. See section 7.
 - **Rooms and roles**: `room.json` and `roles/*.md` in the home directory,
   loaded and validated at startup (see `home-layout.md`).
 - **The assistant on Telegram**: the Bot API through `fetch`, with the token and
@@ -338,6 +339,9 @@ described, and no mechanism is built before its first real use.
    state of the routines and the user's key numbers. Acceptance: one can see an
    agent typing during its run, then walking to the user's desk to drop off a
    submission.
+   Status: built (section 7) and covered by tests that replay the fixtures on a
+   fake clock; the acceptance is demonstrated with `scripts/replay-fixture.ts`
+   on the real SSE stream, and with a real run once the scheduler is on.
    A first version of the whiteboard already exists: the `/roadmap` page shows
    `<home>/docs/roadmap.json` (slices, items, open points, journal) and updates
    live when the file changes (a `roadmap` event on the SSE feed, see `api.md`).
@@ -469,3 +473,90 @@ mcp add --help`):
   the honest fallback is the simplest one: the agent submits its posts as
   text drafts (`social_post` items) and the user schedules them himself.
 
+## 7. The room view
+
+`/room` (linked from the header of `/`, with a link back) is a top-down
+office: a desk per agent (three per row at most, automatic), a coffee corner, a
+whiteboard (runs of the day against the cap, cost, share of the weekly budget,
+routines armed, next fire and last firing: the numbers of `/api/usage` and
+`/api/routines`), and at the back the user's desk with the "to approve" tray
+and its count. It is a separate page because the canvas weighs something and
+must be able to stop; `/` stays the desk that works everywhere. When the home
+has several rooms, buttons choose the room shown.
+
+**Pieces.**
+
+- `src/ui/room-model.ts`: the pure animation model. It takes the entities the
+  page already receives (the `/api/state` snapshot, then the SSE `run`, `event`
+  and `approval` messages) and gives a visual state per agent. No canvas, no
+  real clock: time is a number of milliseconds passed in by the caller, so the
+  tests replay the fixtures (`test/room-model.test.ts`) on a fake clock.
+  `src/ui/room-layout.ts` places the furniture; `src/ui/room-store.ts` keeps
+  one model per room outside React.
+- `src/ui/room-renderer.ts`: PixiJS drawing behind a small interface (create,
+  draw a scene, resize, destroy). `src/ui/room-canvas.tsx` imports it
+  dynamically in an effect (never on the server), owns the frame loop and the
+  pointer. `src/ui/room.tsx` is the page: header, rooms, the canvas or the
+  compact band, the list of agents, the sheet.
+- The neutral character is `public/sprites/neutral.png`, drawn by
+  `scripts/build-neutral-sprite.mjs`; it is tinted per agent from a fixed
+  palette. A home gives an agent its own sheet with `agents[].sprite` (contract
+  in `home-layout.md`, route in `api.md`).
+
+**What the stream does** (durations are named constants of `room-model.ts`):
+
+| Entity | Effect |
+|---|---|
+| `run` running | The agent is awake at its desk, seated; a new run clears a question mark. |
+| `tool_call` | Types for 2.5 s. |
+| `text` | Thought bubble with the first 64 characters, for 5 s (the stream does not keep `thinking` blocks). |
+| `tool_call` `mcp__hq__hq_message` | Walks in a straight line to the table of `input.to` (the side of the desk that faces it), talks for 3 s, walks back. A recipient that is not in the room makes it an ordinary tool call. |
+| `tool_call` `mcp__hq__hq_submit` | Walks to the desk of the user carrying a folder, stays 2.2 s, drops it in the tray, walks back. The tray counter rises at the drop, not when the `approval` event arrives. |
+| run `failed`, `end` failed, or `hq_task_update` with `status: blocked` | A question mark, until the user decides an item of that agent or the next run starts. It overrides typing and thinking, not a walk, and it does not fall asleep. |
+| no run for 60 s | Asleep. |
+| `approval` | Moves the tray counter (pending items shown). |
+
+Trips queue behind each other (three waiting at most). Every state has a text
+label (types, thinks, "drops an item"...) in `strings.ts`.
+
+**Accessibility.** The canvas complements the desk and is `aria-hidden`. Under
+it a list gives, for each agent, its name, its state in text and a button that
+opens its sheet. A single polite live region says the changes of a coarse state
+(asleep, working, visiting, carrying an item, stuck): typing and thinking come
+and go too often to be announced. The name of an agent is always written under
+its character, and the tints are colour-blind safe: colour never carries the
+identity alone.
+
+**Performance and motion.** Resolution is capped at 2 and textures are drawn
+without smoothing. The loop draws only while the tab is visible and the canvas
+on screen (`visibilitychange`, `IntersectionObserver`); the SSE stream keeps
+feeding the model, which is a function of time, so the room catches up on
+return. Idle, the room redraws at 10 frames per second (slow animations and the
+coffee steam), walking at the screen rate. With `prefers-reduced-motion`
+nobody walks or sways: poses are held on their first frame, a move is a short
+crossfade, nothing flashes on the board, and the room is redrawn when its state
+changes (a timer at the next change), which is about no frame at all when idle.
+Under 40 rem of width the canvas is not mounted: a compact band (the board
+figures, the tray count, one agent per line) and a "Voir la pièce" button that
+mounts it on demand.
+
+**The sheet of an agent** (click on a character, or its list button): the team
+card (role, model, tools, routines and their arming switch, last run, run
+button: `AgentCard` of `team.tsx`) and its recent runs with their journal
+(`FeedRow` of `feed.tsx`), rebuilt from the events the page holds since the
+API has no list of old runs. A side panel on a wide screen, the whole screen on
+a phone; Escape closes it and focus returns to what opened it.
+
+**Without a real run.** `scripts/replay-fixture.ts` plays a fixture into a
+throwaway demo home, one event per second, so that the real SSE stream animates
+the room (README, "Trying the room without a real run").
+
+**Choices and measures.**
+
+- PixiJS rather than a hand-written 2D canvas: the plan decides it and richer
+  animations can use it. Fifteen sprites would not need it. The cost is about
+  168 kB gzipped (572 kB minified; esbuild estimate of the renderer chunk, under
+  the 250 kB threshold), paid on `/room` only, since the module is a dynamic
+  import. The renderer is behind an interface, so a canvas 2D one can replace it
+  without touching the model.
+- The tray counts the items of the shown room.
