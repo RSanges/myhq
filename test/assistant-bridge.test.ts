@@ -98,6 +98,66 @@ test("Approuver decides at once and edits the alert", async () => {
   await fake.close();
 });
 
+/** A pending approval with a body and a payload. */
+function addThreadReply(db: Db, body: string, payload: Record<string, unknown> = { url: "https://example.com/r/thread" }): number {
+  return Number(
+    db
+      .prepare(
+        "INSERT INTO approvals (room, agent_id, type, title, body, payload, status, created_at) VALUES ('demo', 'scout', 'community_reply', 'Reply', ?, ?, 'pending', ?)",
+      )
+      .run(body, JSON.stringify(payload), new Date().toISOString()).lastInsertRowid,
+  );
+}
+
+test("approving an item with a link hands over its body, then the link (button)", async () => {
+  const { db, fake, assistant } = await setup();
+  const body = "**Hello** there,\n\nthis is the reply.";
+  const id = addThreadReply(db, body);
+  await handle(assistant, press(`hq:a:${id}`));
+  assert.equal(approval(db, id).status, "approved");
+  // The alert is edited first, then the body goes out untouched (no Markdown stripping), then the link.
+  assert.deepEqual(
+    fake.calls.filter((c) => ["answerCallbackQuery", "editMessageText", "sendMessage"].includes(c.method)).map((c) => c.method),
+    ["answerCallbackQuery", "editMessageText", "sendMessage", "sendMessage"],
+  );
+  assert.deepEqual(fake.sent(), [body, "https://example.com/r/thread"]);
+  await fake.close();
+});
+
+test("approving with /approve hands over the body and the link after the decision", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addThreadReply(db, "The reply.");
+  await handle(assistant, message(`/approve ${id}`));
+  assert.deepEqual(fake.sent(), [`Item #${id} : Approuvé.`, "The reply.", "https://example.com/r/thread"]);
+  await fake.close();
+});
+
+test("a long body is cut at 4000 characters, the link comes last", async () => {
+  const { db, fake, assistant } = await setup();
+  const body = `${"a".repeat(3000)}\n${"b".repeat(3000)}`;
+  const id = addThreadReply(db, body);
+  await handle(assistant, press(`hq:a:${id}`));
+  const sent = fake.sent();
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every((text) => text.length <= 4000));
+  assert.equal(sent[0], "a".repeat(3000));
+  assert.equal(sent[1], "b".repeat(3000));
+  assert.equal(sent[2], "https://example.com/r/thread");
+  await fake.close();
+});
+
+test("items without an http(s) url, and other decisions, send no hand-over", async () => {
+  const { db, fake, assistant } = await setup();
+  const plain = addApproval(db);
+  const odd = addThreadReply(db, "x", { url: "javascript:alert(1)" });
+  const rejected = addThreadReply(db, "y");
+  await handle(assistant, press(`hq:a:${plain}`));
+  await handle(assistant, message(`/approve ${odd}`));
+  await handle(assistant, message(`/reject ${rejected} no`));
+  assert.deepEqual(fake.sent(), [`Item #${odd} : Approuvé.`, `Item #${rejected} : Refusé.`]);
+  await fake.close();
+});
+
 test("Refuser asks for the reason, then decides with the next message", async () => {
   const { db, fake, assistant } = await setup();
   const id = addApproval(db);

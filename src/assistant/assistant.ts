@@ -5,11 +5,12 @@ import { decideApproval, decisionSchema } from "../server/approvals";
 import type { Env, HqConfig } from "../server/config";
 import type { Db, RunRow } from "../server/db";
 import { HqError } from "../server/errors";
-import { getState } from "../server/feed";
+import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
 import { getUsage } from "../server/usage";
 import { formatCost } from "../ui/format";
+import { payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
 import { askChat, chatEnv, type ChatRunner } from "./chat";
@@ -28,7 +29,7 @@ import { PendingQuestions, type PendingQuestion } from "./pending";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
 import type { BotCommand, CallbackQuery, Telegram, TelegramMessage, Update } from "./telegram";
-import { toTelegramMessages } from "./text";
+import { splitMessage, toTelegramMessages } from "./text";
 
 /** The Bot API refuses to hand over files above 20 MB. */
 export const FILE_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -240,7 +241,14 @@ export class Assistant {
       case "approve": {
         const parsed = parseApproveArgs(args);
         if (!parsed) return this.reply(t.usage.approve);
-        return this.reply(this.decideText(parsed.id, "approved"));
+        let approval: ApprovalDto;
+        try {
+          approval = this.decide(parsed.id, "approved");
+        } catch (error) {
+          return this.reply(this.errorText(error));
+        }
+        await this.reply(t.decided(parsed.id, strings.desk.decision[approval.status]));
+        return this.handOver(approval);
       }
       case "reject":
       case "revise": {
@@ -316,6 +324,25 @@ export class Assistant {
     }
   }
 
+  /**
+   * The user posts approved replies himself: when the item points to a thread
+   * (an http(s) `payload.url`), sends the body as a plain message of its own
+   * (to copy it on the phone, cut at 4000 as usual), then the link.
+   */
+  private async handOver(approval: ApprovalDto): Promise<void> {
+    const url = payloadUrl(approval.payload);
+    if (!url) return;
+    const parts = [...splitMessage(approval.body), url];
+    for (const part of parts) {
+      try {
+        await this.deps.telegram.sendMessage(this.deps.chatId, part);
+      } catch (error) {
+        this.log(`approved item #${approval.id} not handed over: ${describe(error)}`);
+        return;
+      }
+    }
+  }
+
   private errorText(error: unknown): string {
     if (error instanceof HqError) return strings.errors.byCode[error.code] ?? strings.errors.generic;
     if (error instanceof z.ZodError) return strings.errors.byCode.INVALID_INPUT ?? strings.errors.generic;
@@ -374,15 +401,17 @@ export class Assistant {
       return;
     }
     if (button.action === "approve") {
-      let label: string;
+      let approval: ApprovalDto;
       try {
-        label = strings.desk.decision[this.decide(button.approvalId, "approved").status];
+        approval = this.decide(button.approvalId, "approved");
       } catch (error) {
         await tg.answerCallbackQuery(query.id, this.errorText(error));
         return;
       }
+      const label = strings.desk.decision[approval.status];
       await tg.answerCallbackQuery(query.id, label);
       await this.markAlert(alert, label);
+      await this.handOver(approval);
       return;
     }
     const decision = button.action === "reject" ? "rejected" : "revise";
