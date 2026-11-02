@@ -7,8 +7,11 @@ wants to publish goes through your approval queue.
 
 **Status: pre-alpha.** The first slice is in place (database, HQ MCP server,
 runner, HTTP API, the one-page interface with approval desk, team, live feed
-and usage meter), and the assistant on Telegram of the second slice (commands,
-approval buttons, conversation, voice notes, files, extensions from the home).
+and usage meter), the assistant on Telegram of the second slice (commands,
+approval buttons, conversation, voice notes, files, extensions from the home),
+and the third slice on the MyHQ side: routines with an armed state and a
+journal, generic role templates, `npm run init`, onboarding a project through
+the approval queue, and a daily export.
 
 ## Concepts
 
@@ -19,6 +22,10 @@ approval buttons, conversation, voice notes, files, extensions from the home).
   can read and edit by hand.
 - **Run**: one execution of an agent, a `claude -p` process. Every run records
   its events, tokens and cost.
+- **Routine**: a cron of an agent in `room.json`, with an optional task. It
+  only starts runs when the agent is armed and the scheduler is on
+  (`HQ_SCHEDULER=on`), through the same lock and daily cap as any run, and
+  every firing is journaled.
 - **Approval queue**: the only way an agent can put something out. A post, a
   public reply, an email or a pull request is submitted as a pending item. You
   approve it, reject it, or ask for a revision.
@@ -26,8 +33,11 @@ approval buttons, conversation, voice notes, files, extensions from the home).
   office (messages, submissions, task updates, memory). Everything that goes
   through it is logged.
 - **Onboarding**: adding a project is itself an agent run that submits the
-  proposed room to your approval queue. The project only gets a short block in
-  its `CLAUDE.md`, nothing else.
+  proposed room to your approval queue (« Ajouter une salle », or `/salle
+  <path>` on Telegram). The roles are instantiated from generic templates
+  shipped in `templates/roles/`. On approval the room is written in your home
+  and the developer's Git worktree is created; the project only gets a short
+  block for its `CLAUDE.md`, which you add yourself.
 - **The assistant on Telegram**: notifies you when an item waits for you or a
   run fails, lets you approve from your phone, and can be extended with
   commands of your own.
@@ -48,13 +58,15 @@ data never mix with the code.
       roles/
         <agent>.md
   assistant.json      the Telegram assistant: chat, voice, files, extensions
+  myhq.json           settings of the home, such as the daily export (optional)
   assistant/
     commands/         extensions for the Telegram assistant
-  data/               SQLite database and work directories (ignored by Git)
+  data/               SQLite database, work directories and worktrees (ignored by Git)
 ```
 
-See [docs/home-layout.md](docs/home-layout.md) for the `room.json` and
-`assistant.json` schemas and the extension contract.
+See [docs/home-layout.md](docs/home-layout.md) for the `room.json`,
+`assistant.json` and `myhq.json` schemas, the extension contract, and how to
+plug an integration (an MCP server, the official GitHub one for example).
 
 ## The assistant on Telegram
 
@@ -64,9 +76,9 @@ on MyHQ sends you an alert when an item waits for your approval or a run fails.
 
 To talk to it, also set `HQ_TELEGRAM_POLLING=true`. MyHQ then reads the bot's
 messages by long polling (no inbound port, nothing exposed): `/pending`,
-`/approve`, `/reject`, `/revise`, `/run`, `/status`, buttons on approval
-alerts, and a conversation with `claude -p` configured in
-`<home>/assistant.json`. Polling is off by default because a bot can only
+`/approve`, `/reject`, `/revise`, `/run`, `/status`, `/arm`, `/disarm`,
+`/salle`, buttons on approval alerts, and a conversation with `claude -p`
+configured in `<home>/assistant.json`. Polling is off by default because a bot can only
 have one reader: switch off any other program that reads the same bot first.
 
 ## Stack
@@ -85,12 +97,18 @@ and signed in (`claude` in your PATH).
 
 ```sh
 npm install
-cp .env.example .env.local   # then set MYHQ_HOME and the optional variables
+npm run init                 # home, claude check, .env.local, database
 npm run dev                  # http://127.0.0.1:4242
 npm test                     # Node test runner, no network, no Claude run
 ```
 
-Every variable is documented in [.env.example](.env.example). The HTTP API is
+`npm run init` asks a few questions (home directory, optional Telegram bot,
+daily cap, port, time zone) and can be run again at any time: it keeps what
+is already there. Answers can also be piped, one per line. Every variable is
+documented in [.env.example](.env.example).
+
+Routines stay off until you set `HQ_SCHEDULER=on` in `.env.local` and arm an
+agent (the switch on its card, or `/arm <room>/<agent>`). The HTTP API is
 described in [docs/api.md](docs/api.md). The raw output of each run is kept in
 `<home>/data/runs/<run>.jsonl`.
 

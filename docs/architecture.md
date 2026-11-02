@@ -24,7 +24,10 @@ is built from the room and role definition in the home directory:
 - `--setting-sources project,local`: the user's personal settings (hooks,
   plugins) do not run inside agents.
 - `--disallowedTools`: deployment and schema push commands, denied to every
-  agent whatever its whitelist says.
+  agent whatever its whitelist says, plus the agent's own `disallowedTools`.
+- `--add-dir`: the directories the agent may read besides its working
+  directory (`addDirs`, by default the target repository for an agent that
+  reads files and has no worktree).
 - `--tools`: only the built-in tools of the whitelist exist for the agent
   (none when it only uses MCP tools), so nothing outside it can run.
 
@@ -75,12 +78,52 @@ so everything is logged.
 
 ### Routines
 
-An internal cron (one schedule per agent, from `room.json`) starts runs at set
-times, and a button starts one by hand. Two guards are checked before any
-launch: one run at a time per agent (lock), and a daily cap on the total number
-of runs, to stay within the limits of the plan (`HQ_MAX_RUNS_PER_DAY`, with a
-conservative default). Start with a few scheduled agents and raise the cap
-after a week of measurements.
+An internal scheduler (`src/server/routines.ts`) starts runs at set times from
+the `cron` of each agent in `room.json`: one expression (the routine work of
+the role), or a list of `{ "cron", "task" }` (several routines, each with its
+own task). A button, `/run` and the API start one by hand. The cron parser is
+MyHQ's own (`src/server/cron.ts`, five fields with ranges, steps, lists and
+names, the classic day-of-month or day-of-week rule): MyHQ only needs "does
+this minute match" and "when is the next one", not a scheduling library.
+
+- **Switch.** Nothing starts by itself until `HQ_SCHEDULER=on` (default
+  `off`). The scheduler starts with the app and is held by one process per
+  home (`data/scheduler.lock`), so a second MyHQ on the same home does not
+  fire twice.
+- **Time zone.** Expressions are read on the wall clock of `HQ_TIMEZONE`
+  (an IANA name, the machine's zone by default). A minute skipped by a
+  daylight saving change does not fire; a repeated one fires once.
+- **Armed.** Each agent's routines are armed or not. `armed` in `room.json`
+  is the initial value (default `false`); once changed from the agent's card
+  (switch) or from Telegram (`/arm <room>/<agent>`, `/disarm`), the value
+  stored in the database (`agents.armed`) wins. A disarmed routine that comes
+  due is journaled as `skipped_unarmed` and starts nothing.
+- **Guards.** A firing goes through the same code as any run: one run at a
+  time per agent (lock) and the daily cap on the total number of runs
+  (`HQ_MAX_RUNS_PER_DAY`, conservative default). Start with a few armed
+  agents and raise the cap after a week of measurements.
+- **No catch-up.** The scheduler re-reads the home every 15 seconds (a room
+  edited by hand or added by onboarding is picked up without a restart) and
+  plans each routine from the moment it first sees it. A routine found more
+  than five minutes late (machine asleep, app stopped) is dropped.
+- **Journal.** Every firing writes a row to `routine_firings`: agent, cron,
+  task, scheduled time, outcome (`started`, `skipped_busy`, `skipped_cap`,
+  `skipped_unarmed` or `error`) and run id. The interface shows the latest
+  ones, `GET /api/routines` returns them, `/status` lists the last five.
+- **Budget share.** With `HQ_WEEKLY_BUDGET_USD` (the user's own calibration
+  of his plan), the meter and `/status` show the share of it spent by the
+  runs of the week (Monday to today).
+
+### Per-agent options
+
+- `worktree`: a Git worktree of the target repository inside the home
+  (`git worktree add`, branch `hq/<agent>`), created before a run when it is
+  missing, and on approval of an onboarding proposal. The agent works in it.
+- `disallowedTools`: added to the global deny list for this agent (for a
+  developer: `git push`, merges, migrations, deploy commands).
+- `addDirs`: directories passed as `--add-dir`. An agent that reads files
+  (`Read`, `Glob` or `Grep` in its whitelist) and has no worktree reads the
+  target repository by default.
 
 ### The approval cycle
 
@@ -119,6 +162,38 @@ anything on its own.
 
 No API change: the body and `payload.url` are already in the approval DTO.
 
+#### Pull requests and blog posts on a branch
+
+Agents never push. A developer agent (or a writer that commits articles)
+commits on a local branch of its worktree, `hq/<agent>-<slug>`, and submits a
+`pull_request` (or `blog_post`) item whose payload carries
+`{ "branch", "sha", "title", "summary" }`, never a pull request number.
+Approving it merges nothing and pushes nothing; it hands over, like an item
+with a link:
+
+- **On the desk**: the pending item shows its branch and commit; once
+  approved, a highlighted block gives the branch, the commit and the two
+  commands to run from the target repository, with « Copier la commande »:
+  `git push -u origin <branch>` and
+  `gh pr create --head <branch> --title "<title>" --body "<summary>"`.
+  The title and summary are flattened to one line without quotes or
+  expansion characters, so the line runs as is in sh, PowerShell or cmd. A
+  branch name that is not a plain Git ref gets no hand-over.
+- **On Telegram**: after the decision, one message with the branch and the
+  commit, then one message that is exactly the two commands.
+
+The user pushes, opens the pull request and merges himself.
+
+#### Room proposals
+
+Approving a `room_proposal` (see section 3) is the one decision that writes
+something: the room in the home. If that fails (a room of that name exists,
+the proposal is invalid, a worktree cannot be created), nothing is written,
+the item stays pending with an explicit error, and it can still be rejected.
+The proposal's "HQ agents" block for the project's `CLAUDE.md` is never
+written by MyHQ: the desk shows it with « Copier le bloc », and Telegram sends
+it as a message of its own after the decision.
+
 ### Messages between agents
 
 A message addressed to an agent creates a task for it, handled at its next run
@@ -144,8 +219,9 @@ through the approval queue.
   The app listens on localhost only until remote access is decided.
 - **Data**: SQLite (`better-sqlite3`), one file in the home's `data/`
   directory, ignored by Git. Idempotent SQL migrations in the code. Tables:
-  `rooms`, `agents`, `runs`, `events`, `messages`, `tasks`, `approvals`,
-  `memories`. Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
+  `rooms`, `agents` (with the armed state of their routines), `runs`,
+  `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`.
+  Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`) and a `summary`.
 - **Real time**: Server-Sent Events from the app to the browser.
@@ -166,31 +242,65 @@ Starting with MyHQ happens at three levels, from the widest to the narrowest.
 The principle is the same everywhere: the first gesture of the HQ for a project
 is itself submitted to the user's approval.
 
-1. **Initialize the HQ (once per machine).** A `myhq init` command (or a
-   first-launch page) creates or points to the home directory (`MYHQ_HOME`),
-   checks that the `claude` CLI is installed and signed in, writes `.env.local`
-   (Telegram token, daily cap on runs, port), creates the SQLite database and
-   starts the service. When the home is already a separate repository, init
-   comes down to setting the variable and writing `.env.local`; otherwise it
-   creates an empty home with an example room.
-2. **Add a room (once per project).** Not a form: an onboarding agent. The
-   user gives the path of the target repository (from the UI or from the
-   Telegram assistant). A `claude -p` run reads the repository (README,
-   `CLAUDE.md`, `package.json`, docs, Git remote) and submits to the approval
-   queue a room proposal: a `room.json` (name, target repository, the roles
-   that make sense for this project, with a suggested model and schedule) and
-   the role prompts, instantiated from generic templates shipped with MyHQ
-   (watching, content, dev, analyst, and so on) with the project's context
-   injected. On approval, the files are written under `rooms/<name>/` in the
-   home and the room comes alive. Rejection and revision work as for any item.
+1. **Initialize the HQ (once per machine): `npm run init`.** The script
+   (`scripts/init.ts`) creates the home (`rooms/`, `data/`, a `.gitignore`)
+   or keeps an existing one as it is (a home that is a separate repository
+   only needs `MYHQ_HOME`), checks that the `claude` CLI is installed
+   (`claude --version`) and signed in (`claude auth status --json`), asks for
+   the Telegram token and chat id (optional), the daily cap, the port and the
+   time zone, writes `.env.local` from `.env.example`, creates the database
+   and prints how to start the service with pm2. It can be run again: the
+   previous `.env.local` is kept as `.env.local.bak` and every value it held is
+   carried over unless answered again, and migrations are idempotent. Answers
+   are read line by line from stdin, so they can be piped; an empty or
+   missing answer keeps the value shown between brackets. It does not start
+   the service itself: `npm run build` and `pm2 start` stay explicit.
+2. **Add a room (once per project): the onboarding agent.** Not a form. The
+   user gives the path of the target repository (relative to the home, or
+   absolute): « Ajouter une salle » on the team, `/salle <path>` on Telegram,
+   or `POST /api/onboarding`. MyHQ starts a run of its own onboarding agent,
+   in a reserved room `_hq` that no folder can take, with the same lock and
+   daily cap as any run: Sonnet, `--max-budget-usd` from
+   `HQ_ONBOARDING_MAX_BUDGET_USD` (0.5 by default), the role prompt shipped in
+   `templates/onboarding.md`, the target repository as working directory, the
+   templates folder as `--add-dir`, the built-in tools `Read`, `Glob` and
+   `Grep` available but not pre-approved (in print mode Claude Code reads
+   inside its working directories only, and nothing outside them), and the
+   `hq_submit` and `hq_task_update` tools. The run prompt gives the target,
+   the rooms that already exist, the templates (`templates/roles/*.md`) and
+   the payload to submit:
+
+   ```json
+   {
+     "room": { "name": "...", "targetRepo": "...", "agents": [ { "id": "dev", "...": "room.json fields" } ] },
+     "roles": { "dev": { "template": "dev", "values": { "project": "...", "targets": ["..."], "audience": "...", "features": ["..."], "autonomy": "A", "guardrails": ["..."] }, "notes": "optional Markdown" } },
+     "claudeMd": "## HQ agents ..."
+   }
+   ```
+
+   `hq_submit` checks a `room_proposal` at once, so the agent can fix it in
+   the same run: `room.json` against the room schema (role paths become
+   `roles/<id>.md`, every routine is disarmed), one role per agent,
+   instantiated from its template (`{{project}}`, `{{targets}}`,
+   `{{audience}}`, `{{features}}`, `{{autonomy}}`, `{{guardrails}}`; a list
+   becomes a Markdown list; em and en dashes are replaced), and the
+   `CLAUDE.md` block. The stored item carries the final files, and its body
+   shows the full `room.json`, every role and the block: the user approves
+   exactly what will be written. On approval, MyHQ writes `rooms/<name>/`
+   (never over an existing room), loads it back, creates the worktree of each
+   agent that has one (`git worktree add`, branch `hq/<agent>`), and syncs the
+   home: the room is live without a restart. Rejection and revision work as
+   for any item (a revision note reaches the next onboarding run).
 3. **Initialize the target project (minimal and standard).** The same
-   onboarding item proposes a short "HQ agents" block to add to the project's
+   onboarding item proposes a short "HQ agents" block for the project's
    `CLAUDE.md`: how to run the tests, where the docs live, what is forbidden
-   (deployment, migrations), the branch and pull request conventions, and the
-   reminder that everything public goes through the approval queue. On the
-   MyHQ side, the dedicated Git worktree of the dev agent is created and the
-   tool deny-list is registered. Nothing else lands in the project: no `.hq/`
-   directory, no dependency. A project can leave the HQ without a trace.
+   (deployment, migrations, pushing), the branch and pull request
+   conventions, and the reminder that everything public goes through the
+   approval queue. MyHQ never writes it: it is handed to the user, like the
+   text of an approved reply. The dedicated worktree lives in the home and
+   only adds Git's own bookkeeping to the repository. Nothing else lands in the
+   project: no `.hq/` directory, no dependency. A project can leave the HQ
+   without a trace (`git worktree remove`).
 
 ## 4. Delivery slices
 
@@ -217,6 +327,12 @@ described, and no mechanism is built before its first real use.
    `myhq init` arrive with this slice. Acceptance: three scheduled agents run
    for a week with no intervention other than approvals, and a second room is
    onboarded from an existing repository through the approval queue.
+   Status: built on the MyHQ side (routines, arming, journal, budget share,
+   role templates, `npm run init`, onboarding, daily export, per-agent
+   worktree, deny list and read directories), covered by tests with a fake
+   engine, and one real onboarding run on Haiku (a fixture of its stream is
+   in the tests). The acceptance is demonstrated once `HQ_SCHEDULER=on` in a
+   real home.
 4. **The animated room.** The canvas, characters animated by the stream-json
    events, the team feed (messages between agents) and a whiteboard with the
    state of the routines and the user's key numbers. Acceptance: one can see an
@@ -263,7 +379,12 @@ order:
    conversation), `/pending` (id, room and agent, title), `/approve <id>`,
    `/reject <id> <reason>`, `/revise <id> <comment>`, `/run <room>/<agent>
    [task]` (same lock and cap as the API), `/status` (runs and cost today and
-   this week, runs left under the cap, agents' states). Decisions go through
+   this week, the share of the weekly budget when `HQ_WEEKLY_BUDGET_USD` is
+   set, runs left under the cap, the scheduler's state, agents' states with,
+   for those that have routines, whether they are armed and their next fire,
+   and the last five routine firings), `/arm <room>/<agent>` and `/disarm
+   <room>/<agent>` (the armed state of the agent's routines), `/salle <path>`
+   (an onboarding run for a repository, see section 3). Decisions go through
    `decideApproval`, the same code as `PATCH /api/approvals/[id]`.
 3. **Extensions** of the home, in the order of `assistant.json`: the first
    non-null answer is sent and nothing else runs (contract in
@@ -294,3 +415,57 @@ The Bot API does not hand over files above 20 MB; the user is told.
 
 The assistant's chat is not a run: it does not count towards the daily cap and
 its cost is written to the log, not to the `runs` table.
+
+## 6. Daily export and integrations
+
+### Daily export
+
+When the home has a `myhq.json` with an `export` section, MyHQ writes one JSON
+file per day, `<export.dir>/<YYYY-MM-DD>.json`: the runs started, the messages
+sent and the approvals created or decided during that calendar day of
+`HQ_TIMEZONE`, in the shapes of the API (`date`, `timeZone`, `generatedAt`,
+`runs`, `messages`, `approvals`). The previous day is written once
+`export.hour` (local, 1 by default) has passed; the check runs at start and
+every ten minutes and only writes a day whose file is missing, so a day missed
+while the app was stopped is written at the next start. `POST /api/export`
+writes a day on demand (and replaces its file). Without `myhq.json`, or
+without its `export` section, nothing happens. It is just a folder: what reads
+it (a notes vault, a backup) is the user's business.
+
+### Integrations through MCP servers
+
+An integration is an MCP server declared in an agent's `mcpServers` in
+`room.json` (see `home-layout.md`), with its secrets as `${NAME}` placeholders
+expanded from `.env.local` into the per-run `--mcp-config` file. Tools are
+whitelisted by exact name (`mcp__<server>__<tool>`), never with a wildcard,
+and anything that publishes or merges is left out of the whitelist (or added
+to `disallowedTools`). There is no other integration mechanism: no API client
+of MyHQ's own.
+
+**HTTP servers with OAuth (for example Metricool): what works and what does
+not.** What was checked with Claude Code 2.1.183 (`claude --help`, `claude
+mcp add --help`):
+
+- Declaring the server works: `room.json` accepts
+  `{ "type": "http", "url": "..." }`, and `--strict-mcp-config` loads it from
+  the per-run file, like any other.
+- A static credential does not fit: `headers` are passed as written (only
+  `env` and `args` are expanded), so a bearer token would have to sit in
+  `room.json`, which MyHQ refuses to recommend. Expanding `headers` would be a
+  small, deliberate change, to decide when a server needs it.
+- OAuth needs a browser: `claude mcp add --transport http <name> <url>`
+  (with `--client-id`, `--client-secret` or `--callback-port` for servers
+  that require a registered client) registers the server, and the sign-in
+  happens in an interactive session (`/mcp`). A `claude -p` run cannot open
+  that sign-in. Whether a headless run declared through `--mcp-config` and
+  `--strict-mcp-config` reuses the token stored by that interactive sign-in
+  (same server name and URL), and whether it is refreshed between runs, could
+  not be verified without the user's own account, and is not documented by
+  the CLI's help. It must be tested once by the user with a single cheap run
+  (check the server's `status` in the run's `start` event: `connected`, or
+  `needs-auth` / `failed`).
+- The connectors of claude.ai are not visible to `claude -p`, and MyHQ does
+  not extract tokens or write its own API client. If the test above fails,
+  the honest fallback is the simplest one: the agent submits its posts as
+  text drafts (`social_post` items) and the user schedules them himself.
+

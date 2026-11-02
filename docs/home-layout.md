@@ -13,13 +13,16 @@ repository of its own.
       roles/
         <agent>.md       one system prompt per agent
   assistant.json         the Telegram assistant (optional, schema below)
+  myhq.json              settings of the home, such as the daily export (optional)
   docs/roadmap.json      the live roadmap shown at /roadmap (optional, see api.md)
   assistant/
     commands/            extensions for the Telegram assistant
   data/                  created at first launch, ignored by Git
     hq.db                SQLite database
     work/<room>/<agent>/ default working directory of each agent
+    worktrees/<room>/<agent>/  Git worktrees (by convention, see `worktree`)
     runs/                raw output and MCP config of each run
+    scheduler.lock       the process that runs the routines of this home
     assistant/           offset.txt, bridge.lock, voice/ (temporary audio)
 ```
 
@@ -27,7 +30,9 @@ All paths written in `room.json` and `assistant.json` are relative to the home
 directory (absolute paths are accepted in `assistant.json`).
 
 `rooms/<room>/` is normally created by the onboarding agent when you approve
-its room proposal, and can also be written by hand.
+its room proposal (« Ajouter une salle », `/salle <path>`), and can also be
+written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
+`.gitignore`).
 
 ## room.json
 
@@ -44,8 +49,32 @@ its room proposal, and can also be written by hand.
       "allowedTools": ["WebSearch", "WebFetch", "mcp__hq__*"],
       "mcpServers": {},
       "workingDirectory": "data/work/example/scout",
-      "cron": "0 7 * * *",
+      "cron": "0 7 * * 1-5",
+      "armed": true,
       "maxBudgetUsd": 2
+    },
+    {
+      "id": "analyst",
+      "name": "Analyst",
+      "role": "roles/analyst.md",
+      "model": "sonnet",
+      "allowedTools": ["Read", "Glob", "mcp__hq__*"],
+      "cron": [
+        { "cron": "0 17 * * 5", "task": "Weekly review of the numbers." },
+        { "cron": "0 8 * * *", "task": "Morning alert on yesterday's sign-ups." }
+      ]
+    },
+    {
+      "id": "dev",
+      "name": "Dev",
+      "role": "roles/dev.md",
+      "model": "opus",
+      "allowedTools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash(git status)", "Bash(git add *)", "Bash(git commit *)", "Bash(git switch *)", "Bash(npm test)", "mcp__hq__*"],
+      "worktree": "data/worktrees/example/dev",
+      "workingDirectory": "data/worktrees/example/dev",
+      "disallowedTools": ["Bash(git push *)", "Bash(gh pr merge *)", "Bash(npm run deploy *)"],
+      "cron": "0 5 * * *",
+      "maxBudgetUsd": 3
     }
   ]
 }
@@ -61,9 +90,19 @@ its room proposal, and can also be written by hand.
 | `agents[].model` | yes | `opus`, `sonnet` or `haiku`. |
 | `agents[].allowedTools` | yes | Whitelist passed to `--allowedTools`. |
 | `agents[].mcpServers` | no | Extra MCP servers, in the shape of Claude Code's MCP config. The `hq` server is always added by MyHQ. |
-| `agents[].workingDirectory` | no | Defaults to `data/work/<room>/<agent>`. Must stay inside the home. |
-| `agents[].cron` | no | Cron expression. Without it the agent only runs on demand. |
+| `agents[].workingDirectory` | no | Defaults to the `worktree` when there is one, `data/work/<room>/<agent>` otherwise. Must stay inside the home. With a `worktree`, leave it out or give the same path. |
+| `agents[].cron` | no | A cron expression (five fields, read in `HQ_TIMEZONE`), or a list of `{ "cron": "...", "task": "..." }` for several routines with a task each. Without it the agent only runs on demand. |
+| `agents[].armed` | no | Initial armed state of the routines (default `false`: a declared cron does not fire). Once changed from the interface or with `/arm` and `/disarm`, the database value wins. Nothing fires anyway until `HQ_SCHEDULER=on`. |
+| `agents[].worktree` | no | Path, relative to the home and inside it, of a Git worktree of the target repository: created with `git worktree add` on branch `hq/<agent>` when missing (on approval of an onboarding proposal, and before a run). The agent works in it. |
+| `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. |
+| `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
+
+Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
+`8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
+both the day of month and the day of week are restricted, a day matches if
+either does (classic cron). A minute skipped by a daylight saving change does
+not fire.
 
 MyHQ validates the file with zod at startup and refuses to start a room whose
 file is invalid, with an explicit error.
@@ -93,10 +132,54 @@ lives in `.env.local` and never in `room.json`:
 - A variable that is not set, or is empty, fails the run before it launches,
   with an error naming the variable (`HQ_EXT_REDDIT_CLIENT_ID` here). It is
   never replaced by an empty string.
+- Tools of an MCP server are named `mcp__<server>__<tool>` in `allowedTools`.
+  List them by exact name: the run's `start` event (in the feed, or in
+  `data/runs/<run>.jsonl`) shows every tool the server offers.
 - Only the generated MCP config carries the expanded values. The agent's own
   process environment is unchanged: the `HQ_*` and `MYHQ_*` variables are still
   stripped from it. The config file is rewritten for each run, and the values
   are never logged.
+
+#### Example: the official GitHub MCP server
+
+GitHub's own server (`github/github-mcp-server`) runs over stdio, from its
+Docker image or its released binary, and reads its token from the
+environment variable `GITHUB_PERSONAL_ACCESS_TOKEN`. The token lives in
+`.env.local` only (give it the smallest scope: one repository, contents,
+issues and pull requests), and `room.json` names it with a placeholder:
+
+```json
+"allowedTools": [
+  "mcp__github__get_file_contents",
+  "mcp__github__list_issues",
+  "mcp__github__create_issue",
+  "mcp__hq__*"
+],
+"mcpServers": {
+  "github": {
+    "command": "docker",
+    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${HQ_EXT_GITHUB_TOKEN}" }
+  }
+}
+```
+
+with `HQ_EXT_GITHUB_TOKEN=...` in `.env.local`. `docker run -e NAME` passes
+the variable from the server's environment, which MyHQ fills from the
+placeholder. With the binary instead of Docker: `"command":
+"github-mcp-server", "args": ["stdio"]` and the same `env`. The server can be
+narrowed further with its own options (toolsets, read-only mode, see its
+README), which go in `args`.
+
+List the tools by exact name, never `mcp__github__*`: the names change with
+the server's version, so read them from the `start` event of a first run.
+A token cannot tell "open a pull request" from "merge it": the barrier is the
+whitelist, so never list merge tools, and remember that agents never push
+(see `architecture.md`, approval cycle).
+
+HTTP servers that sign in with OAuth (Metricool, for example) are covered in
+`architecture.md`, section 6: declaring them works, signing in from a
+headless run is the open question.
 
 ## roles/*.md
 
@@ -104,6 +187,16 @@ Plain Markdown, passed as is to `--append-system-prompt-file`. It describes who
 the agent is, what it does, what it may and may not do, and what it submits to
 the approval queue through `hq_submit`. Roles are meant to be read and edited by
 hand and versioned with the rest of the home.
+
+MyHQ ships generic templates in `templates/roles/` (community watch, SEO
+content, videos and social networks, app stores and reviews, metrics analyst,
+lifecycle email, directories and partners, competitor watch, developer). The
+onboarding agent instantiates them for a project by filling `{{project}}`,
+`{{targets}}`, `{{audience}}`, `{{features}}` (the closed list of what the
+agent may claim), `{{autonomy}}` (A: inside the repository or the project's
+accounts; B: prepared, then signed and posted by the user; C: the user alone,
+the agent prepares notes) and `{{guardrails}}`. A role written by hand does not
+have to follow them.
 
 ## assistant.json
 
@@ -210,3 +303,23 @@ export default hello;
 
 The type import is erased at load time; its path only matters to your editor
 (here, a home cloned next to the MyHQ repository).
+
+## myhq.json
+
+Settings of the home that are not secrets. Optional: without the file, or
+without a section, the feature is off. Other keys are ignored.
+
+```json
+{
+  "export": { "dir": "../notes/agents-journal", "hour": 6 }
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `export.dir` | yes | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
+| `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
+
+The file is read when the export is checked (every ten minutes), so a change
+needs no restart. An invalid file is reported in the log.
+

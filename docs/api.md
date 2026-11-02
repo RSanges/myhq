@@ -24,6 +24,11 @@ Every error has the same shape and an HTTP status:
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
+| `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
+| `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
+| `PROPOSAL_INVALID` | 422 | Approving a room proposal that fails validation (payload, paths, target repository). Nothing is written; the item stays pending. |
+| `WORKTREE_FAILED` | 422 | Approving a room proposal whose agent worktree cannot be created. Nothing is written; the item stays pending. |
+| `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
 The `message` is in English and meant for logs; the interface shows its own
@@ -37,6 +42,7 @@ French text per `code`.
 | Approval `status` | `pending`, `approved`, `rejected`, `revise` |
 | Event `type` | `start`, `text`, `tool_call`, `tool_result`, `end` |
 | Agent `state` (in `/api/state`) | `working` (a run is in progress), `failed` (its last run failed), `idle` |
+| Firing `outcome` | `started`, `skipped_busy` (agent lock), `skipped_cap` (daily cap), `skipped_unarmed`, `error` |
 
 A run is `cancelled` when the app stops during the run, and `failed` when the
 engine reports an error, the budget (`--max-budget-usd`) is exceeded, the run
@@ -129,6 +135,35 @@ payload is free-form per type; it holds what is needed to act on the item once
 approved (for example the thread URL). `decisionNote` is the user's reason or
 comment.
 
+Payloads the interface and the assistant act on:
+
+| `type` | `payload` | Once approved |
+|---|---|---|
+| any | `{ "url": "https://..." }` | The body and the link are handed to the user (copy, open). |
+| `pull_request`, `blog_post` | `{ "branch": "hq/<agent>-<slug>", "sha": "...", "title": "...", "summary": "..." }` | The branch, the commit, and the `git push` and `gh pr create` commands are handed to the user. Nothing is pushed or merged. |
+| `room_proposal` | `{ "room": {room.json}, "roles": { "<agent>": { "template": "...", "content": "..." } }, "claudeMd": "..." }` (completed by `hq_submit`, see `architecture.md` section 3) | The room is written in the home (otherwise the approval fails with `ROOM_EXISTS`, `PROPOSAL_INVALID` or `WORKTREE_FAILED`), then the `CLAUDE.md` block is handed to the user. |
+
+### Firing
+
+```json
+{
+  "id": 7,
+  "room": "demo",
+  "agentId": "scout",
+  "cron": "0 7 * * 1-5",
+  "task": null,
+  "scheduledAt": "2026-11-03T06:00:00.000Z",
+  "outcome": "started",
+  "runId": 12,
+  "detail": null,
+  "createdAt": "2026-11-03T06:00:04.512Z"
+}
+```
+
+One routine that came due. `task` is the routine's own task, `null` for the
+routine work of the role. `runId` is set when `outcome` is `started`;
+`detail` explains `skipped_busy`, `skipped_cap` and `error`.
+
 ## Routes
 
 ### `GET /api/state`
@@ -151,7 +186,8 @@ restart.
           "model": "sonnet",
           "role": "rooms/demo/roles/scout.md",
           "allowedTools": ["WebSearch", "WebFetch", "mcp__hq__*"],
-          "cron": null,
+          "armed": false,
+          "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
           "state": "idle",
           "lastRun": null
         }
@@ -159,6 +195,8 @@ restart.
     }
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
+  "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
+  "firings": [],
   "approvals": { "pending": [], "history": [] },
   "recent": { "events": [], "messages": [] },
   "assistant": { "polling": false }
@@ -167,6 +205,14 @@ restart.
 
 - `role` and `targetRepo` are relative to the home.
 - `lastRun` is a Run or `null`.
+- `armed`: whether the agent's routines may start runs (the database value
+  once changed, the `armed` of `room.json` until then). `routines`: one entry
+  per cron of the agent, `task` `null` for the routine work of the role,
+  `nextAt` its next fire in UTC (`null` for an expression that never fires).
+- `scheduler.enabled`: `HQ_SCHEDULER=on`; `running`: this process runs the
+  routines (another MyHQ process on the same home may hold them);
+  `timeZone`: `HQ_TIMEZONE` or the machine's zone.
+- `firings`: the 50 most recent routine firings (Firing shape), newest first.
 - `approvals.pending`: every pending item, oldest first. `approvals.history`:
   the 100 most recently decided items, newest first.
 - `recent.events` (last 200) and `recent.messages` (last 100), oldest first.
@@ -313,10 +359,13 @@ Response `200`:
 ```
 
 Errors: `INVALID_JSON`, `INVALID_INPUT` (also for an id that is not a positive
-integer), `APPROVAL_NOT_FOUND` (404), `APPROVAL_ALREADY_DECIDED` (409).
+integer), `APPROVAL_NOT_FOUND` (404), `APPROVAL_ALREADY_DECIDED` (409), and for
+a `room_proposal`: `ROOM_EXISTS` (409), `PROPOSAL_INVALID` (422) and
+`WORKTREE_FAILED` (422), in which case the item stays pending.
 
-Approving records the decision and keeps the payload; acting on an approved
-item (publishing, merging) is not done by the app in this slice.
+Approving records the decision and keeps the payload. The only item the app
+acts on is a `room_proposal` (it writes the room); publishing, pushing and
+merging stay the user's.
 
 ### `GET /api/usage`
 
@@ -328,13 +377,64 @@ daily cap.
   "today": { "date": "2026-11-02", "runs": 3, "inputTokens": 40, "outputTokens": 1600, "cacheCreationInputTokens": 31000, "cacheReadInputTokens": 120000, "costUsd": 0.17 },
   "week": { "start": "2026-11-02", "runs": 3, "...": "same totals" },
   "days": [{ "date": "2026-10-27", "runs": 0, "...": "same totals" }],
-  "cap": { "maxRunsPerDay": 12, "runsToday": 3, "remaining": 9 }
+  "cap": { "maxRunsPerDay": 12, "runsToday": 3, "remaining": 9 },
+  "budget": { "weeklyUsd": 10, "spentUsd": 0.17, "share": 0.017 }
 }
 ```
 
 - `days`: the last 7 days, oldest first, today last, days without runs at 0.
 - `week`: from Monday of the current week to today.
 - Every run started counts towards the cap, whatever its status.
+- `budget` is `null` unless `HQ_WEEKLY_BUDGET_USD` is set; `share` is
+  `week.costUsd / weeklyUsd` (above 1 when the budget is exceeded).
+
+### `PATCH /api/rooms/[room]/agents/[agent]`
+
+Arms or disarms the routines of an agent. The value is stored in the database
+and wins over `room.json` from then on.
+
+Body: `{ "armed": true }`. Response `200`:
+
+```json
+{ "agent": { "room": "demo", "id": "scout", "armed": true } }
+```
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
+`AGENT_NOT_FOUND`.
+
+### `GET /api/routines`
+
+The scheduler's state and the journal of routine firings, newest first.
+`?limit=` from 1 to 500 (default 50).
+
+```json
+{ "scheduler": { "enabled": true, "running": true, "timeZone": "Europe/Paris" }, "firings": [{ "...": "Firing shape" }] }
+```
+
+Errors: `INVALID_INPUT` for a bad `limit`.
+
+### `POST /api/onboarding`
+
+Starts a run of the onboarding agent on a repository and returns at once; its
+room proposal arrives on the desk as a `room_proposal` approval. Same lock
+(one onboarding run at a time) and daily cap as any run.
+
+Body: `{ "path": "../my-project" }` (relative to the home, or absolute).
+Response `202`: `{ "run": { "room": "_hq", "agentId": "onboarding", "...": "Run shape" } }`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `TARGET_NOT_FOUND` (404),
+`AGENT_BUSY` (409), `DAILY_CAP_REACHED` (429).
+
+### `POST /api/export`
+
+Writes the daily export of one day now (and replaces its file). The body is
+optional: `{ "date": "2026-11-02" }`, yesterday in `HQ_TIMEZONE` by default.
+
+```json
+{ "export": { "date": "2026-11-02", "file": "/abs/path/2026-11-02.json", "runs": 4, "messages": 1, "approvals": 3 } }
+```
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `EXPORT_NOT_CONFIGURED` (404).
 
 ## Not in the API
 
