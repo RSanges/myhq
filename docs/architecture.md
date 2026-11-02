@@ -96,6 +96,29 @@ A submission creates an item in the `pending` state. The user can:
 The same decision can be taken from Telegram, with the same effect as in the
 office.
 
+#### Acting on an approved item
+
+The user posts replies himself, so an approved item has to hand him the text
+and the thread. The rule is generic: it applies to any approval whose
+`payload.url` is an http(s) link (other URLs are ignored), and it never posts
+anything on its own.
+
+- **On the desk**: every such item, pending or in the history, has a
+  « Copier le texte » button (it copies the body with
+  `navigator.clipboard.writeText`, called inside the click handler; without
+  clipboard access it falls back to the legacy copy command, then to showing the
+  text selected; the button briefly confirms) next to « Ouvrir le lien ». After
+  a click on Approuver the desk shows the history, where the approved item
+  carries both controls in a highlighted block with the hint « Copié ? Colle-le
+  dans le fil. ».
+- **On Telegram**: when such an item is approved (button or `/approve`), once
+  the alert message is edited (or the `/approve` answer sent), the assistant
+  sends one plain message that is exactly the body (cut at 4000 characters like
+  every message, no Markdown stripping, so it can be copied as is), then one
+  message with the link. Items without a link only get the decision.
+
+No API change: the body and `payload.url` are already in the approval DTO.
+
 ### Messages between agents
 
 A message addressed to an agent creates a task for it, handled at its next run
@@ -257,7 +280,9 @@ order:
 Messages are handled one at a time, in order. Button presses are handled at
 once, even during a long chat turn. In polling mode a pending-approval alert
 carries three buttons: **Approuver** decides at once and edits the alert to
-show the decision (its buttons go away); **Refuser** and **À retravailler**
+show the decision (its buttons go away), then hands over the body and the link
+of an item that has an http(s) `payload.url` (see the approval cycle);
+**Refuser** and **À retravailler**
 ask for the reason or the comment, which the next text message answers.
 Failure alerts stay plain text.
 
