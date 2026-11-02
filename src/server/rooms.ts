@@ -78,6 +78,8 @@ const agentSchema = z.strictObject({
   onApproval: z.enum(["task"]).optional(),
   /** "run": a message from another agent (hq_message) wakes it at once. */
   onMessage: z.enum(["run"]).optional(),
+  /** "summary": the final text of each run that ends well is sent to Telegram. */
+  notifyRuns: z.enum(["summary"]).optional(),
 });
 
 export const roomFileSchema = z.strictObject({
@@ -118,6 +120,8 @@ export type Agent = {
   onApproval: "task" | null;
   /** "run": a message addressed to the agent wakes it (see wakeAgents). */
   onMessage: "run" | null;
+  /** "summary": the summary of each run that ends `done` is sent to Telegram. */
+  notifyRuns: "summary" | null;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -227,6 +231,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       sprite,
       onApproval: agent.onApproval ?? null,
       onMessage: agent.onMessage ?? null,
+      notifyRuns: agent.notifyRuns ?? null,
     };
   });
 

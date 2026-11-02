@@ -31,6 +31,11 @@ export const homeSettingsSchema = z.looseObject({
       hour: z.number().int().min(0).max(23).default(1),
     })
     .optional(),
+  /**
+   * Approval types sent to Telegram in full (header and body, cut in messages
+   * of 4000 characters, the buttons under the last one) instead of the short alert.
+   */
+  notifyTypes: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,62}$/, "an approval type in snake_case")).default([]),
 });
 
 export type ExportSettings = { dir: string; hour: number };
@@ -57,6 +62,20 @@ function readHomeSettings(home: string): z.infer<typeof homeSettingsSchema> | nu
 export function readExportSettings(home: string): ExportSettings | null {
   const settings = readHomeSettings(home)?.export;
   return settings ? { dir: path.resolve(home, settings.dir), hour: settings.hour } : null;
+}
+
+/**
+ * The approval types sent in full on Telegram (`notifyTypes` in myhq.json),
+ * none when the file or the key is absent. Never throws: an invalid file is
+ * logged and the alerts stay short.
+ */
+export function readNotifyTypes(home: string): string[] {
+  try {
+    return readHomeSettings(home)?.notifyTypes ?? [];
+  } catch (error) {
+    console.error(`[notify] ${(error as Error).message}`);
+    return [];
+  }
 }
 
 /** The language of the home (`language` in myhq.json), `en` when the file or the key is absent. Throws when invalid. */

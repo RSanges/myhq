@@ -143,6 +143,7 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
     sprite: null,
     onApproval: null,
     onMessage: null,
+    notifyRuns: null,
   };
 }
 

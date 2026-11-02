@@ -7,7 +7,9 @@ import { getConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
+import { readNotifyTypes } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
+import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
@@ -370,7 +372,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       }
       storeEvent(db, run, event);
       if (event.type === "tool_result") {
-        void notifyPendingApprovals(db, p.send);
+        void notifyPendingApprovals(db, p.send, readNotifyTypes(config.home));
         wake(p);
       }
     }
@@ -430,8 +432,12 @@ async function execute(p: ExecuteParams): Promise<void> {
   })();
 
   wake(p);
-  await notifyPendingApprovals(db, p.send);
+  await notifyPendingApprovals(db, p.send, readNotifyTypes(config.home));
   if (status === "failed") {
     await p.send(strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }));
+  }
+  // A brief or a recap agent delivers its text this way: its summary is the message.
+  if (status === "done" && agent.notifyRuns === "summary") {
+    for (const part of toTelegramMessages(summary)) await p.send(part);
   }
 }
