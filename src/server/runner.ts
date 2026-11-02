@@ -7,7 +7,7 @@ import { getConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
-import { notify, notifyPendingApprovals } from "./notify";
+import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 
 export const startRunSchema = z.strictObject({
@@ -22,7 +22,7 @@ export const DEFAULT_TASK = "Do the routine work described in your role.";
 export type RunnerDeps = {
   config?: HqConfig;
   engine?: Engine;
-  send?: (text: string) => Promise<boolean>;
+  send?: Send;
 };
 
 type ActiveRun = { controller: AbortController; reason: "timeout" | null };
@@ -189,7 +189,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     .immediate();
 
   const prompt = buildPrompt({ room, agent, runId: run.id, task, mailbox });
-  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? notify }).catch((error) => {
+  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert }).catch((error) => {
     console.error(`[runner] run #${run.id} crashed`, error);
   });
   return run;
@@ -203,7 +203,7 @@ type ExecuteParams = {
   agent: Agent;
   run: RunRow;
   prompt: string;
-  send: (text: string) => Promise<boolean>;
+  send: Send;
 };
 
 function storeEvent(db: Db, run: RunRow, event: RunEvent): void {
