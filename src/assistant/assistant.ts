@@ -7,10 +7,10 @@ import type { Db, RunRow } from "../server/db";
 import { HqError } from "../server/errors";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
-import { schedulerInfo } from "../server/routines";
+import { listFirings, schedulerInfo, setArmed } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
 import { getUsage } from "../server/usage";
-import { formatCost } from "../ui/format";
+import { formatCost, formatDateTime } from "../ui/format";
 import { branchHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
@@ -18,6 +18,7 @@ import { askChat, chatEnv, type ChatRunner } from "./chat";
 import {
   CORE_COMMANDS,
   isCoreCommand,
+  parseAgentArgs,
   parseApproveArgs,
   parseCommand,
   parseNoteArgs,
@@ -271,6 +272,17 @@ export class Assistant {
       }
       case "status":
         return this.reply(this.statusText());
+      case "arm":
+      case "disarm": {
+        const parsed = parseAgentArgs(args);
+        if (!parsed) return this.reply(t.usage[name]);
+        try {
+          const armed = setArmed(this.deps.config, this.deps.db, parsed.room, parsed.agent, name === "arm");
+          return this.reply(t.armed({ ...parsed, armed }));
+        } catch (error) {
+          return this.reply(this.errorText(error));
+        }
+      }
     }
   }
 
@@ -297,15 +309,38 @@ export class Assistant {
     const usage = getUsage(this.deps.db, this.deps.config.maxRunsPerDay, this.deps.config.weeklyBudgetUsd);
     const state = getState(this.deps.db, loadHome(this.deps.config.home), schedulerInfo(this.deps.config));
     const agents = state.rooms.flatMap((room) =>
-      room.agents.map((agent) => t.agent({ room: room.name, agent: agent.name, state: strings.team.state[agent.state] })),
+      room.agents.map((agent) => {
+        const line = t.agent({ room: room.name, agent: agent.name, state: strings.team.state[agent.state] });
+        if (agent.routines.length === 0) return line;
+        const next = agent.routines
+          .map((routine) => routine.nextAt)
+          .filter((at): at is string => at !== null)
+          .sort()[0];
+        return line + t.routines({ armed: agent.armed, next: next ? formatDateTime(next) : null });
+      }),
     );
+    const firings = listFirings(this.deps.db, 5).map((firing) =>
+      t.firing({
+        at: formatDateTime(firing.scheduledAt),
+        room: firing.room,
+        agent: firing.agentId,
+        outcome: strings.routines.outcome[firing.outcome] ?? firing.outcome,
+        runId: firing.runId,
+      }),
+    );
+    const budget = usage.budget;
     return [
       t.today(usage.today.runs, formatCost(usage.today.costUsd)),
       t.week(usage.week.runs, formatCost(usage.week.costUsd)),
+      ...(budget
+        ? [t.budget(Math.round(budget.share * 100), formatCost(budget.spentUsd), formatCost(budget.weeklyUsd))]
+        : []),
       t.cap(usage.cap.remaining, usage.cap.maxRunsPerDay),
+      t.scheduler(state.scheduler),
       "",
       t.agentsTitle,
       ...(agents.length > 0 ? agents : [t.noAgent]),
+      ...(firings.length > 0 ? ["", t.firingsTitle, ...firings] : []),
     ].join("\n");
   }
 

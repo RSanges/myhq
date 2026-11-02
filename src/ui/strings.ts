@@ -238,13 +238,15 @@ export const strings = {
       reject: "Refuser un item : /reject <id> <motif>",
       revise: "Renvoyer un item : /revise <id> <commentaire>",
       run: "Lancer un tour : /run <salle>/<agent> [tâche]",
-      status: "Tours, coût et état des agents",
+      status: "Tours, coût, routines et état des agents",
+      arm: "Armer les routines d'un agent : /arm <salle>/<agent>",
+      disarm: "Désarmer les routines d'un agent : /disarm <salle>/<agent>",
     } as Record<string, string>,
     welcome: (extensionCommands: string[]) =>
       [
         "Je suis là. Parle-moi normalement, par écrit ou en vocal.",
         "/new pour repartir de zéro.",
-        "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status.",
+        "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status, /arm, /disarm.",
         ...(extensionCommands.length > 0 ? [`Autres commandes : ${extensionCommands.map((c) => `/${c}`).join(", ")}.`] : []),
       ].join("\n"),
     newConversation: "Nouvelle conversation. Je repars de zéro.",
@@ -256,7 +258,11 @@ export const strings = {
       reject: "Usage : /reject <id> <motif>",
       revise: "Usage : /revise <id> <commentaire>",
       run: "Usage : /run <salle>/<agent> [tâche]",
+      arm: "Usage : /arm <salle>/<agent>",
+      disarm: "Usage : /disarm <salle>/<agent>",
     },
+    armed: (p: { room: string; agent: string; armed: boolean }) =>
+      p.armed ? `Routines de ${p.room} / ${p.agent} armées.` : `Routines de ${p.room} / ${p.agent} désarmées.`,
     pendingEmpty: "Rien n'attend ta validation.",
     pendingTitle: (count: number) => (count === 1 ? "1 item attend ta validation :" : `${count} items attendent ta validation :`),
     pendingLine: (p: { id: number; room: string; agent: string; title: string }) =>
@@ -277,7 +283,20 @@ export const strings = {
       cap: (remaining: number, max: number) => `Tours restants aujourd'hui : ${remaining} sur ${max}`,
       agentsTitle: "Agents :",
       agent: (p: { room: string; agent: string; state: string }) => `${p.room} / ${p.agent} : ${p.state}`,
+      routines: (p: { armed: boolean; next: string | null }) =>
+        `, ${p.armed ? "armé" : "désarmé"}${p.next ? `, prochain ${p.next}` : ""}`,
       noAgent: "Aucun agent.",
+      budget: (percent: number, spent: string, budget: string) =>
+        `Budget de la semaine : ${percent} % (${spent} sur ${budget})`,
+      scheduler: (p: { enabled: boolean; running: boolean; timeZone: string }) =>
+        p.running
+          ? `Planificateur : actif (${p.timeZone})`
+          : p.enabled
+            ? `Planificateur : activé, tenu par un autre processus (${p.timeZone})`
+            : "Planificateur : éteint (HQ_SCHEDULER=off)",
+      firingsTitle: "Dernières routines :",
+      firing: (p: { at: string; room: string; agent: string; outcome: string; runId: number | null }) =>
+        `${p.at} ${p.room} / ${p.agent} : ${p.outcome}${p.runId !== null ? ` (tour #${p.runId})` : ""}`,
     },
     chat: {
       notConfigured: "La conversation n'est pas configurée (section chat de assistant.json).",

@@ -266,6 +266,40 @@ test("core commands: approve, reject, revise, run and status", async () => {
   await fake.close();
 });
 
+test("/arm and /disarm change the armed state, /status shows it with the scheduler, budget and journal", async () => {
+  const config = makeHome(
+    { weeklyBudgetUsd: 10 },
+    {
+      name: "demo",
+      targetRepo: "../demo-project",
+      agents: [
+        { id: "scout", name: "Scout", role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"], cron: "0 7 * * *" },
+      ],
+    },
+  );
+  const { db, fake, assistant } = await setup({ config });
+  db.prepare(
+    "INSERT INTO routine_firings (room, agent_id, cron, scheduled_at, outcome, created_at) VALUES ('demo', 'scout', '0 7 * * *', ?, 'skipped_unarmed', ?)",
+  ).run(new Date().toISOString(), new Date().toISOString());
+  await handle(assistant, message("/arm"));
+  await handle(assistant, message("/arm demo/nobody"));
+  await handle(assistant, message("/arm demo/scout"));
+  await handle(assistant, message("/status"));
+  await handle(assistant, message("/disarm demo/scout"));
+  const sent = fake.sent();
+  assert.equal(sent[0], "Usage : /arm <salle>/<agent>");
+  assert.equal(sent[1], "Agent introuvable.");
+  assert.equal(sent[2], "Routines de demo / scout armées.");
+  assert.match(sent[3]!, /demo \/ Scout : Inactif, armé, prochain /);
+  assert.match(sent[3]!, /Planificateur : éteint \(HQ_SCHEDULER=off\)/);
+  assert.match(sent[3]!, /Budget de la semaine : 0 %/);
+  assert.match(sent[3]!, /Dernières routines :\n.* demo \/ scout : Sautée, désarmée/);
+  assert.equal(sent[4], "Routines de demo / scout désarmées.");
+  const row = db.prepare("SELECT armed FROM agents WHERE room = 'demo' AND id = 'scout'").get() as { armed: number };
+  assert.equal(row.armed, 0);
+  await fake.close();
+});
+
 test("/run starts a run of the agent", async () => {
   const config = makeHome();
   const db = getDbAt(config.dbPath);
@@ -454,7 +488,7 @@ test("end to end: a core command, an extension command and a button press, throu
   const menu = callsOf(fake, "setMyCommands")[0]!.params.commands as { command: string }[];
   assert.deepEqual(
     menu.map((c) => c.command),
-    ["start", "new", "pending", "approve", "reject", "revise", "run", "status", "echo"],
+    ["start", "new", "pending", "approve", "reject", "revise", "run", "status", "arm", "disarm", "echo"],
   );
 
   fake.push(message("/pending"));

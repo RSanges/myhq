@@ -8,7 +8,17 @@ export function parseCommand(text: string): ParsedCommand | null {
   return { name: match[1]!.toLowerCase(), args: (match[2] ?? "").trim() };
 }
 
-export type CoreCommandName = "start" | "new" | "pending" | "approve" | "reject" | "revise" | "run" | "status";
+export type CoreCommandName =
+  | "start"
+  | "new"
+  | "pending"
+  | "approve"
+  | "reject"
+  | "revise"
+  | "run"
+  | "status"
+  | "arm"
+  | "disarm";
 export const CORE_COMMANDS: readonly CoreCommandName[] = [
   "start",
   "new",
@@ -18,6 +28,8 @@ export const CORE_COMMANDS: readonly CoreCommandName[] = [
   "revise",
   "run",
   "status",
+  "arm",
+  "disarm",
 ];
 
 export function isCoreCommand(name: string): name is CoreCommandName {
@@ -44,4 +56,10 @@ export function parseRunArgs(args: string): { room: string; agent: string; task?
   if (!match) return null;
   const task = match[3]?.trim();
   return { room: match[1]!, agent: match[2]!, ...(task ? { task } : {}) };
+}
+
+/** `/arm room/agent` and `/disarm room/agent`. */
+export function parseAgentArgs(args: string): { room: string; agent: string } | null {
+  const parsed = parseRunArgs(args);
+  return parsed && parsed.task === undefined ? { room: parsed.room, agent: parsed.agent } : null;
 }
