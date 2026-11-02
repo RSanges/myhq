@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { decideApproval, errorText } from "./api";
+import { HandoverControls } from "./copy-button";
 import { formatDateTime } from "./format";
 import { Markdown } from "./markdown-view";
 import { payloadUrl, type Action } from "./model";
@@ -27,8 +28,7 @@ function ApprovalHeader({ approval }: { approval: Approval }) {
   );
 }
 
-function ApprovalContent({ approval }: { approval: Approval }) {
-  const url = payloadUrl(approval.payload);
+function ApprovalContent({ approval, showControls = true }: { approval: Approval; showControls?: boolean }) {
   return (
     <>
       {approval.body.trim() === "" ? (
@@ -36,23 +36,20 @@ function ApprovalContent({ approval }: { approval: Approval }) {
       ) : (
         <Markdown source={approval.body} />
       )}
-      {url && (
-        <p className="text-sm">
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="break-all text-accent underline underline-offset-2"
-          >
-            {strings.desk.openLink}: {url}
-          </a>
-        </p>
-      )}
+      {showControls && <HandoverControls approval={approval} prominent={false} />}
     </>
   );
 }
 
-function PendingCard({ approval, dispatch }: { approval: Approval; dispatch: Dispatch }) {
+function PendingCard({
+  approval,
+  dispatch,
+  onApproved,
+}: {
+  approval: Approval;
+  dispatch: Dispatch;
+  onApproved: (approval: Approval) => void;
+}) {
   const [mode, setMode] = useState<NoteMode | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,7 +59,9 @@ function PendingCard({ approval, dispatch }: { approval: Approval; dispatch: Dis
     setBusy(true);
     setError(null);
     try {
-      dispatch({ type: "approval", approval: await decideApproval(approval.id, decision) });
+      const decided = await decideApproval(approval.id, decision);
+      dispatch({ type: "approval", approval: decided });
+      if (decided.status === "approved") onApproved(decided);
     } catch (failure) {
       setError(errorText(failure));
       setBusy(false);
@@ -158,6 +157,7 @@ function HistoryCard({ approval }: { approval: Approval }) {
         <Badge tone={decisionTone[approval.status]}>{strings.desk.decision[approval.status]}</Badge>
         {approval.decidedAt && <span className="text-muted">{strings.desk.decidedOn(formatDateTime(approval.decidedAt))}</span>}
       </p>
+      {approval.status === "approved" && <HandoverControls approval={approval} prominent />}
       {approval.decisionNote && (
         <p className="break-words rounded-md bg-soft px-3 py-2 text-sm">
           <span className="font-medium">{strings.desk.noteTitle} : </span>
@@ -167,7 +167,7 @@ function HistoryCard({ approval }: { approval: Approval }) {
       <details>
         <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
         <div className="mt-2 space-y-3">
-          <ApprovalContent approval={approval} />
+          <ApprovalContent approval={approval} showControls={approval.status !== "approved"} />
         </div>
       </details>
     </li>
@@ -186,6 +186,10 @@ export function Desk({
   dispatch: Dispatch;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
+  // An approved item that points to a thread is now the user's to post: show it in the history.
+  const showHandover = (approval: Approval) => {
+    if (payloadUrl(approval.payload)) setTab("history");
+  };
   const tabClass = (active: boolean) =>
     `min-h-10 rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
       active ? "bg-soft" : "text-muted hover:bg-soft"
@@ -224,7 +228,7 @@ export function Desk({
           ) : (
             <ul className="space-y-3">
               {pending.map((approval) => (
-                <PendingCard key={approval.id} approval={approval} dispatch={dispatch} />
+                <PendingCard key={approval.id} approval={approval} dispatch={dispatch} onApproved={showHandover} />
               ))}
             </ul>
           )

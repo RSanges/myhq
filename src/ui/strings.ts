@@ -28,6 +28,13 @@ export const strings = {
     submittedBy: (agent: string, room: string) => `Apporté par ${agent} (${room})`,
     emptyBody: "(sans contenu)",
     openLink: "Ouvrir le lien",
+    copy: {
+      idle: "Copier le texte",
+      copied: "Copié !",
+      manual: "Sélectionné, copie-le (Ctrl+C)",
+    },
+    copyManualLabel: "Texte à copier",
+    handover: "Copié ? Colle-le dans le fil.",
     approve: "Approuver",
     reject: "Refuser",
     revise: "À retravailler",
