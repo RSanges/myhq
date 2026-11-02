@@ -153,6 +153,12 @@ lives in `.env.local` and never in `room.json`:
 
 - Only `env` values and `args` are expanded. `command`, `url`, `headers` and
   every other field are passed as written.
+- The run's own variables are available too, and win over the app's
+  environment: `${HQ_DB_PATH}` (absolute path of `data/hq.db`),
+  `${HQ_RUN_ID}`, `${HQ_AGENT_ID}` and `${HQ_ROOM}`, the values MyHQ gives the
+  `hq` server. A private server can then read the database (for example to
+  check that an item is approved before acting on it) or tag its own journal
+  with the run: `"env": { "HQ_DB_PATH": "${HQ_DB_PATH}", "HQ_RUN_ID": "${HQ_RUN_ID}" }`.
 - A variable that is not set, or is empty, fails the run before it launches,
   with an error naming the variable (`HQ_EXT_REDDIT_CLIENT_ID` here). It is
   never replaced by an empty string.

@@ -226,3 +226,35 @@ test("a run fails before launch when an MCP placeholder variable is missing, and
   // The agent's own environment still never carries the HQ_* variables.
   assert.equal(seen[0]!.env.HQ_EXT_TEST_CLIENT_ID, undefined);
 });
+
+test("an MCP server of the home receives the run's own variables through placeholders", async () => {
+  const roomJson = {
+    name: "demo",
+    targetRepo: "../demo-project",
+    agents: [
+      {
+        id: "scout",
+        name: "Scout",
+        role: "roles/scout.md",
+        model: "haiku",
+        allowedTools: ["mcp__hq__*"],
+        mcpServers: {
+          mail: {
+            command: "node",
+            args: ["server.mjs", "--run=${HQ_RUN_ID}"],
+            env: { DB: "${HQ_DB_PATH}", RUN: "${HQ_RUN_ID}", WHO: "${HQ_ROOM}/${HQ_AGENT_ID}" },
+          },
+        },
+      },
+    ],
+  };
+  const config = makeHome({}, roomJson);
+  const seen: RunInput[] = [];
+  const run = startRun({ room: "demo", agent: "scout" }, { config, engine: fakeEngine(doneEvents, undefined, seen), send: async () => true });
+  assert.equal((await waitForRun(getDbAt(config.dbPath), run.id)).status, "done");
+  const mcp = JSON.parse(fs.readFileSync(seen[0]!.mcpConfigPath, "utf8")) as {
+    mcpServers: { mail: { args: string[]; env: Record<string, string> } };
+  };
+  assert.deepEqual(mcp.mcpServers.mail.env, { DB: config.dbPath, RUN: String(run.id), WHO: "demo/scout" });
+  assert.deepEqual(mcp.mcpServers.mail.args, ["server.mjs", `--run=${run.id}`]);
+});

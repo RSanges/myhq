@@ -88,7 +88,9 @@ export function expandMcpServers(
 /**
  * Writes the per-run `--mcp-config` file: the HQ server plus the agent's own
  * servers, with their `${NAME}` placeholders expanded from `env` (the app's
- * environment). Throws before writing anything when a variable is missing.
+ * environment) and from the run's own variables (`hqEnv`: HQ_DB_PATH,
+ * HQ_RUN_ID, HQ_AGENT_ID, HQ_ROOM), which win. Throws before writing anything
+ * when a variable is missing.
  */
 export function writeMcpConfig(params: {
   file: string;
@@ -100,7 +102,7 @@ export function writeMcpConfig(params: {
   const hq = hqMcpServerCommand(params.repoRoot);
   const config = {
     mcpServers: {
-      ...expandMcpServers(params.extraServers, params.env ?? process.env),
+      ...expandMcpServers(params.extraServers, { ...(params.env ?? process.env), ...params.hqEnv }),
       hq: { type: "stdio", command: hq.command, args: hq.args, env: params.hqEnv },
     },
   };
