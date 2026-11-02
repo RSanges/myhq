@@ -110,10 +110,12 @@ const NESTED_SESSION_VAR =
 const KEPT_CLAUDE_VARS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_GIT_BASH_PATH"]);
 
 /**
- * Environment of an agent process. The app's own variables (HQ_*, MYHQ_*,
- * Telegram token included) never reach it. When MyHQ itself was started from
- * inside a Claude Code session, the variables of that session are dropped too,
- * so that the agent authenticates with the user's own CLI login.
+ * Environment of a `claude -p` process (agent run or assistant chat). The
+ * app's own variables (HQ_*, MYHQ_*, Telegram token included) never reach it.
+ * When MyHQ itself was started from inside a Claude Code session, the
+ * variables of that session are dropped too, so that the agent authenticates
+ * with the user's own CLI login. HQ_CLAUDE_OAUTH_TOKEN, when set, becomes the
+ * child's CLAUDE_CODE_OAUTH_TOKEN (a long-lived subscription token).
  */
 export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
   const nested = Boolean(base.CLAUDECODE);
@@ -123,6 +125,8 @@ export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
     if (nested && NESTED_SESSION_VAR.test(key) && !KEPT_CLAUDE_VARS.has(key)) continue;
     env[key] = value;
   }
+  const token = base.HQ_CLAUDE_OAUTH_TOKEN?.trim();
+  if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
   return { ...env, ...hqEnv };
 }
 

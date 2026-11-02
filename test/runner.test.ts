@@ -178,3 +178,11 @@ test("a nested Claude Code session does not leak into the agent", () => {
   );
   assert.deepEqual(env, { PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "user" });
 });
+
+test("HQ_CLAUDE_OAUTH_TOKEN reaches the agent as CLAUDE_CODE_OAUTH_TOKEN, and nothing else does", () => {
+  const env = agentEnv(
+    { PATH: "/bin", HQ_CLAUDE_OAUTH_TOKEN: " long-lived ", CLAUDE_CODE_OAUTH_TOKEN: "other" },
+    { HQ_RUN_ID: "3" },
+  );
+  assert.deepEqual(env, { PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "long-lived", HQ_RUN_ID: "3" });
+});
