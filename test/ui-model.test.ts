@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   agentState,
+  approvalTitle,
   buildFeed,
   initialModel,
   payloadUrl,
@@ -298,4 +299,12 @@ test("the reducer keeps the scheduler, the journal and the armed state", () => {
   model = reducer(model, { type: "routines", scheduler: { enabled: false, running: false, timeZone: "UTC" }, firings: [firing] });
   assert.equal(model.scheduler.enabled, false);
   assert.deepEqual(model.firings, [firing]);
+});
+
+test("a room proposal shows its title through the UI strings, whatever language the agent used", () => {
+  const proposal = { type: "room_proposal", title: "Room proposal: acme", payload: { room: { name: "acme" } } };
+  assert.equal(approvalTitle(proposal), "Proposition de salle : acme");
+  assert.equal(approvalTitle({ ...proposal, title: "Proposition de salle : acme" }), "Proposition de salle : acme");
+  assert.equal(approvalTitle({ ...proposal, payload: {} }), "Room proposal: acme");
+  assert.equal(approvalTitle({ type: "pull_request", title: "Fix it", payload: { room: { name: "acme" } } }), "Fix it");
 });

@@ -30,6 +30,12 @@ const submittedSchema = z.strictObject({
       template: templateNameSchema,
       values: roleValuesSchema,
       notes: z.string().trim().max(20_000).optional(),
+      /**
+       * The whole role prompt, written by the agent in the language of the
+       * home from the template: it replaces the instantiated template (and
+       * `notes`, which then belong inside it).
+       */
+      content: z.string().trim().min(1).max(40_000).optional(),
     }),
   ),
   claudeMd: z.string().trim().min(1).max(20_000),
@@ -89,7 +95,15 @@ export function normalizeRoomProposal(
     } catch (error) {
       throw new Error(`invalid room_proposal payload: roles.${id}: ${(error as Error).message}`);
     }
-    if (role.notes) text = `${text.trimEnd()}\n\n## Project notes\n\n${role.notes}\n`;
+    if (role.content !== undefined) {
+      const left = [...new Set(role.content.match(/\{\{\w+\}\}/g) ?? [])];
+      if (left.length > 0) {
+        throw new Error(`invalid room_proposal payload: roles.${id}: content still has placeholder(s): ${left.join(", ")}`);
+      }
+      text = `${role.content}\n`;
+    } else if (role.notes) {
+      text = `${text.trimEnd()}\n\n## Project notes\n\n${role.notes}\n`;
+    }
     content[id] = { template: role.template, content: replaceDashes(text) };
   }
 

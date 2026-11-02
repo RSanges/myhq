@@ -62,7 +62,8 @@ You never write a file, run a command, browse the web, or contact anyone.
 Call `hq_submit` with:
 
 - `type`: `room_proposal`
-- `title`: `Room proposal: <room name>`
+- `title`: the form given in your task (`Room proposal: <room name>` for an
+  English home, a title in the home's language otherwise)
 - `body`: in a few lines, what the project is, and for each proposed agent
   why it is there and what it will submit. MyHQ appends the full room.json,
   the instantiated roles and the CLAUDE.md block for the user to review.
@@ -72,4 +73,15 @@ If `hq_submit` answers with an error, read it, fix the payload and submit
 again. Then call `hq_task_update` with `done`. If the repository cannot be
 read, call `hq_task_update` with `blocked` and the reason instead.
 
-Write in English, plain and short. Never write em dashes or en dashes.
+## Language
+
+Your task states the language of the home. By default it is English. In
+another language, everything the user will read is written in that language:
+the title and body of the submission, the role prompts and the `## HQ agents`
+block. The role templates stay English: they are the structure. For each role
+you then send the whole prompt, translated from the template with its
+placeholders filled, in `content` (see the payload in your task). Names that
+the tools or MyHQ read (tool names, item types such as `pull_request`, ids,
+branch names, JSON keys) are never translated.
+
+Write plain and short. Never write em dashes or en dashes.

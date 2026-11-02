@@ -4,8 +4,10 @@ import { z } from "zod";
 import { getConfig, type HqConfig } from "./config";
 import type { RunRow, TaskRow } from "./db";
 import { HqError } from "./errors";
+import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { loadHome, toPosix, type Agent, type Model, type Room } from "./rooms";
 import { launchRun, type RunnerDeps } from "./runner";
+import { strings } from "../ui/strings";
 import { listRoleTemplates, roleTemplatesDir, ROLE_PLACEHOLDERS } from "./templates";
 
 /**
@@ -39,6 +41,32 @@ export function suggestRoomName(folder: string): string {
   return slug || "project";
 }
 
+/** The English name of a BCP 47 tag ("fr" gives "French"), or the tag itself when unknown. */
+function languageName(tag: string): string {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "language" }).of(tag) ?? tag;
+  } catch {
+    return tag;
+  }
+}
+
+/** The part of the run prompt that fixes the language of everything the agent writes. */
+function languageLines(language: string, roomName: string): string[] {
+  const title = strings.onboarding.proposalTitle(language, "<room name>");
+  const name = languageName(language);
+  if (language.toLowerCase().split("-")[0] === DEFAULT_LANGUAGE) {
+    return [
+      `Language of this home: ${language} (${name}). Write the proposal title, the body, the role values and the "HQ agents" block in ${name}.`,
+      `Title of the hq_submit item: "${title}" (for example "${strings.onboarding.proposalTitle(language, roomName)}").`,
+    ];
+  }
+  return [
+    `Language of this home: ${language} (${name}). Write everything the user will read in ${name}: the title and the body of the hq_submit item, the values of the roles, and the "HQ agents" block of claudeMd.`,
+    `Title of the hq_submit item: it must be exactly in this form: "${title}" (for example "${strings.onboarding.proposalTitle(language, roomName)}").`,
+    `The role templates are in English and stay the structural source. For every role, take its template, fill the placeholders, translate the whole prompt into ${name} keeping its sections, its rules and its tool and type names (hq_submit, hq_task_update, pull_request, ids, branch names) unchanged, and send the result as "content". Put any "notes" inside it. Never leave a {{placeholder}} in it.`,
+  ];
+}
+
 /** The user's message of the onboarding run: the target, the templates and the payload to submit. */
 export function buildOnboardingPrompt(p: {
   runId: number;
@@ -46,10 +74,13 @@ export function buildOnboardingPrompt(p: {
   targetRepo: string;
   roomName: string;
   existingRooms: string[];
+  /** BCP 47 tag of the home (`language` in myhq.json). */
+  language?: string;
   templatesDir: string;
   mailbox: TaskRow[];
 }): string {
   const templates = listRoleTemplates(p.templatesDir);
+  const language = p.language ?? DEFAULT_LANGUAGE;
   const lines = [
     `Onboarding run #${p.runId} of MyHQ.`,
     "",
@@ -65,6 +96,8 @@ export function buildOnboardingPrompt(p: {
     `Each role is a template plus values for its placeholders: ${ROLE_PLACEHOLDERS.join(", ")}.`,
     "A value is a string, or a list of strings that becomes a Markdown list; autonomy is A, B or C.",
     "",
+    ...languageLines(language, p.roomName),
+    "",
     "Payload of hq_submit (type room_proposal):",
     "{",
     '  "room": { "name": "<room>", "targetRepo": "<as above>", "agents": [',
@@ -73,7 +106,8 @@ export function buildOnboardingPrompt(p: {
     '      "worktree": "<developers only>", "workingDirectory": "<same as worktree>", "disallowedTools": ["..."] }',
     "  ] },",
     '  "roles": { "<agent id>": { "template": "<template name>", "values": { "project": "...", "targets": ["..."],',
-    '    "audience": "...", "features": ["..."], "autonomy": "A|B|C", "guardrails": ["..."] }, "notes": "<optional extra Markdown>" } },',
+    '    "audience": "...", "features": ["..."], "autonomy": "A|B|C", "guardrails": ["..."] }, "notes": "<optional extra Markdown>",',
+    '    "content": "<whole role prompt, only when the language is not English>" } },',
     '  "claudeMd": "## HQ agents\\n..."',
     "}",
     "Leave out \"role\" and \"armed\": MyHQ writes roles/<id>.md and leaves every routine disarmed.",
@@ -123,6 +157,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
   if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
     throw new HqError("TARGET_NOT_FOUND", 404, `No directory at ${target}.`);
   }
+  const language = readHomeLanguage(config.home);
   const home = loadHome(config.home);
   const existingRooms = [...home.rooms.map((r) => r.name), ...home.invalid.map((r) => path.basename(r.dir))];
   const room: Room = { name: ONBOARDING_ROOM, dir: config.home, targetRepo: target, agents: [] };
@@ -143,6 +178,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
         targetRepo,
         roomName: suggestRoomName(path.basename(target)),
         existingRooms,
+        language,
         templatesDir: roleTemplatesDir(config.repoRoot),
         mailbox,
       }),

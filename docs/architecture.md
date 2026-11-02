@@ -269,7 +269,11 @@ is itself submitted to the user's approval.
    inside its working directories only, and nothing outside them), and the
    `hq_submit` and `hq_task_update` tools. The run prompt gives the target,
    the rooms that already exist, the templates (`templates/roles/*.md`) and
-   the payload to submit:
+   the payload to submit. It also states the language of the home (`language`
+   in `myhq.json`, `en` by default): the agent writes the proposal, the role
+   prompts and the "HQ agents" block in that language, translating the English
+   templates (the translated prompt travels as `content` of the role), and
+   titles the item « Proposition de salle : ... » for a French home:
 
    ```json
    {

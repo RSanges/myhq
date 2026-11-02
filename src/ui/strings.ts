@@ -70,7 +70,15 @@ export const strings = {
     decidedOn: (date: string) => `le ${date}`,
     noteTitle: "Note",
     submittedOn: (date: string) => `Soumis le ${date}`,
+    /** Title of a room proposal on the desk, whatever title the agent gave it. */
+    roomProposalTitle: (room: string) => `Proposition de salle : ${room}`,
     openContent: "Voir le contenu",
+  },
+  /** What the onboarding run asks its agent to write, per language of the home. */
+  onboarding: {
+    /** Title of the room proposal item: French for a French home, English otherwise. */
+    proposalTitle: (language: string, room: string) =>
+      language.toLowerCase().split("-")[0] === "fr" ? `Proposition de salle : ${room}` : `Room proposal: ${room}`,
   },
   team: {
     title: "L'équipe",

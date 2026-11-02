@@ -335,13 +335,15 @@ without a section, the feature is off. Other keys are ignored.
 
 ```json
 {
+  "language": "fr",
   "export": { "dir": "../notes/agents-journal", "hour": 6 }
 }
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
-| `export.dir` | yes | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
+| `language` | no | Language of the texts the agents write for this home, as a BCP 47 tag (`fr`, `en`, `pt-BR`). Default: `en`. The onboarding run tells its agent to write the proposal, the role prompts and the "HQ agents" block in it (the English templates stay the structural source, the agent translates them), and, for a French home, to title the proposal « Proposition de salle : <name> ». Roles you write by hand are yours to write in any language. |
+| `export.dir` | yes (with `export`) | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
 
 The file is read when the export is checked (every ten minutes), so a change

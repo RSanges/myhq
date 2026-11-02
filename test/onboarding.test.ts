@@ -250,3 +250,49 @@ test("a real onboarding stream: read-only tools, one submission, and a payload M
   assert.doesNotMatch(written, DASHES, "no em or en dash reaches the home");
   assert.doesNotMatch(written, /\{\{\w+\}\}/);
 });
+
+test("the onboarding prompt states the language of the home and the title to use", async () => {
+  const run = async (language: string | null) => {
+    const { config, db, targetRepo } = setup();
+    if (language) fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ language }));
+    const seen: RunInput[] = [];
+    const started = startOnboarding(
+      { path: targetRepo },
+      { config, engine: submittingEngine(db, proposal(targetRepo), seen), send: async () => true },
+    );
+    await waitForRun(db, started.id);
+    return seen[0]!.prompt;
+  };
+
+  const fr = await run("fr");
+  assert.match(fr, /Language of this home: fr \(French\)/);
+  assert.match(fr, /the "HQ agents" block of claudeMd/);
+  assert.match(fr, /must be exactly in this form: "Proposition de salle : <room name>"/);
+  assert.match(fr, /translate the whole prompt into French/);
+  assert.match(fr, /"content": "<whole role prompt/);
+
+  for (const prompt of [await run("en"), await run(null)]) {
+    assert.match(prompt, /Language of this home: en \(English\)/);
+    assert.match(prompt, /Title of the hq_submit item: "Room proposal: <room name>"/);
+    assert.doesNotMatch(prompt, /Proposition de salle/);
+    assert.doesNotMatch(prompt, /translate the whole prompt/);
+  }
+});
+
+test("a role sent as content (translated by the agent) replaces the instantiated template", () => {
+  const { db, targetRepo, ctx } = setup();
+  const valid = proposal(targetRepo);
+  const submit = (content: string) =>
+    hqSubmit(db, ctx, {
+      type: "room_proposal",
+      title: "Proposition de salle : acme",
+      body: "Deux agents pour Acme.",
+      payload: { ...valid, roles: { ...valid.roles, dev: { ...valid.roles.dev, content } } },
+    });
+  assert.throws(() => submit("# Acme : développeur\n\nIl reste {{project}} ici."), /roles\.dev: content still has placeholder\(s\): \{\{project\}\}/);
+  submit("# Acme : développeur\n\nTu corriges les bugs d'Acme.");
+  const row = db.prepare("SELECT payload FROM approvals").get() as { payload: string };
+  const roles = (JSON.parse(row.payload) as { roles: Record<string, { content: string }> }).roles;
+  assert.equal(roles.dev!.content, "# Acme : développeur\n\nTu corriges les bugs d'Acme.\n");
+  assert.match(roles.watch!.content, /^# Acme: /);
+});

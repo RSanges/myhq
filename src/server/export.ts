@@ -7,11 +7,22 @@ import { HqError } from "./errors";
 import { toApproval, toMessage, toRun, type ApprovalDto, type MessageDto, type RunDto } from "./feed";
 import { addDays, dayKey, dayRange, wallTime } from "./time";
 
+export const DEFAULT_LANGUAGE = "en";
+
 /**
  * `<home>/myhq.json`: settings of the home that are not secrets. Optional;
  * other keys are ignored, so that the file can grow.
  */
 export const homeSettingsSchema = z.looseObject({
+  /**
+   * Language of the texts the agents write for this home (BCP 47 tag such as
+   * `fr` or `en`). Read by the onboarding run; defaults to English.
+   */
+  language: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "a BCP 47 language tag such as fr or en")
+    .default(DEFAULT_LANGUAGE),
   export: z
     .strictObject({
       /** Folder of the daily export, relative to the home or absolute. */
@@ -24,8 +35,8 @@ export const homeSettingsSchema = z.looseObject({
 
 export type ExportSettings = { dir: string; hour: number };
 
-/** The export settings of the home, or null when myhq.json or its `export` is absent. Throws when invalid. */
-export function readExportSettings(home: string): ExportSettings | null {
+/** The parsed myhq.json, or null when the file is absent. Throws when it is invalid. */
+function readHomeSettings(home: string): z.infer<typeof homeSettingsSchema> | null {
   const file = path.join(home, "myhq.json");
   if (!fs.existsSync(file)) return null;
   let raw: unknown;
@@ -39,8 +50,18 @@ export function readExportSettings(home: string): ExportSettings | null {
     const details = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
     throw new Error(`${file}: ${details}`);
   }
-  const settings = parsed.data.export;
+  return parsed.data;
+}
+
+/** The export settings of the home, or null when myhq.json or its `export` is absent. Throws when invalid. */
+export function readExportSettings(home: string): ExportSettings | null {
+  const settings = readHomeSettings(home)?.export;
   return settings ? { dir: path.resolve(home, settings.dir), hour: settings.hour } : null;
+}
+
+/** The language of the home (`language` in myhq.json), `en` when the file or the key is absent. Throws when invalid. */
+export function readHomeLanguage(home: string): string {
+  return readHomeSettings(home)?.language ?? DEFAULT_LANGUAGE;
 }
 
 export type DailyExport = {

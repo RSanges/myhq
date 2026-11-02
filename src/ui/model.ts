@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Agent, Approval, Firing, HqEvent, Message, Run, Scheduler, State, Usage } from "./schemas";
+import { strings } from "./strings";
 
 // Pure state of the page: a snapshot from /api/state, then upserts from the SSE
 // stream (every message is "upsert this entity by id", see docs/api.md).
@@ -307,6 +308,18 @@ export function branchHandover(approval: Pick<Approval, "type" | "title" | "payl
       `gh pr create --head ${branch} --title "${prTitle}" --body "${body}"`,
     ].join("\n"),
   };
+}
+
+/**
+ * The title shown for an item on the desk. A room proposal shows the UI string
+ * for its room, so that an English title from an older proposal still reads
+ * fine; every other item shows the title its agent gave it.
+ */
+export function approvalTitle(approval: Pick<Approval, "type" | "title" | "payload">): string {
+  if (approval.type !== "room_proposal") return approval.title;
+  const { room } = approval.payload;
+  const name = room && typeof room === "object" && "name" in room && typeof room.name === "string" ? room.name.trim() : "";
+  return name ? strings.desk.roomProposalTitle(name) : approval.title;
 }
 
 /**

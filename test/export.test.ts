@@ -4,7 +4,15 @@ import path from "node:path";
 import { test } from "node:test";
 import { getDbAt, type Db } from "../src/server/db";
 import { HqError } from "../src/server/errors";
-import { exportIfDue, exportOnDemand, readExportSettings, writeDailyExport, type DailyExport } from "../src/server/export";
+import {
+  exportIfDue,
+  exportOnDemand,
+  homeSettingsSchema,
+  readExportSettings,
+  readHomeLanguage,
+  writeDailyExport,
+  type DailyExport,
+} from "../src/server/export";
 import { makeHome } from "./helpers";
 
 function seed(db: Db) {
@@ -76,4 +84,22 @@ test("myhq.json is optional; the export is due once the hour has passed, once pe
   assert.throws(() => readExportSettings(config.home), /export\.dir/);
   fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ somethingElse: true }));
   assert.equal(readExportSettings(config.home), null);
+});
+
+test("language in myhq.json is a BCP 47 tag that defaults to en", () => {
+  const config = makeHome();
+  assert.equal(readHomeLanguage(config.home), "en");
+  assert.equal(homeSettingsSchema.parse({}).language, "en");
+  assert.equal(homeSettingsSchema.parse({ language: " fr " }).language, "fr");
+  assert.equal(homeSettingsSchema.parse({ language: "pt-BR" }).language, "pt-BR");
+  assert.equal(homeSettingsSchema.safeParse({ language: "francais!" }).success, false);
+  assert.equal(homeSettingsSchema.safeParse({ language: "" }).success, false);
+
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ somethingElse: true }));
+  assert.equal(readHomeLanguage(config.home), "en");
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ language: "fr", export: { dir: "journal" } }));
+  assert.equal(readHomeLanguage(config.home), "fr");
+  assert.deepEqual(readExportSettings(config.home), { dir: path.join(config.home, "journal"), hour: 1 });
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ language: "not a tag" }));
+  assert.throws(() => readHomeLanguage(config.home), /language/);
 });

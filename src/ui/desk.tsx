@@ -5,7 +5,7 @@ import { decideApproval, errorText } from "./api";
 import { HandoverControls } from "./copy-button";
 import { formatDateTime } from "./format";
 import { Markdown } from "./markdown-view";
-import { branchHandover, claudeMdHandover, payloadUrl, type Action } from "./model";
+import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, type Action } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
@@ -23,7 +23,7 @@ function ApprovalHeader({ approval }: { approval: Approval }) {
         <span>{strings.desk.submittedBy(approval.agentId, approval.room)}</span>
         <span>{strings.desk.submittedOn(formatDateTime(approval.createdAt))}</span>
       </p>
-      <h3 className="break-words text-base font-semibold">{approval.title}</h3>
+      <h3 className="break-words text-base font-semibold">{approvalTitle(approval)}</h3>
     </header>
   );
 }
