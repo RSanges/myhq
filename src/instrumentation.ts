@@ -4,6 +4,8 @@ export async function register() {
     const { config } = app();
     const { startScheduler } = await import("./server/routines");
     startScheduler(config);
+    const { startDailyExport } = await import("./server/export");
+    startDailyExport(config);
     // Not awaited: the server must not wait for Telegram to be ready.
     const { startAssistant } = await import("./assistant/bridge");
     void startAssistant();
