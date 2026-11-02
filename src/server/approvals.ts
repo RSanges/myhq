@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { getConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db } from "./db";
 import { HqError } from "./errors";
 import { toApproval, type ApprovalDto } from "./feed";
+import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
 
 export const decisionSchema = z
   .strictObject({
@@ -16,10 +18,18 @@ export type Decision = z.infer<typeof decisionSchema>;
 
 /**
  * Decides a pending approval. `revise` sends the item back to its agent as a
- * new task carrying the user's note. Handlers that act on an approved item
- * (publish, merge...) are not part of this slice: the item keeps its payload.
+ * new task carrying the user's note. Approving a `room_proposal` writes the
+ * room in the home first (see proposal.ts): when that fails, the item stays
+ * pending and the error is thrown. No other type is acted on: the item keeps
+ * its payload, and publishing or pushing stays the user's.
  */
-export function decideApproval(db: Db, id: number, decision: Decision): ApprovalDto {
+export function decideApproval(db: Db, id: number, decision: Decision, config?: HqConfig): ApprovalDto {
+  if (decision.decision === "approved") {
+    const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+    if (row?.status === "pending" && row.type === ROOM_PROPOSAL) {
+      applyRoomProposal(config ?? getConfig(), db, JSON.parse(row.payload) as unknown);
+    }
+  }
   return db
     .transaction(() => {
       const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;

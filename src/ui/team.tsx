@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { errorText, setArmed, startRun } from "./api";
+import { useState, type FormEvent } from "react";
+import { errorText, setArmed, startOnboarding, startRun } from "./api";
 import { formatCost, formatDateTime } from "./format";
 import { roleFileName, type Action, type AgentState, type TeamAgent } from "./model";
 import type { Scheduler } from "./schemas";
@@ -13,6 +13,65 @@ const stateTone: Record<AgentState, "ok" | "danger" | "neutral"> = {
   failed: "danger",
   idle: "neutral",
 };
+
+/** Starts the onboarding agent on a repository; its room proposal arrives on the desk. */
+function AddRoom({ dispatch }: { dispatch: (action: Action) => void }) {
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [started, setStarted] = useState<number | null>(null);
+  const t = strings.team.addRoom;
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (path.trim() === "") return;
+    setBusy(true);
+    setError(null);
+    setStarted(null);
+    try {
+      const run = await startOnboarding(path);
+      dispatch({ type: "run", run });
+      setStarted(run.id);
+      setPath("");
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details className="rounded-lg border border-line bg-card p-4">
+      <summary className="cursor-pointer text-sm font-medium">{t.title}</summary>
+      <form className="mt-3 space-y-2" onSubmit={(event) => void submit(event)}>
+        <label htmlFor="add-room-path" className="block text-sm font-medium">
+          {t.label}
+        </label>
+        <input
+          id="add-room-path"
+          className={fieldClass}
+          value={path}
+          maxLength={1000}
+          required
+          onChange={(event) => setPath(event.target.value)}
+          aria-describedby="add-room-hint"
+        />
+        <p id="add-room-hint" className="text-xs text-muted">
+          {t.hint}
+        </p>
+        <button type="submit" className={buttonClass("primary")} disabled={busy || path.trim() === ""}>
+          {busy ? t.starting : t.submit}
+        </button>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        {started !== null && !error && (
+          <p role="status" className="text-sm text-ok">
+            {t.started(started)}
+          </p>
+        )}
+      </form>
+    </details>
+  );
+}
 
 /** The agent's routines, with their next fire, and the switch that arms them. */
 function Routines({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
@@ -196,6 +255,7 @@ export function Team({
       <p role="status" className="text-sm text-muted">
         {strings.team.scheduler(scheduler)}
       </p>
+      <AddRoom dispatch={dispatch} />
       {invalidRooms.length > 0 && (
         <div className="space-y-1 rounded-md border border-warn bg-warn-soft px-3 py-2 text-sm text-warn">
           <p className="font-medium">{strings.app.invalidRoomsTitle}</p>

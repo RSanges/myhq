@@ -18,7 +18,8 @@ export type CoreCommandName =
   | "run"
   | "status"
   | "arm"
-  | "disarm";
+  | "disarm"
+  | "salle";
 export const CORE_COMMANDS: readonly CoreCommandName[] = [
   "start",
   "new",
@@ -30,6 +31,7 @@ export const CORE_COMMANDS: readonly CoreCommandName[] = [
   "status",
   "arm",
   "disarm",
+  "salle",
 ];
 
 export function isCoreCommand(name: string): name is CoreCommandName {

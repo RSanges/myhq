@@ -12,8 +12,8 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/approvals/
     const id = idSchema.safeParse(rawId);
     if (!id.success) throw new HqError("INVALID_INPUT", 400, "The approval id must be a positive integer.");
     const decision = decisionSchema.parse(await readJson(request));
-    const { db } = app();
-    return Response.json({ approval: decideApproval(db, id.data, decision) });
+    const { config, db } = app();
+    return Response.json({ approval: decideApproval(db, id.data, decision, config) });
   } catch (error) {
     return errorResponse(error);
   }

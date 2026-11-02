@@ -5,6 +5,7 @@
  * written by the runner). It reads its context from HQ_DB_PATH, HQ_RUN_ID,
  * HQ_AGENT_ID and HQ_ROOM, and writes directly to SQLite.
  */
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "../server/db";
@@ -31,7 +32,9 @@ function respond(run: () => unknown): ToolResult {
 }
 
 async function main(): Promise<void> {
-  const ctx = readContext(process.env);
+  // This file is started by path (see hqMcpServerCommand): the templates are two levels up.
+  const templatesDir = path.resolve(path.dirname(process.argv[1] ?? "."), "..", "..", "templates", "roles");
+  const ctx = { ...readContext(process.env), templatesDir };
   const db = openDb(ctx.dbPath);
   const server = new McpServer({ name: "hq", version: "0.1.0" });
 
@@ -48,7 +51,7 @@ async function main(): Promise<void> {
     "hq_submit",
     {
       description:
-        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself.",
+        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again.",
       inputSchema: inputs.hq_submit,
     },
     async (args) => respond(() => hqSubmit(db, ctx, args)),

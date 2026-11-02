@@ -308,3 +308,16 @@ export function branchHandover(approval: Pick<Approval, "type" | "title" | "payl
     ].join("\n"),
   };
 }
+
+/**
+ * The "HQ agents" block of an approved room proposal, for the project's
+ * CLAUDE.md: MyHQ never writes it in the target repository, the user adds it.
+ */
+export function claudeMdHandover(approval: Pick<Approval, "type" | "payload">): { text: string; targetRepo: string } | null {
+  if (approval.type !== "room_proposal") return null;
+  const { claudeMd, room } = approval.payload;
+  if (typeof claudeMd !== "string" || claudeMd.trim() === "") return null;
+  const targetRepo =
+    room && typeof room === "object" && "targetRepo" in room && typeof room.targetRepo === "string" ? room.targetRepo : "";
+  return { text: claudeMd, targetRepo };
+}

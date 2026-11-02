@@ -326,6 +326,60 @@ test("/run starts a run of the agent", async () => {
   await fake.close();
 });
 
+test("/salle starts an onboarding run; an approved room proposal hands over the CLAUDE.md block", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const fake = await startFakeTelegram(TOKEN);
+  const requests: unknown[] = [];
+  const assistant = new Assistant({
+    telegram: new Telegram(TOKEN, fake.url),
+    chatId: CHAT,
+    config,
+    db,
+    assistant: EMPTY_ASSISTANT_CONFIG,
+    extensions: [],
+    env: {},
+    chatMaxBudgetUsd: 0.5,
+    startOnboarding: (request) => {
+      requests.push(request);
+      return { id: 11, room: "_hq", agent_id: "onboarding" } as RunRow;
+    },
+    log: () => undefined,
+  });
+  await handle(assistant, message("/salle"));
+  await handle(assistant, message("/salle ../my-project"));
+  assert.deepEqual(requests, [{ path: "../my-project" }]);
+
+  // A proposal already normalized by hq_submit, for a room that already exists: refused, still pending.
+  const room = { name: "demo", targetRepo: "../demo-project", agents: [{ id: "scout", name: "Scout", role: "roles/scout.md", model: "haiku", allowedTools: [] }] };
+  const payload = { room, roles: { scout: { template: "dev", content: "# Role" } }, claudeMd: "## HQ agents\n\nNever deploy." };
+  const id = Number(
+    db
+      .prepare("INSERT INTO approvals (room, agent_id, type, title, body, payload, status, created_at) VALUES ('_hq', 'onboarding', 'room_proposal', 'Room', 'b', ?, 'pending', ?)")
+      .run(JSON.stringify(payload), new Date().toISOString()).lastInsertRowid,
+  );
+  await handle(assistant, message(`/approve ${id}`));
+  // Under another name, with a target that exists, it is written and the block is handed over.
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), "other-project-"));
+  const targetRepo = path.relative(config.home, target).split(path.sep).join("/");
+  const other = { ...payload, room: { ...room, name: "other", targetRepo } };
+  db.prepare("UPDATE approvals SET payload = ? WHERE id = ?").run(JSON.stringify(other), id);
+  await handle(assistant, message(`/approve ${id}`));
+
+  const sent = fake.sent();
+  assert.equal(sent[0], "Usage : /salle <chemin du dépôt, relatif au dossier MYHQ_HOME>");
+  assert.equal(sent[1], "Tour d'accueil #11 lancé pour ../my-project. La proposition de salle arrivera dans la file.");
+  assert.match(sent[2]!, /Une salle de ce nom existe déjà/);
+  assert.equal(sent[3], `Item #${id} : Approuvé.`);
+  assert.equal(
+    sent[4],
+    `Salle créée. Ajoute le bloc du message suivant au CLAUDE.md du projet (${targetRepo}) : MyHQ ne l'écrit jamais lui-même.`,
+  );
+  assert.equal(sent[5], "## HQ agents\n\nNever deploy.");
+  assert.ok(fs.existsSync(path.join(config.home, "rooms", "other", "room.json")));
+  await fake.close();
+});
+
 // --- Voice notes and files ------------------------------------------------------
 
 test("a voice note is transcribed by the home's command, deleted, then handled as text", async () => {
@@ -488,7 +542,7 @@ test("end to end: a core command, an extension command and a button press, throu
   const menu = callsOf(fake, "setMyCommands")[0]!.params.commands as { command: string }[];
   assert.deepEqual(
     menu.map((c) => c.command),
-    ["start", "new", "pending", "approve", "reject", "revise", "run", "status", "arm", "disarm", "echo"],
+    ["start", "new", "pending", "approve", "reject", "revise", "run", "status", "arm", "disarm", "salle", "echo"],
   );
 
   fake.push(message("/pending"));

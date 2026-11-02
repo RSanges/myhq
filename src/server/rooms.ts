@@ -6,7 +6,7 @@ import { cronError } from "./cron";
 import { now, type Db } from "./db";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
-const idSchema = z
+export const idSchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, "lowercase letters, digits, '-' or '_' (max 63)");
 
@@ -90,6 +90,8 @@ export type Agent = {
   disallowedTools: string[];
   /** Absolute paths passed as `--add-dir`. */
   addDirs: string[];
+  /** Built-in tools that exist for the agent when they differ from its whitelist (MyHQ's own agents only). */
+  tools?: string[];
   maxBudgetUsd: number | null;
 };
 

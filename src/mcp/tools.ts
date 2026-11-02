@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Env } from "../server/config";
 import { now, type ApprovalRow, type Db } from "../server/db";
+import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
 export const contextSchema = z.object({
@@ -10,7 +11,14 @@ export const contextSchema = z.object({
   HQ_ROOM: z.string().min(1),
 });
 
-export type HqContext = { dbPath: string; runId: number; agentId: string; room: string };
+export type HqContext = {
+  dbPath: string;
+  runId: number;
+  agentId: string;
+  room: string;
+  /** MyHQ's role templates, to instantiate the roles of a room proposal. */
+  templatesDir?: string;
+};
 
 export function readContext(env: Env): HqContext {
   const parsed = contextSchema.safeParse(env);
@@ -87,6 +95,16 @@ export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
 
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
   const parsed = z.object(inputs.hq_submit).parse(args);
+  let { body, payload } = parsed;
+  if (parsed.type === ROOM_PROPOSAL) {
+    // Checked now, so that the agent can fix its payload within the same run.
+    if (!ctx.templatesDir) throw new ToolError("room_proposal: the role templates are not available.");
+    try {
+      ({ body, payload } = normalizeRoomProposal(parsed.payload ?? {}, parsed.body, ctx.templatesDir));
+    } catch (error) {
+      throw new ToolError((error as Error).message);
+    }
+  }
   const result = db
     .prepare(
       `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at)
@@ -98,8 +116,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       ctx.runId,
       parsed.type,
       parsed.title,
-      parsed.body,
-      JSON.stringify(parsed.payload ?? {}),
+      body,
+      JSON.stringify(payload ?? {}),
       now(),
     );
   return { approvalId: Number(result.lastInsertRowid), status: "pending" as const };

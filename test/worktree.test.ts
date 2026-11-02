@@ -5,19 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { ensureWorktree } from "../src/server/worktree";
-
-/** A temporary Git repository with one commit. */
-export function makeRepo(): string {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-repo-"));
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
-  git("init", "-q");
-  git("config", "user.email", "test@example.com");
-  git("config", "user.name", "Test");
-  fs.writeFileSync(path.join(repo, "README.md"), "# Test project\n");
-  git("add", ".");
-  git("commit", "-q", "-m", "init");
-  return repo;
-}
+import { makeRepo } from "./helpers";
 
 test("creates a worktree on its branch once, then leaves it alone", () => {
   const repo = makeRepo();

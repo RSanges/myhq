@@ -7,11 +7,12 @@ import type { Db, RunRow } from "../server/db";
 import { HqError } from "../server/errors";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
+import { startOnboarding as defaultStartOnboarding } from "../server/onboarding";
 import { listFirings, schedulerInfo, setArmed } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
 import { getUsage } from "../server/usage";
 import { formatCost, formatDateTime } from "../ui/format";
-import { branchHandover, payloadUrl } from "../ui/model";
+import { branchHandover, claudeMdHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
 import { askChat, chatEnv, type ChatRunner } from "./chat";
@@ -53,6 +54,7 @@ export type AssistantDeps = {
   chatMaxBudgetUsd: number;
   runChat?: ChatRunner;
   startRun?: (request: StartRunRequest) => RunRow;
+  startOnboarding?: (request: { path: string }) => RunRow;
   log?: (message: string) => void;
   typingIntervalMs?: number;
   questions?: PendingQuestions;
@@ -272,6 +274,18 @@ export class Assistant {
       }
       case "status":
         return this.reply(this.statusText());
+      case "salle": {
+        if (!args || args.length > 1_000) return this.reply(t.usage.salle);
+        const start =
+          this.deps.startOnboarding ??
+          ((request: { path: string }) => defaultStartOnboarding(request, { config: this.deps.config }));
+        try {
+          const run = start({ path: args });
+          return this.reply(t.onboardingStarted({ id: run.id, path: args }));
+        } catch (error) {
+          return this.reply(this.errorText(error));
+        }
+      }
       case "arm":
       case "disarm": {
         const parsed = parseAgentArgs(args);
@@ -348,7 +362,12 @@ export class Assistant {
 
   /** Same code path as PATCH /api/approvals/[id]. Throws HqError or ZodError. */
   private decide(id: number, decision: Decision, note?: string) {
-    return decideApproval(this.deps.db, id, decisionSchema.parse({ decision, ...(note ? { note } : {}) }));
+    return decideApproval(
+      this.deps.db,
+      id,
+      decisionSchema.parse({ decision, ...(note ? { note } : {}) }),
+      this.deps.config,
+    );
   }
 
   private decideText(id: number, decision: Decision, note?: string): string {
@@ -365,14 +384,18 @@ export class Assistant {
    * (an http(s) `payload.url`), sends the body as a plain message of its own
    * (to copy it on the phone, cut at 4000 as usual), then the link. An
    * approved pull request or blog post with a local branch gets the branch,
-   * then the push and `gh pr create` commands as a message of their own.
+   * then the push and `gh pr create` commands as a message of their own. An
+   * approved room proposal gets the "HQ agents" block for the project's
+   * CLAUDE.md, which MyHQ never writes itself.
    */
   private async handOver(approval: ApprovalDto): Promise<void> {
     const url = payloadUrl(approval.payload);
     const branch = branchHandover(approval);
+    const claudeMd = claudeMdHandover(approval);
     let parts: string[];
     if (url) parts = [...splitMessage(approval.body), url];
     else if (branch) parts = [strings.assistant.branchHandover(branch.branch, branch.sha), branch.commands];
+    else if (claudeMd) parts = [strings.assistant.claudeMdHandover(claudeMd.targetRepo), ...splitMessage(claudeMd.text)];
     else return;
     for (const part of parts) {
       try {

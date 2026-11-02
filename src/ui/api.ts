@@ -85,6 +85,10 @@ export async function startRun(room: string, agent: string, task: string): Promi
   return (await request("/api/runs", runResponseSchema, jsonInit("POST", body))).run;
 }
 
+export async function startOnboarding(path: string): Promise<Run> {
+  return (await request("/api/onboarding", runResponseSchema, jsonInit("POST", { path: path.trim() }))).run;
+}
+
 export type Decision = { decision: "approved" } | { decision: "rejected" | "revise"; note: string };
 
 export async function decideApproval(id: number, decision: Decision): Promise<Approval> {

@@ -138,11 +138,35 @@ export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
 export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRow {
   const config = deps.config ?? getConfig();
   const { room, agent } = findAgent(config, request.room, request.agent);
+  syncHome(getDbAt(config.dbPath), loadHome(config.home));
+  const task = request.task?.trim() || DEFAULT_TASK;
+  return launchRun({
+    config,
+    deps,
+    room,
+    agent,
+    task,
+    prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox }),
+  });
+}
+
+/**
+ * Records and starts a run of any agent, room agent or MyHQ's own (onboarding),
+ * after the agent lock and the daily cap. `prompt` receives the run id and
+ * the tasks claimed from the agent's mailbox.
+ */
+export function launchRun(params: {
+  config: HqConfig;
+  deps: RunnerDeps;
+  room: Room;
+  agent: Agent;
+  task: string;
+  prompt: (runId: number, mailbox: TaskRow[]) => string;
+}): RunRow {
+  const { config, deps, room, agent, task } = params;
   const db = getDbAt(config.dbPath);
-  syncHome(db, loadHome(config.home));
   installExitHook(config.dbPath);
   const engine = deps.engine ?? new ClaudeEngine(config.claudeBin);
-  const task = request.task?.trim() || DEFAULT_TASK;
 
   const { run, mailbox } = db
     .transaction(() => {
@@ -189,7 +213,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     })
     .immediate();
 
-  const prompt = buildPrompt({ room, agent, runId: run.id, task, mailbox });
+  const prompt = params.prompt(run.id, mailbox);
   void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert }).catch((error) => {
     console.error(`[runner] run #${run.id} crashed`, error);
   });
@@ -262,6 +286,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       allowedTools: agent.allowedTools,
       disallowedTools: agent.disallowedTools,
       addDirs: agent.addDirs,
+      tools: agent.tools,
       mcpConfigPath,
       maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
       workDir: agent.workDir,

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { browserCopyIo, copyLabel, copyText, COPIED_RESET_MS, type CopyState } from "./clipboard";
-import { branchHandover, payloadUrl } from "./model";
+import { branchHandover, claudeMdHandover, payloadUrl } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { buttonClass, fieldClass } from "./ui";
@@ -65,7 +65,13 @@ export function CopyButton({
  */
 export function HandoverControls({ approval, prominent }: { approval: Approval; prominent: boolean }) {
   const url = payloadUrl(approval.payload);
-  if (!url) return <BranchControls approval={approval} prominent={prominent} />;
+  if (!url) {
+    return claudeMdHandover(approval) ? (
+      <ClaudeMdControls approval={approval} prominent={prominent} />
+    ) : (
+      <BranchControls approval={approval} prominent={prominent} />
+    );
+  }
   const link = (
     <a
       href={url}
@@ -114,6 +120,21 @@ function BranchControls({ approval, prominent }: { approval: Approval; prominent
         {handover.commands}
       </pre>
       <CopyButton text={handover.commands} id={`cmd-${approval.id}`} labels={strings.desk.copyCommand} />
+    </div>
+  );
+}
+
+/** The "HQ agents" block of an approved room proposal, for the user to add to the project's CLAUDE.md. */
+function ClaudeMdControls({ approval, prominent }: { approval: Approval; prominent: boolean }) {
+  const handover = claudeMdHandover(approval);
+  if (!handover || !prominent || approval.status !== "approved") return null;
+  return (
+    <div className="space-y-2 rounded-md border border-accent bg-accent-soft p-3">
+      <p className="text-sm font-medium">{strings.desk.claudeMdHandover(handover.targetRepo)}</p>
+      <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-card px-3 py-2 font-mono text-xs">
+        {handover.text}
+      </pre>
+      <CopyButton text={handover.text} id={`claude-md-${approval.id}`} labels={strings.desk.copyBlock} />
     </div>
   );
 }

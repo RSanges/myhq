@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -55,4 +56,17 @@ export async function waitForRun(db: Db, runId: number, timeoutMs = 5_000): Prom
     if (Date.now() > deadline) throw new Error(`run #${runId} still running after ${timeoutMs} ms`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/** A temporary Git repository with one commit. */
+export function makeRepo(): string {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-repo-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  git("init", "-q");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "Test");
+  fs.writeFileSync(path.join(repo, "README.md"), "# Test project\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  return repo;
 }

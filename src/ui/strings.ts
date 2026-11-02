@@ -43,6 +43,13 @@ export const strings = {
     branch: (branch: string, sha: string | null) =>
       sha ? `Branche ${branch} (commit ${sha.slice(0, 10)})` : `Branche ${branch}`,
     branchHandover: "L'agent ne pousse pas : pousse la branche et ouvre la pull request toi-même, depuis le dépôt cible.",
+    copyBlock: {
+      idle: "Copier le bloc",
+      copied: "Copié !",
+      manual: "Sélectionné, copie-le (Ctrl+C)",
+    },
+    claudeMdHandover: (targetRepo: string) =>
+      `Salle créée. Ajoute ce bloc au CLAUDE.md du projet${targetRepo ? ` (${targetRepo})` : ""} : MyHQ ne l'écrit jamais lui-même.`,
     approve: "Approuver",
     reject: "Refuser",
     revise: "À retravailler",
@@ -66,7 +73,7 @@ export const strings = {
   },
   team: {
     title: "L'équipe",
-    empty: "Aucun agent. Ajoutez une salle dans votre dossier MYHQ_HOME.",
+    empty: "Aucun agent. Proposez une première salle avec « Ajouter une salle ».",
     role: "Rôle",
     model: "Modèle",
     state: {
@@ -103,6 +110,14 @@ export const strings = {
     armedOn: "Armé",
     armedOff: "Désarmé",
     armedHint: "Une routine désarmée est notée dans le journal sans lancer de tour.",
+    addRoom: {
+      title: "Ajouter une salle",
+      label: "Chemin du dépôt du projet",
+      hint: "Relatif à votre dossier MYHQ_HOME (par exemple ../mon-projet), ou absolu. L'agent d'accueil lit le dépôt sans rien y écrire et dépose une proposition sur le bureau.",
+      submit: "Proposer la salle",
+      starting: "Lancement...",
+      started: (id: number) => `Tour d'accueil #${id} lancé. La proposition arrivera sur le bureau.`,
+    },
   },
   feed: {
     title: "Le fil",
@@ -219,6 +234,11 @@ export const strings = {
       APPROVAL_ALREADY_DECIDED: "Cet item a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
       ROADMAP_NOT_FOUND: "Aucune feuille de route valide.",
+      TARGET_NOT_FOUND: "Aucun dossier à ce chemin.",
+      ROOM_EXISTS: "Une salle de ce nom existe déjà : rien n'a été écrit. Refuse la proposition ou demande un autre nom.",
+      PROPOSAL_INVALID: "La proposition de salle est invalide : rien n'a été écrit. Le détail est dans le journal.",
+      WORKTREE_FAILED: "Le worktree Git de l'agent n'a pas pu être créé : rien n'a été écrit. Le détail est dans le journal.",
+      EXPORT_NOT_CONFIGURED: "L'export quotidien n'est pas configuré (export.dir dans myhq.json).",
       INTERNAL: "Erreur interne du serveur.",
     } as Record<string, string>,
   },
@@ -241,12 +261,13 @@ export const strings = {
       status: "Tours, coût, routines et état des agents",
       arm: "Armer les routines d'un agent : /arm <salle>/<agent>",
       disarm: "Désarmer les routines d'un agent : /disarm <salle>/<agent>",
+      salle: "Proposer une salle pour un dépôt : /salle <chemin>",
     } as Record<string, string>,
     welcome: (extensionCommands: string[]) =>
       [
         "Je suis là. Parle-moi normalement, par écrit ou en vocal.",
         "/new pour repartir de zéro.",
-        "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status, /arm, /disarm.",
+        "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status, /arm, /disarm, /salle.",
         ...(extensionCommands.length > 0 ? [`Autres commandes : ${extensionCommands.map((c) => `/${c}`).join(", ")}.`] : []),
       ].join("\n"),
     newConversation: "Nouvelle conversation. Je repars de zéro.",
@@ -260,7 +281,12 @@ export const strings = {
       run: "Usage : /run <salle>/<agent> [tâche]",
       arm: "Usage : /arm <salle>/<agent>",
       disarm: "Usage : /disarm <salle>/<agent>",
+      salle: "Usage : /salle <chemin du dépôt, relatif au dossier MYHQ_HOME>",
     },
+    onboardingStarted: (p: { id: number; path: string }) =>
+      `Tour d'accueil #${p.id} lancé pour ${p.path}. La proposition de salle arrivera dans la file.`,
+    claudeMdHandover: (targetRepo: string) =>
+      `Salle créée. Ajoute le bloc du message suivant au CLAUDE.md du projet${targetRepo ? ` (${targetRepo})` : ""} : MyHQ ne l'écrit jamais lui-même.`,
     armed: (p: { room: string; agent: string; armed: boolean }) =>
       p.armed ? `Routines de ${p.room} / ${p.agent} armées.` : `Routines de ${p.room} / ${p.agent} désarmées.`,
     pendingEmpty: "Rien n'attend ta validation.",
