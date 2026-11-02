@@ -128,4 +128,76 @@ export const strings = {
     runFailed: (p: { room: string; agent: string; runId: number; summary: string }) =>
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
   },
+  /** The assistant on Telegram (plain text, no Markdown). */
+  assistant: {
+    commands: {
+      start: "Présentation et aide",
+      new: "Repartir de zéro dans la conversation",
+      pending: "Items qui attendent ta validation",
+      approve: "Approuver un item : /approve <id>",
+      reject: "Refuser un item : /reject <id> <motif>",
+      revise: "Renvoyer un item : /revise <id> <commentaire>",
+      run: "Lancer un tour : /run <salle>/<agent> [tâche]",
+      status: "Tours, coût et état des agents",
+    } as Record<string, string>,
+    welcome: (extensionCommands: string[]) =>
+      [
+        "Je suis là. Parle-moi normalement, par écrit ou en vocal.",
+        "/new pour repartir de zéro.",
+        "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status.",
+        ...(extensionCommands.length > 0 ? [`Autres commandes : ${extensionCommands.map((c) => `/${c}`).join(", ")}.`] : []),
+      ].join("\n"),
+    newConversation: "Nouvelle conversation. Je repars de zéro.",
+    unsupported: "Je sais lire le texte, les vocaux, les photos et les documents. Ceci, pas encore.",
+    internalError: "Quelque chose a cassé de mon côté. Le détail est dans le journal.",
+    extensionError: (name: string) => `La commande a échoué de mon côté (${name}). Le détail est dans le journal.`,
+    usage: {
+      approve: "Usage : /approve <id>",
+      reject: "Usage : /reject <id> <motif>",
+      revise: "Usage : /revise <id> <commentaire>",
+      run: "Usage : /run <salle>/<agent> [tâche]",
+    },
+    pendingEmpty: "Rien n'attend ta validation.",
+    pendingTitle: (count: number) => (count === 1 ? "1 item attend ta validation :" : `${count} items attendent ta validation :`),
+    pendingLine: (p: { id: number; room: string; agent: string; title: string }) =>
+      `#${p.id} ${p.room} / ${p.agent} : ${p.title}`,
+    decided: (id: number, label: string) => `Item #${id} : ${label}.`,
+    alertDecided: (text: string, label: string) => `${text}\n\nDécision : ${label}`,
+    askReject: (id: number) =>
+      `Motif du refus de l'item #${id} ? Réponds par un message (la question reste valable une heure).`,
+    askRevise: (id: number) =>
+      `Commentaire pour l'agent sur l'item #${id} ? Réponds par un message (la question reste valable une heure).`,
+    questionExpired: (id: number) => `Ma question sur l'item #${id} date de plus d'une heure, je l'ai abandonnée.`,
+    runStarted: (p: { id: number; room: string; agent: string }) => `Tour #${p.id} lancé pour ${p.room} / ${p.agent}.`,
+    status: {
+      today: (runs: number, cost: string) => `Aujourd'hui : ${runs} tour(s), ${cost}`,
+      week: (runs: number, cost: string) => `Cette semaine : ${runs} tour(s), ${cost}`,
+      cap: (remaining: number, max: number) => `Tours restants aujourd'hui : ${remaining} sur ${max}`,
+      agentsTitle: "Agents :",
+      agent: (p: { room: string; agent: string; state: string }) => `${p.room} / ${p.agent} : ${p.state}`,
+      noAgent: "Aucun agent.",
+    },
+    chat: {
+      notConfigured: "La conversation n'est pas configurée (section chat de assistant.json).",
+      timeout: (minutes: number) =>
+        `J'ai dépassé ${minutes} minutes sur ta demande et je me suis arrêté. Réessaie, ou découpe-la.`,
+      budget: "J'ai atteint le plafond de dépense de cette réponse. Reformule plus court, ou /new.",
+      failed: (detail: string) => `Quelque chose a cassé de mon côté : ${detail}`,
+      empty: "(réponse vide)",
+    },
+    voice: {
+      notConfigured: "Les vocaux ne sont pas configurés (transcribe dans assistant.json).",
+      tooLarge: "Ce vocal dépasse 20 Mo, la limite de Telegram pour les bots.",
+      failed: "Je n'ai pas réussi à transcrire ce vocal. Le détail est dans le journal.",
+      empty: "Je n'ai rien entendu dans ce vocal. Réessaie ?",
+    },
+    files: {
+      notConfigured: "Je ne sais pas encore recevoir de fichiers (dropDir dans assistant.json).",
+      tooLarge: "Ce fichier dépasse 20 Mo, la limite de Telegram pour les bots.",
+      failed: "Je n'ai pas réussi à récupérer cette pièce jointe. Le détail est dans le journal.",
+      received: (name: string, folder: string) => `Reçu : ${name}. Déposé dans ${folder}.`,
+      photoName: (stamp: string) => `Photo ${stamp}.jpg`,
+      documentName: (stamp: string) => `Document ${stamp}`,
+    },
+  },
 } as const;
