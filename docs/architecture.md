@@ -62,7 +62,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Six tools, all validated with zod:
+room) and writes directly to SQLite. Seven tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -72,6 +72,7 @@ room) and writes directly to SQLite. Six tools, all validated with zod:
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
+| `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
@@ -194,11 +195,51 @@ The proposal's "HQ agents" block for the project's `CLAUDE.md` is never
 written by MyHQ: the desk shows it with « Copier le bloc », and Telegram sends
 it as a message of its own after the decision.
 
+#### Executing an approved item
+
+An agent whose `room.json` sets `onApproval: "task"` acts on its own approved
+items: approving one creates the task « Exécute l'item approuvé n° <id> :
+<title> » (one per approval, source `approval`) and wakes the agent (below).
+The agent finds the task in its prompt and acts through its own tools, for
+example an MCP server of the home that reads `data/hq.db` (through the
+`${HQ_DB_PATH}` placeholder), checks that the item is approved and sends it.
+MyHQ never acts on the item itself. When the run fails, the item stays
+`approved` and the task goes back to the mailbox for the agent's next run.
+
 ### Messages between agents
 
-A message addressed to an agent creates a task for it, handled at its next run
-(or immediately if the sender asks for it and the lock is free). There is no
+A message addressed to an agent creates a task for it, handled at its next run,
+or at once when the recipient has `onMessage: "run"` (below). There is no
 real-time dialogue between models: mailboxes, readable and cheap.
+
+### Wake-ups
+
+`wakeAgents` (`src/server/runner.ts`) starts a run, at once, for each agent
+that has a pending task of source `approval` (with `onApproval: "task"`, run
+reason `approval`) or `message` (with `onMessage: "run"`, run reason
+`message`) created since its last run started. The run's task is "Handle the
+pending tasks of your mailbox", and the mailbox lists them. The app process
+calls it after each decision, on each tool result of a run (an `hq_message`
+is written by the HQ MCP server, another process: the tool result is when the
+app notices it) and at the end of each run. Consequences:
+
+- Same agent lock and daily cap as any run. A busy agent is woken again when
+  its run ends (its task is newer than that run); with the cap reached, the
+  task waits for the agent's next run.
+- A run that fails gives its mailbox tasks back; they are older than that run,
+  so the agent is not woken again in a loop: they wait for its next run.
+- Two agents with `onMessage: "run"` writing to each other keep waking each
+  other until the daily cap.
+
+### Why a run started
+
+Each run stores a `reason` (`runs.reason`, null when started from the desk,
+`/run` or a routine): the `reason` of `POST /api/runs` from a script of the
+home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
+own `approval` and `message`. It is in the Run shape (API, live stream, daily
+export) and on the start event, so the feed shows « Début du tour (sonnet),
+motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
+carry it as a bearer token (`api.md`); the desk sends no reason.
 
 ### Security
 
@@ -223,7 +264,9 @@ through the approval queue.
   `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`.
   Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
-  `cancelled`) and a `summary`.
+  `cancelled`), a `summary` and a `reason`. A task comes from a run's own
+  instruction (`manual`), a message, a revision or an approved item
+  (`approval`).
 - **Real time**: Server-Sent Events from the app to the browser.
 - **The room view** (slice 4): a 2D canvas (PixiJS, the one runtime dependency
   added for it, pinned to an exact version and loaded only on `/room`) with
@@ -405,6 +448,21 @@ order:
    tool search off, deploy commands denied, `--max-budget-usd` from
    `HQ_CHAT_MAX_BUDGET_USD`). The optional `afterReply` command runs after each
    reply, its output logged only.
+
+**What goes out without being asked.** Besides the alerts above, two options
+of the home send text on their own, in both modes:
+
+- `notifyTypes` in `myhq.json`: an item of a listed type is sent in full, the
+  usual alert then its body as is (no Markdown stripping), cut in messages of
+  4000 characters, with the buttons under the last one. For an item the user
+  must read whole before deciding, such as a reply drafted for a mail. The
+  item stays pending like any other.
+- `notifyRuns: "summary"` on an agent in `room.json`: when its run ends
+  `done`, its summary is sent as a plain message (Markdown marks removed, cut
+  at 4000 characters). This is how a morning brief or an evening recap agent
+  delivers its text: the agent's final text is the message, there is no item
+  to approve. The summary is kept at about 4000 characters by the engine, so a
+  longer text is cut.
 
 Messages are handled one at a time, in order. Button presses are handled at
 once, even during a long chat turn. In polling mode a pending-approval alert

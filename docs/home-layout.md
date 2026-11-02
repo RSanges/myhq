@@ -99,6 +99,9 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
 | `agents[].sprite` | no | Character sheet of the room view (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing, the neutral character shipped with MyHQ is drawn, tinted per agent. |
+| `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval. |
+| `agents[].onMessage` | no | `"run"`: an `hq_message` addressed to this agent starts a run at once (reason `message`), instead of waiting for its next routine. Default: the message waits for the agent's next run. |
+| `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
 `8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
@@ -108,6 +111,40 @@ not fire.
 
 MyHQ validates the file with zod at startup and refuses to start a room whose
 file is invalid, with an explicit error.
+
+#### Waking an agent: `onApproval` and `onMessage`
+
+Both start the run through the same agent lock and daily cap as any other run
+(`architecture.md`, "Wake-ups"). When the agent is busy, it is woken again as
+soon as its run ends; when the cap is reached, the task waits in its mailbox
+for its next run. Either way the task is listed in the prompt of the run that
+takes it, under "Pending tasks from your mailbox". A run that fails gives its
+mailbox tasks back, and they wait for the next run rather than waking the
+agent in a loop. Two agents with `onMessage: "run"` that write to each other
+keep waking each other: only the daily cap stops them, so give that option to
+agents that answer, not to agents that converse.
+
+An agent that sends approved mails could be declared like this (the
+`courrier` server and its tools belong to the home):
+
+```json
+{
+  "id": "mail",
+  "name": "Mail",
+  "role": "roles/mail.md",
+  "model": "sonnet",
+  "allowedTools": ["mcp__courrier__mail_list", "mcp__courrier__mail_send", "mcp__hq__*"],
+  "mcpServers": {
+    "courrier": {
+      "command": "node",
+      "args": ["../../../../mail-server/index.mjs"],
+      "env": { "HQ_DB_PATH": "${HQ_DB_PATH}", "MAIL_PASSWORD": "${HQ_EXT_MAIL_PASSWORD}" }
+    }
+  },
+  "onApproval": "task",
+  "onMessage": "run"
+}
+```
 
 #### Character sheets
 
@@ -342,7 +379,8 @@ without a section, the feature is off. Other keys are ignored.
 ```json
 {
   "language": "fr",
-  "export": { "dir": "../notes/agents-journal", "hour": 6 }
+  "export": { "dir": "../notes/agents-journal", "hour": 6 },
+  "notifyTypes": ["mail_reply"]
 }
 ```
 
@@ -351,7 +389,9 @@ without a section, the feature is off. Other keys are ignored.
 | `language` | no | Language of the texts the agents write for this home, as a BCP 47 tag (`fr`, `en`, `pt-BR`). Default: `en`. The onboarding run tells its agent to write the proposal, the role prompts and the "HQ agents" block in it (the English templates stay the structural source, the agent translates them), and, for a French home, to title the proposal « Proposition de salle : <name> ». Roles you write by hand are yours to write in any language. |
 | `export.dir` | yes (with `export`) | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
+| `notifyTypes` | no | Approval types (snake_case) sent to Telegram in full: the usual alert, then the item's body as is (no Markdown stripping, so a draft can be read and copied exactly), cut in messages of 4000 characters, with the Approuver, Refuser and À retravailler buttons under the last one. Other types keep the short alert. The item stays pending like any other. Default: none. |
 
-The file is read when the export is checked (every ten minutes), so a change
-needs no restart. An invalid file is reported in the log.
+The file is read when the export is checked (every ten minutes) and when
+new items are notified, so a change needs no restart. An invalid file is
+reported in the log (and the alerts stay short).
 

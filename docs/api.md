@@ -16,6 +16,7 @@ Every error has the same shape and an HTTP status:
 |---|---|---|
 | `INVALID_JSON` | 400 | The body is not JSON. |
 | `INVALID_INPUT` | 400 | A field is missing or invalid. The message lists each problem as `path: message`. |
+| `UNAUTHORIZED` | 401 | `POST /api/runs` with a `reason` while `HQ_TRIGGER_TOKEN` is set, without `Authorization: Bearer <token>` or with another token. |
 | `ROOM_NOT_FOUND` | 404 | No `rooms/<room>/` in the home. |
 | `AGENT_NOT_FOUND` | 404 | The room has no such agent. |
 | `APPROVAL_NOT_FOUND` | 404 | No approval with this id. |
@@ -71,12 +72,16 @@ are integers.
   "costUsd": 0.0841,
   "startedAt": "2026-11-02T16:18:11.256Z",
   "endedAt": "2026-11-02T16:19:40.002Z",
-  "summary": "Three replies submitted."
+  "summary": "Three replies submitted.",
+  "reason": null
 }
 ```
 
 `summary` is the final text of the agent (or the error), at most about 4000
-characters. `inputTokens` excludes the cache: the total input of a run is
+characters. `reason` says why the run was started: the `reason` given to
+`POST /api/runs` (for example `mail`), `approval` or `message` for a run MyHQ
+started to wake an agent (`onApproval`, `onMessage`, see `home-layout.md`),
+`null` for a run started from the desk, `/run` or a routine. `inputTokens` excludes the cache: the total input of a run is
 `inputTokens + cacheCreationInputTokens + cacheReadInputTokens`. `costUsd` is
 the `total_cost_usd` reported by Claude Code (an estimate on a subscription).
 Tokens and cost are written when the run ends; they are 0 while it runs.
@@ -91,7 +96,7 @@ Tokens and cost are written when the run ends; they are 0 while it runs.
 
 | `type` | `data` |
 |---|---|
-| `start` | `{ "sessionId": string \| null, "model": string \| null, "tools": string[], "mcpServers": [{ "name": string, "status": string }] }` |
+| `start` | `{ "sessionId": string \| null, "model": string \| null, "tools": string[], "mcpServers": [{ "name": string, "status": string }], "reason"?: string }` (`reason`: the run's, when it has one) |
 | `text` | `{ "text": string }` (truncated to about 4000 characters) |
 | `tool_call` | `{ "id": string, "name": string, "input": object }` (name like `WebSearch` or `mcp__hq__hq_submit`) |
 | `tool_result` | `{ "toolUseId": string, "isError": boolean, "content": string }` (truncated to about 2000 characters; `toolUseId` matches a `tool_call` `id`) |
@@ -110,7 +115,8 @@ in `<home>/data/runs/<runId>.jsonl`.
 ```
 
 Messages are written by agents with `hq_message`. Each one also becomes a task
-for the recipient, handed over at its next run.
+for the recipient, handed over at its next run, which starts at once when the
+recipient has `onMessage: "run"` (a run with `reason` `message`).
 
 ### Approval
 
@@ -232,13 +238,31 @@ background.
 Body:
 
 ```json
-{ "room": "demo", "agent": "scout", "task": "Optional instruction for this run." }
+{ "room": "demo", "agent": "scout", "task": "Optional instruction for this run.", "reason": "mail" }
 ```
 
 `task` is optional (at most 20000 characters). Without it, the agent gets
 "Do the routine work described in your role." Pending tasks of the agent
-(messages from other agents, revisions asked by the user) are appended to the
-prompt.
+(messages from other agents, revisions asked by the user, approved items to
+execute) are appended to the prompt.
+
+`reason` is optional: why the run is started, 1 to 40 lowercase letters or
+underscores (`mail`, `rom2`). It is stored on the run (the `reason` of the Run
+shape: API, live stream, daily export) and shown in the feed at the start of
+the run. The desk sends none.
+
+**Trigger token.** When `HQ_TRIGGER_TOKEN` is set (`.env.local`), a request
+that carries a `reason` must send `Authorization: Bearer <HQ_TRIGGER_TOKEN>`,
+compared in constant time; otherwise the answer is `401 UNAUTHORIZED` and
+nothing starts. A request without `reason` (the desk) is not affected, and
+without the variable nothing changes. It is meant for a local script of the
+home (a mail listener, a hook of the assistant):
+
+```sh
+curl -X POST http://127.0.0.1:4242/api/runs \
+  -H "Authorization: Bearer $HQ_TRIGGER_TOKEN" -H "Content-Type: application/json" \
+  -d '{"room":"assistant","agent":"mail","reason":"mail"}'
+```
 
 Response `202`:
 
@@ -246,9 +270,10 @@ Response `202`:
 { "run": { "id": 3, "status": "running", "...": "Run shape" } }
 ```
 
-Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
-`AGENT_NOT_FOUND`, `AGENT_BUSY` (409), `DAILY_CAP_REACHED` (429). The lock
-and the cap are checked before anything is started.
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `UNAUTHORIZED` (401),
+`ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
+`DAILY_CAP_REACHED` (429). The token, the lock and the cap are checked before
+anything is started.
 
 ### `GET /api/events`
 
@@ -385,7 +410,10 @@ a `room_proposal`: `ROOM_EXISTS` (409), `PROPOSAL_INVALID` (422) and
 
 Approving records the decision and keeps the payload. The only item the app
 acts on is a `room_proposal` (it writes the room); publishing, pushing and
-merging stay the user's.
+merging stay the user's. When the item's agent has `onApproval: "task"`,
+approving also gives it the task « Exécute l'item approuvé n° <id> : <title> »
+and starts its run at once (`reason` `approval`) when its lock is free and the
+cap allows; otherwise the task waits. The decision never fails because of it.
 
 ### `GET /api/usage`
 
@@ -459,5 +487,5 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `EXPORT_NOT_CONFIGURED` (404).
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its six tools write to the same
+for each run (see `architecture.md`). Its seven tools write to the same
 database, and their effects reach the interface through `/api/events`.
