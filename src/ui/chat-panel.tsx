@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { formatClock } from "./format";
+import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
 import type { ChatMessage, ChatSignal } from "./schemas";
 import { strings } from "./strings";
@@ -104,7 +105,13 @@ function Bubble({ message, agents }: { message: Pick<ChatMessage, "role" | "kind
         <span className="chat-msg-who">{who}</span>
         {meta.length > 0 && <span>{meta.join(" · ")}</span>}
       </p>
-      <p className="chat-msg-text">{message.text}</p>
+      {message.role === "assistant" ? (
+        <div className="chat-msg-text">
+          <Markdown source={message.text} />
+        </div>
+      ) : (
+        <p className="chat-msg-text">{message.text}</p>
+      )}
     </li>
   );
 }

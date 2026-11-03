@@ -1,8 +1,10 @@
 // Helpers of the annotations on an approval's body. The body is rendered from
 // Markdown, so a passage is identified in the *rendered text*: the text nodes of
-// the rendered body, in order, with a "\n" after each block, each list item and
-// each line break (the renderer emits them as text nodes of their own, so the
-// model below and the DOM agree character for character).
+// the rendered body, in order, with a "\n" after each block (a list item holds
+// blocks of its own), each table row and each line break, and a tab between the
+// cells of a row. List markers and checkboxes are not text. The renderer emits
+// the separators as text nodes of their own, so the model below and the DOM
+// agree character for character.
 
 import type { Annotation } from "@/server/annotations";
 import type { Block, Inline } from "./markdown";
@@ -25,24 +27,30 @@ function inlineText(nodes: Inline[]): string {
     .join("");
 }
 
+/** The text a block renders, separators included (markdown-view.tsx emits the same, node for node). */
+function blockText(block: Block): string {
+  switch (block.type) {
+    case "heading":
+    case "paragraph":
+      return `${inlineText(block.children)}\n`;
+    case "list":
+      // The marker and the checkbox of an item are not text.
+      return block.items.map((item) => item.blocks.map(blockText).join("")).join("");
+    case "quote":
+      return block.blocks.map(blockText).join("");
+    case "code":
+      return `${block.text}\n`;
+    case "table":
+      // A tab after each cell but the last, a "\n" after each row.
+      return [block.header, ...block.rows].map((row) => `${row.map(inlineText).join("\t")}\n`).join("");
+    case "rule":
+      return "";
+  }
+}
+
 /** The text of a rendered body: what a selection can quote. */
 export function plainText(blocks: Block[]): string {
-  return blocks
-    .map((block) => {
-      switch (block.type) {
-        case "heading":
-        case "paragraph":
-        case "quote":
-          return `${inlineText(block.children)}\n`;
-        case "list":
-          return block.items.map((item) => `${inlineText(item)}\n`).join("");
-        case "code":
-          return `${block.text}\n`;
-        case "rule":
-          return "";
-      }
-    })
-    .join("");
+  return blocks.map(blockText).join("");
 }
 
 export type Span = { start: number; end: number };

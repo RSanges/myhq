@@ -95,6 +95,12 @@ export const strings = {
     proposalTitle: (language: string, room: string) =>
       language.toLowerCase().split("-")[0] === "fr" ? `Proposition de salle : ${room}` : `Room proposal: ${room}`,
   },
+  /** Rendered Markdown: the labels of what it draws. */
+  markdown: {
+    tableLabel: "Tableau",
+    taskDone: "Fait",
+    taskTodo: "À faire",
+  },
   /** Annotations on passages of an item: the text the agent reads, and the desk's controls. */
   annotations: {
     about: (quote: string, comment: string) => `À propos de « ${quote} » : ${comment}`,
