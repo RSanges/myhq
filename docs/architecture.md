@@ -446,7 +446,18 @@ order:
    same isolation as an agent run (environment cleaned, `--setting-sources
    project,local`, `--strict-mcp-config`, `--tools` limited to the whitelist,
    tool search off, deploy commands denied, `--max-budget-usd` from
-   `HQ_CHAT_MAX_BUDGET_USD`). The optional `afterReply` command runs after each
+   `HQ_CHAT_MAX_BUDGET_USD`). The optional `chat.mcpServers` of
+   `assistant.json` are written to a per-turn `--mcp-config` file (same shape
+   and `${NAME}` placeholders as an agent's, plus `HQ_DB_PATH`, `HQ_ROOM` =
+   `_chat`, `HQ_AGENT_ID` = `chat` and `HQ_RUN_ID` = a turn id; never the `hq`
+   server; the file is deleted after the turn), and `chat.allowedTools` may
+   name their tools. After a successful reply, the optional `chat.requests.dir`
+   is scanned (`src/assistant/requests.ts`): each `{ room, agent, task,
+   reason? }` file becomes a pending task (source `chat`) of that agent and a
+   run starts at once under the usual lock and cap (reason `chat`, or the
+   given one); the file is deleted, a malformed one is moved to
+   `<dir>/rejected/`. This is how the chat hands an action to an agent without
+   holding its tools. The optional `afterReply` command runs after each
    reply, its output logged only.
 
 **What goes out without being asked.** Besides the alerts above, two options

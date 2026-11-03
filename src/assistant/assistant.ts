@@ -29,6 +29,7 @@ import {
 import type { AssistantCommand, AssistantContext, LoadedExtension } from "./extension";
 import type { AssistantConfig } from "./home-config";
 import { PendingQuestions, type PendingQuestion } from "./pending";
+import { processChatRequests } from "./requests";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
 import type { BotCommand, CallbackQuery, Telegram, TelegramMessage, Update } from "./telegram";
@@ -501,6 +502,11 @@ export class Assistant {
         bin: this.deps.config.claudeBin,
         env: chatEnv(this.deps.env),
         maxBudgetUsd: this.deps.chatMaxBudgetUsd,
+        mcp: {
+          dir: path.join(this.deps.config.dataDir, "assistant", "chat"),
+          dbPath: this.deps.config.dbPath,
+          appEnv: this.deps.env,
+        },
         run: this.deps.runChat,
       }),
     );
@@ -508,6 +514,14 @@ export class Assistant {
       this.continueChat = true;
       this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
       await this.reply(outcome.text.trim() || strings.assistant.chat.empty);
+      if (chat.requestsDir) {
+        processChatRequests(chat.requestsDir, {
+          config: this.deps.config,
+          db: this.deps.db,
+          startRun: this.deps.startRun,
+          log: this.log,
+        });
+      }
       await this.afterReply(chat.afterReply, chat.cwd);
       return;
     }

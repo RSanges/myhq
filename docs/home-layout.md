@@ -279,7 +279,15 @@ assistant runs with its core commands only.
     "cwd": "assistant/chat",
     "model": "sonnet",
     "addDirs": ["../notes"],
-    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "mcp__mail__*"],
+    "mcpServers": {
+      "mail": {
+        "command": "node",
+        "args": ["mail-mcp/server.js"],
+        "env": { "MAIL_PASSWORD": "${HQ_EXT_MAIL_PASSWORD}", "HQ_DB_PATH": "${HQ_DB_PATH}" }
+      }
+    },
+    "requests": { "dir": "assistant/chat/requests" },
     "permissionMode": "acceptEdits",
     "timeoutMinutes": 10,
     "afterReply": "node assistant/after-reply.mjs"
@@ -296,7 +304,9 @@ assistant runs with its core commands only.
 | `chat.cwd` | yes | Working directory of the `claude -p` chat. Its `CLAUDE.md` is the lever on the assistant's behaviour, and `--continue` resumes the latest conversation of this directory. |
 | `chat.model` | no | `opus`, `sonnet` (default) or `haiku`. |
 | `chat.addDirs` | no | Directories the chat may read and write (`--add-dir`). Default: none. |
-| `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. No MCP server is loaded. |
+| `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
+| `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. Default: none. |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>" }`: where the chat leaves requests for the agents (below). The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
 | `chat.afterReply` | no | Shell command run in `chat.cwd` after each reply. Its output goes to the log, never to Telegram. |
@@ -304,11 +314,44 @@ assistant runs with its core commands only.
 | `dropDir` | no | Folder where photos and documents sent to the bot are saved, with a free name (never overwritten) and, when the message has a caption, a companion `.md` note. Without it, files get a "not configured" answer. |
 | `extensions` | no | Extension modules, asked in this order (below). |
 
+### Chat MCP servers
+
+`chat.mcpServers` expands its placeholders from the app's environment
+(`.env.local`) plus the variables of the chat turn, which win: `${HQ_DB_PATH}`
+(absolute path of `data/hq.db`), `${HQ_ROOM}` (`_chat`), `${HQ_AGENT_ID}`
+(`chat`) and `${HQ_RUN_ID}` (an id of the turn, `chat-<ms>-<n>`). A variable
+that is not set fails the turn: the user gets the error naming it, and
+`claude` is not started.
+
+### Chat requests
+
+The chat has no agent tools, but it can hand an action to an agent (for
+example a mail reply to prepare) by writing a JSON file in `chat.requests.dir`:
+
+```json
+{ "room": "demo", "agent": "mailer", "task": "Prepare a reply to the landlord's mail about the lease.", "reason": "mail_followup" }
+```
+
+`room`, `agent` and `task` (20,000 characters at most) are required; `reason`
+is optional (lowercase letters and underscores, 40 at most; default `chat`).
+After each chat reply that succeeds, MyHQ reads the `*.json` files of the
+directory, in name order. For each valid one it creates a pending task (source
+`chat`) for that agent with the given text, starts a run at once if the agent
+is free and the daily cap allows (the run takes the task from its mailbox,
+reason `chat` or the given one), then deletes the file. A busy agent or the cap
+leave the task waiting for the agent's next run. A file that is not valid JSON,
+does not match the shape or names an unknown room or agent is logged and moved
+to `<dir>/rejected/`. Other files are left alone. The agent keeps its own tools
+and the approval queue: the request only gives it work.
+
+### Shell commands and isolation
+
 The shell commands (`transcribe`, `afterReply`) run through the system shell
 (`cmd.exe` on Windows, `sh` elsewhere) with the app's environment minus the
 `HQ_TELEGRAM_*` variables and `HQ_CLAUDE_OAUTH_TOKEN`. Each chat turn runs with
 the same isolation as an agent run: the app's variables removed,
-`--setting-sources project,local`, `--strict-mcp-config`, tool search off,
+`--setting-sources project,local`, `--strict-mcp-config` (only the servers of
+`chat.mcpServers`), tool search off,
 deploy commands denied, and `--max-budget-usd` from `HQ_CHAT_MAX_BUDGET_USD`.
 
 ## assistant/commands/

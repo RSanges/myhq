@@ -204,6 +204,8 @@ test("validates assistant.json and resolves its paths from the home", () => {
     model: "sonnet",
     allowedTools: ["Read"],
     permissionMode: "acceptEdits",
+    mcpServers: {},
+    requestsDir: null,
     timeoutMs: 600_000,
     afterReply: null,
   });
@@ -232,6 +234,8 @@ const chat: ChatConfig = {
   model: "sonnet",
   allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
   permissionMode: "acceptEdits",
+  mcpServers: {},
+  requestsDir: null,
   timeoutMs: 600_000,
   afterReply: null,
 };
@@ -282,4 +286,81 @@ test("retries without --continue when there is no conversation to continue", asy
   assert.equal(seen.length, 2);
   assert.ok(seen[0]!.includes("--continue"));
   assert.ok(!seen[1]!.includes("--continue"));
+});
+
+test("assistant.json: chat.mcpServers and chat.requests, hq refused", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-assistant-"));
+  const write = (chatConfig: unknown) =>
+    fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat", ...(chatConfig as object) } }));
+  write({ mcpServers: { mail: { command: "node", args: ["m.js"] } }, requests: { dir: "chat/requests" } });
+  const config = loadAssistantConfig(home).chat!;
+  assert.deepEqual(config.mcpServers, { mail: { command: "node", args: ["m.js"] } });
+  assert.equal(config.requestsDir, path.join(home, "chat", "requests"));
+  write({ mcpServers: { hq: { command: "node" } } });
+  assert.throws(() => loadAssistantConfig(home), /reserved/);
+  write({ requests: {} });
+  assert.throws(() => loadAssistantConfig(home), /chat\.requests\.dir/);
+});
+
+test("the chat gets an --mcp-config file with its expanded servers and per-chat variables", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-chat-mcp-"));
+  const withMail: ChatConfig = {
+    ...chat,
+    allowedTools: ["Read", "mcp__mail__*"],
+    mcpServers: {
+      mail: {
+        command: "node",
+        args: ["mail.js", "--user", "${MAIL_USER}"],
+        env: {
+          MAIL_PASSWORD: "${HQ_EXT_MAIL_PASSWORD}",
+          HQ_DB_PATH: "${HQ_DB_PATH}",
+          HQ_ROOM: "${HQ_ROOM}",
+          HQ_AGENT_ID: "${HQ_AGENT_ID}",
+          HQ_RUN_ID: "${HQ_RUN_ID}",
+        },
+      },
+    },
+  };
+  const mcp = { dir, dbPath: "/h/data/hq.db", appEnv: { MAIL_USER: "romain", HQ_EXT_MAIL_PASSWORD: "s3cret" } };
+  let file = "";
+  let content: { mcpServers: Record<string, { args: string[]; env: Record<string, string> }> } | null = null;
+  let args: string[] = [];
+  const run: ChatRunner = async (params) => {
+    args = params.args;
+    file = params.args[params.args.indexOf("--mcp-config") + 1]!;
+    content = JSON.parse(fs.readFileSync(file, "utf8"));
+    return { ok: true, text: "ok", costUsd: 0 };
+  };
+  await askChat({ chat: withMail, text: "hi", continue: false, bin: "claude", env: {}, maxBudgetUsd: 0.5, mcp, run });
+  assert.equal(args[args.indexOf("--mcp-config") + 2], "--strict-mcp-config");
+  const server = content!.mcpServers.mail!;
+  assert.deepEqual(Object.keys(content!.mcpServers), ["mail"], "no hq server in the chat");
+  assert.deepEqual(server.args, ["mail.js", "--user", "romain"]);
+  assert.equal(server.env.MAIL_PASSWORD, "s3cret");
+  assert.equal(server.env.HQ_DB_PATH, "/h/data/hq.db");
+  assert.equal(server.env.HQ_ROOM, "_chat");
+  assert.equal(server.env.HQ_AGENT_ID, "chat");
+  assert.match(server.env.HQ_RUN_ID!, /^chat-\d+-\d+$/);
+  assert.ok(args.includes("mcp__mail__*"));
+  assert.ok(!fs.existsSync(file), "the file only lives for the turn");
+
+  // A missing variable fails the turn with its name, and nothing is run.
+  let ran = false;
+  const outcome = await askChat({
+    chat: withMail,
+    text: "hi",
+    continue: false,
+    bin: "claude",
+    env: {},
+    maxBudgetUsd: 0.5,
+    mcp: { ...mcp, appEnv: {} },
+    run: async () => ((ran = true), { ok: true, text: "", costUsd: 0 }),
+  });
+  assert.equal(outcome.ok, false);
+  assert.match((outcome as { detail: string }).detail, /MAIL_USER/);
+  assert.equal(ran, false);
+
+  // Without servers, no --mcp-config.
+  const bare = buildChatArgs(chat, { continue: false, maxBudgetUsd: 0.5 });
+  assert.ok(!bare.includes("--mcp-config"));
 });

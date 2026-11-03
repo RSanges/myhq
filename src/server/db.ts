@@ -13,8 +13,8 @@ export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export const TASK_STATUSES = ["pending", "in_progress", "done", "blocked"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-/** Where a task comes from: a run's own instruction, a message, a revision, an approved item. */
-export const TASK_SOURCES = ["manual", "message", "revise", "approval"] as const;
+/** Where a task comes from: a run's own instruction, a message, a revision, an approved item, a chat request. */
+export const TASK_SOURCES = ["manual", "message", "revise", "approval", "chat"] as const;
 export type TaskSource = (typeof TASK_SOURCES)[number];
 
 export const EVENT_TYPES = ["start", "text", "tool_call", "tool_result", "end"] as const;
@@ -281,6 +281,31 @@ ALTER TABLE runs ADD COLUMN reason TEXT;
     sql: `
 -- Tasks may come from an approved item (agents[].onApproval): SQLite cannot
 -- widen a CHECK constraint, so the table is rebuilt with the same rows.
+CREATE TABLE tasks_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN (${list(TASK_SOURCES)})),
+  ref_id INTEGER,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (${list(TASK_STATUSES)})),
+  note TEXT,
+  run_id INTEGER REFERENCES runs(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO tasks_new (id, room, agent_id, source, ref_id, text, status, note, run_id, created_at, updated_at)
+  SELECT id, room, agent_id, source, ref_id, text, status, note, run_id, created_at, updated_at FROM tasks;
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+CREATE INDEX IF NOT EXISTS tasks_agent ON tasks (room, agent_id, status);
+`,
+  },
+  {
+    version: 5,
+    sql: `
+-- Tasks may come from a request written by the assistant's chat (assistant.json
+-- chat.requests): same rebuild as above, with the widened list.
 CREATE TABLE tasks_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   room TEXT NOT NULL,

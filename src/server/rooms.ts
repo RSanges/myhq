@@ -50,16 +50,18 @@ const spriteSchema = z
     "must be a .png or .webp file",
   );
 
+/** `mcpServers` of an agent (room.json) or of the assistant's chat (assistant.json). */
+export const mcpServersSchema = z
+  .record(z.string().min(1), z.union([stdioServerSchema, remoteServerSchema]))
+  .refine((servers) => !("hq" in servers), "the name 'hq' is reserved for the HQ MCP server");
+
 const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
   role: z.string().min(1),
   model: z.enum(MODELS),
   allowedTools: z.array(z.string().min(1)),
-  mcpServers: z
-    .record(z.string().min(1), z.union([stdioServerSchema, remoteServerSchema]))
-    .refine((servers) => !("hq" in servers), "the name 'hq' is reserved for the HQ MCP server")
-    .optional(),
+  mcpServers: mcpServersSchema.optional(),
   workingDirectory: z.string().min(1).optional(),
   /** A cron expression (the routine work of the role), or several routines with a task each. */
   cron: z.union([cronSchema, z.array(routineSchema).min(1)]).optional(),

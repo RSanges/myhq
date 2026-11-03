@@ -3,18 +3,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { Assistant, freeName, safeFileName } from "../src/assistant/assistant";
+import { Assistant, freeName, safeFileName, type AssistantDeps } from "../src/assistant/assistant";
 import { acquireLock, startBridge } from "../src/assistant/bridge";
 import type { ChatRunner } from "../src/assistant/chat";
 import { EMPTY_ASSISTANT_CONFIG, type AssistantConfig } from "../src/assistant/home-config";
 import { PendingQuestions } from "../src/assistant/pending";
+import { processChatRequests } from "../src/assistant/requests";
 import { Telegram } from "../src/assistant/telegram";
 import type { HqConfig } from "../src/server/config";
 import { getDbAt, type ApprovalRow, type Db, type RunRow } from "../src/server/db";
+import type { Engine, RunInput } from "../src/server/engine";
+import { HqError } from "../src/server/errors";
 import { notifyPendingApprovals } from "../src/server/notify";
 import { loadHome, syncHome } from "../src/server/rooms";
+import { startRun, type StartRunRequest } from "../src/server/runner";
 import { startFakeTelegram, type FakeTelegram } from "./fake-telegram";
-import { makeHome } from "./helpers";
+import { makeHome, waitForRun } from "./helpers";
 
 const TOKEN = "test-token";
 const CHAT = "42";
@@ -49,7 +53,15 @@ const press = (data: string, messageId = 7, text = "MyHQ : un item attend ta val
 });
 
 /** An Assistant wired to a fake Bot API, for the tests that drive it directly. */
-async function setup(options: { assistant?: AssistantConfig; runChat?: ChatRunner; questions?: PendingQuestions; config?: HqConfig } = {}) {
+async function setup(
+  options: {
+    assistant?: AssistantConfig;
+    runChat?: ChatRunner;
+    startRun?: AssistantDeps["startRun"];
+    questions?: PendingQuestions;
+    config?: HqConfig;
+  } = {},
+) {
   const config = options.config ?? makeHome();
   const db = getDbAt(config.dbPath);
   syncHome(db, loadHome(config.home));
@@ -65,6 +77,7 @@ async function setup(options: { assistant?: AssistantConfig; runChat?: ChatRunne
     env: { PATH: process.env.PATH },
     chatMaxBudgetUsd: 0.5,
     runChat: options.runChat,
+    startRun: options.startRun,
     questions: options.questions,
     log: (m) => logs.push(m),
     typingIntervalMs: 20,
@@ -214,7 +227,7 @@ test("an expired question is dropped and the message goes on to the chat", async
   const chats: string[] = [];
   const { db, fake, assistant } = await setup({
     questions,
-    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: { cwd: process.cwd(), addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null } },
+    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: { cwd: process.cwd(), addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null, mcpServers: {}, requestsDir: null } },
     runChat: async (params) => (chats.push(params.input), { ok: true, text: "**Bonjour**", costUsd: 0 }),
   });
   const id = addApproval(db);
@@ -392,7 +405,7 @@ test("a voice note is transcribed by the home's command, deleted, then handled a
     assistant: {
       ...EMPTY_ASSISTANT_CONFIG,
       transcribe: `"${process.execPath}" ${quoted} {file}`,
-      chat: { cwd: config.home, addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null },
+      chat: { cwd: config.home, addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null, mcpServers: {}, requestsDir: null },
     },
     runChat: async (params) => (chats.push(params.input), { ok: true, text: "Compris.", costUsd: 0 }),
   });
@@ -584,4 +597,98 @@ test("the bridge does not start when polling is off", async () => {
   });
   assert.equal(bridge, null);
   assert.match(logs[0]!, /polling is off/);
+});
+
+// --- Chat requests ---------------------------------------------------------------
+
+const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+
+test("a request file written by the chat creates a task and starts a run", async () => {
+  const config = makeHome();
+  const requestsDir = path.join(config.home, "chat", "requests");
+  const chatConfig = {
+    cwd: config.home,
+    addDirs: [],
+    model: "haiku" as const,
+    allowedTools: [],
+    mcpServers: {},
+    requestsDir,
+    permissionMode: "default" as const,
+    timeoutMs: 1000,
+    afterReply: null,
+  };
+  const inputs: RunInput[] = [];
+  const engine: Engine = {
+    name: "claude",
+    async *run(input) {
+      inputs.push(input);
+      yield { type: "end", status: "done", reason: "success", summary: "ok", usage, costUsd: 0 };
+    },
+  };
+  const started: RunRow[] = [];
+  const { db, assistant, fake, logs } = await setup({
+    config,
+    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: chatConfig },
+    runChat: async () => {
+      fs.mkdirSync(requestsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(requestsDir, "a.json"),
+        JSON.stringify({ room: "demo", agent: "scout", task: "Prepare a reply to the landlord." }),
+      );
+      fs.writeFileSync(path.join(requestsDir, "bad.json"), "{ nope");
+      fs.writeFileSync(path.join(requestsDir, "ghost.json"), JSON.stringify({ room: "demo", agent: "ghost", task: "x" }));
+      fs.writeFileSync(path.join(requestsDir, "shape.json"), JSON.stringify({ room: "demo", agent: "scout" }));
+      fs.writeFileSync(path.join(requestsDir, "notes.txt"), "left alone");
+      return { ok: true, text: "Je transmets.", costUsd: 0 };
+    },
+    startRun: (request) => {
+      const run = startRun(request, { config, engine });
+      started.push(run);
+      return run;
+    },
+  });
+  await handle(assistant, message("Réponds au propriétaire"));
+  assert.equal(started.length, 1);
+  assert.equal(started[0]!.reason, "chat");
+  const run = await waitForRun(db, started[0]!.id);
+  assert.equal(run.status, "done");
+  assert.equal(inputs.length, 1);
+  assert.match(inputs[0]!.prompt, /\[task \d+, chat\] Prepare a reply to the landlord\./);
+  const task = db.prepare("SELECT * FROM tasks WHERE source = 'chat'").get() as { text: string; status: string };
+  assert.equal(task.text, "Prepare a reply to the landlord.");
+  assert.equal(task.status, "done");
+
+  // The handled file is gone, the malformed ones are moved aside, the rest is untouched.
+  assert.deepEqual(fs.readdirSync(requestsDir).sort(), ["notes.txt", "rejected"]);
+  assert.deepEqual(fs.readdirSync(path.join(requestsDir, "rejected")).sort(), ["bad.json", "ghost.json", "shape.json"]);
+  assert.ok(logs.some((l) => /bad\.json rejected: not valid JSON/.test(l)));
+  assert.ok(logs.some((l) => /ghost\.json rejected/.test(l)));
+  assert.ok(logs.some((l) => /shape\.json rejected: task/.test(l)));
+  await fake.close();
+});
+
+test("a request for a busy agent leaves its task pending, and its own reason is kept", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  const dir = path.join(config.home, "requests");
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "1.json"), JSON.stringify({ room: "demo", agent: "scout", task: "Later.", reason: "mail_followup" }));
+  const logs: string[] = [];
+  const requests: StartRunRequest[] = [];
+  const created = processChatRequests(dir, {
+    config,
+    db,
+    log: (m) => logs.push(m),
+    startRun: (request) => {
+      requests.push(request);
+      throw new HqError("AGENT_BUSY", 409, "busy");
+    },
+  });
+  assert.equal(created, 1);
+  assert.equal(requests[0]!.reason, "mail_followup");
+  assert.equal((db.prepare("SELECT status FROM tasks WHERE source = 'chat'").get() as { status: string }).status, "pending");
+  assert.deepEqual(fs.readdirSync(dir), []);
+  assert.ok(logs.some((l) => /waits for the agent's next run/.test(l)));
+  assert.equal(processChatRequests(path.join(config.home, "missing"), { config, db, log: () => undefined }), 0);
 });

@@ -1,21 +1,34 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
-import { builtInTools, CLAUDE_ENV, DENIED_TOOLS } from "../server/claude-engine";
+import { builtInTools, CLAUDE_ENV, DENIED_TOOLS, expandMcpServers } from "../server/claude-engine";
 import type { Env } from "../server/config";
 import { agentEnv } from "../server/runner";
 import type { ChatConfig } from "./home-config";
 
+/** Room and agent the chat's per-turn variables name (the chat is not an agent). */
+export const CHAT_ROOM = "_chat";
+export const CHAT_AGENT = "chat";
+
 /**
  * The exact argument list of a chat turn. The message itself is written to
  * stdin. Same isolation as agent runs: only the whitelisted built-in tools
- * exist, no MCP server, no user settings, and the deploy commands are denied.
+ * exist, only the MCP servers of `--mcp-config` (the chat's own, never `hq`;
+ * none when the path is left out), no user settings, and the deploy commands
+ * are denied.
  */
-export function buildChatArgs(chat: ChatConfig, options: { continue: boolean; maxBudgetUsd: number }): string[] {
+export function buildChatArgs(
+  chat: ChatConfig,
+  options: { continue: boolean; maxBudgetUsd: number; mcpConfigPath?: string },
+): string[] {
   const args = ["-p"];
   if (options.continue) args.push("--continue");
   args.push("--output-format", "json", "--model", chat.model);
   for (const dir of chat.addDirs) args.push("--add-dir", dir);
-  args.push("--permission-mode", chat.permissionMode, "--setting-sources", "project,local", "--strict-mcp-config");
+  args.push("--permission-mode", chat.permissionMode, "--setting-sources", "project,local");
+  if (options.mcpConfigPath) args.push("--mcp-config", options.mcpConfigPath);
+  args.push("--strict-mcp-config");
   const tools = builtInTools(chat.allowedTools);
   args.push("--tools", ...(tools.length > 0 ? tools : [""]));
   if (chat.allowedTools.length > 0) args.push("--allowedTools", ...chat.allowedTools);
@@ -112,6 +125,33 @@ export const spawnChat: ChatRunner = (params) =>
     child.stdin.end(params.input, "utf8");
   });
 
+/** Where the per-turn MCP file goes, and what its placeholders are expanded from. */
+export type ChatMcp = {
+  /** Directory of the per-turn file (the file is deleted when the turn ends). */
+  dir: string;
+  /** HQ_DB_PATH of the per-chat variables. */
+  dbPath: string;
+  /** The app's own environment: `${NAME}` placeholders are expanded from it. */
+  appEnv: Env;
+};
+
+let turnCounter = 0;
+
+/**
+ * Writes the per-turn `--mcp-config` file: the chat's servers with their
+ * placeholders expanded from the app's environment and the per-chat variables
+ * (HQ_DB_PATH, HQ_ROOM, HQ_AGENT_ID, HQ_RUN_ID = the turn id), which win.
+ * Throws before writing anything when a variable is missing.
+ */
+export function writeChatMcpConfig(chat: ChatConfig, mcp: ChatMcp, turnId: string): string {
+  const variables = { HQ_DB_PATH: mcp.dbPath, HQ_ROOM: CHAT_ROOM, HQ_AGENT_ID: CHAT_AGENT, HQ_RUN_ID: turnId };
+  const servers = expandMcpServers(chat.mcpServers, { ...mcp.appEnv, ...variables });
+  const file = path.join(mcp.dir, `${turnId}.mcp.json`);
+  fs.mkdirSync(mcp.dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2));
+  return file;
+}
+
 /**
  * One chat turn with continuation: `--continue` unless the conversation was
  * reset, and a retry without it when the CLI says there is nothing to continue.
@@ -123,19 +163,34 @@ export async function askChat(params: {
   bin: string;
   env: Env;
   maxBudgetUsd: number;
+  /** Needed for the chat's MCP servers; without it none is configured. */
+  mcp?: ChatMcp;
   run?: ChatRunner;
 }): Promise<ChatOutcome> {
   const run = params.run ?? spawnChat;
+  let mcpConfigPath: string | undefined;
+  if (params.mcp && Object.keys(params.chat.mcpServers).length > 0) {
+    try {
+      mcpConfigPath = writeChatMcpConfig(params.chat, params.mcp, `chat-${Date.now()}-${++turnCounter}`);
+    } catch (error) {
+      return { ok: false, reason: "error", detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const attempt = (resume: boolean) =>
     run({
       bin: params.bin,
-      args: buildChatArgs(params.chat, { continue: resume, maxBudgetUsd: params.maxBudgetUsd }),
+      args: buildChatArgs(params.chat, { continue: resume, maxBudgetUsd: params.maxBudgetUsd, mcpConfigPath }),
       cwd: params.chat.cwd,
       env: params.env,
       input: params.text,
       timeoutMs: params.chat.timeoutMs,
     });
-  const first = await attempt(params.continue);
-  if (params.continue && !first.ok && first.reason === "no_conversation") return attempt(false);
-  return first;
+  try {
+    const first = await attempt(params.continue);
+    if (params.continue && !first.ok && first.reason === "no_conversation") return await attempt(false);
+    return first;
+  } finally {
+    // The file holds expanded secrets: it only lives for the turn.
+    if (mcpConfigPath) fs.rmSync(mcpConfigPath, { force: true });
+  }
 }
