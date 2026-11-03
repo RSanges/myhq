@@ -1,5 +1,6 @@
 import path from "node:path";
 import { parseAnnotations, type Annotation } from "./annotations";
+import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import type {
   ApprovalRow,
   ApprovalStatus,
@@ -11,6 +12,7 @@ import type {
   RunRow,
   RunStatus,
 } from "./db";
+import { NOTIFICATION_NOTE } from "./home-settings";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { toPosix, type Home } from "./rooms";
 import { spriteUrl } from "./sprites";
@@ -69,9 +71,23 @@ export type ApprovalDto = {
   decisionNote: string | null;
   /** Remarks on passages of the body that came with a revise or reject decision. */
   annotations: Annotation[];
+  /** The decisions the item had before the last one, oldest first (it was sent back for a revision). */
+  decisionHistory: DecisionRecord[];
+  /** The task that executes the item once approved (`onApproval: "task"`) has run: the action happened. */
+  actionDone: boolean;
+  /** An informational item (`notifyTypes`), born approved: nothing to revise. */
+  informational: boolean;
   decidedAt: string | null;
   createdAt: string;
 };
+
+/** An approval row, with whether its execution task is done (see `APPROVAL_SELECT`). */
+export type ApprovalRowWithAction = ApprovalRow & { action_done?: number };
+
+/** Selects approvals as `a`, with `action_done`; append a WHERE clause. */
+export const APPROVAL_SELECT = `SELECT a.*, EXISTS(
+  SELECT 1 FROM tasks t WHERE t.source = 'approval' AND t.ref_id = a.id AND t.status = 'done'
+) AS action_done FROM approvals a`;
 
 export const toRun = (r: RunRow): RunDto => ({
   id: r.id,
@@ -111,7 +127,7 @@ export const toMessage = (r: MessageRow): MessageDto => ({
   createdAt: r.created_at,
 });
 
-export const toApproval = (r: ApprovalRow): ApprovalDto => ({
+export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
   id: r.id,
   room: r.room,
   agentId: r.agent_id,
@@ -123,6 +139,9 @@ export const toApproval = (r: ApprovalRow): ApprovalDto => ({
   status: r.status,
   decisionNote: r.decision_note,
   annotations: parseAnnotations(r.annotations),
+  decisionHistory: parseDecisionHistory(r.decision_history),
+  actionDone: r.action_done === 1,
+  informational: r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at,
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });
@@ -158,7 +177,7 @@ export function changesSince(db: Db, since: number, limit = 500): { items: FeedI
       const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as MessageRow | undefined;
       if (row) items.push({ seq, kind: "message", data: toMessage(row) });
     } else {
-      const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+      const row = db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction | undefined;
       if (row) items.push({ seq, kind: "approval", data: toApproval(row) });
     }
   }
@@ -237,13 +256,13 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
     scheduler,
     firings: listFirings(db, 50),
     approvals: {
-      pending: (db.prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY id").all() as ApprovalRow[]).map(
-        toApproval,
-      ),
+      pending: (
+        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'pending' ORDER BY a.id`).all() as ApprovalRowWithAction[]
+      ).map(toApproval),
       history: (
         db
-          .prepare("SELECT * FROM approvals WHERE status <> 'pending' ORDER BY decided_at DESC, id DESC LIMIT 100")
-          .all() as ApprovalRow[]
+          .prepare(`${APPROVAL_SELECT} WHERE a.status <> 'pending' ORDER BY a.decided_at DESC, a.id DESC LIMIT 100`)
+          .all() as ApprovalRowWithAction[]
       ).map(toApproval),
     },
     recent: {

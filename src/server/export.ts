@@ -3,9 +3,18 @@ import path from "node:path";
 import { z } from "zod";
 import type { HqConfig } from "./config";
 import { DEFAULT_LANGUAGE, readHomeSettings } from "./home-settings";
-import { getDbAt, type ApprovalRow, type Db, type MessageRow, type RunRow } from "./db";
+import { getDbAt, type Db, type MessageRow, type RunRow } from "./db";
 import { HqError } from "./errors";
-import { toApproval, toMessage, toRun, type ApprovalDto, type MessageDto, type RunDto } from "./feed";
+import {
+  APPROVAL_SELECT,
+  toApproval,
+  toMessage,
+  toRun,
+  type ApprovalDto,
+  type ApprovalRowWithAction,
+  type MessageDto,
+  type RunDto,
+} from "./feed";
 import { addDays, dayKey, dayRange, wallTime } from "./time";
 
 export { DEFAULT_LANGUAGE, homeSettingsSchema } from "./home-settings";
@@ -54,10 +63,10 @@ export function writeDailyExport(db: Db, p: { dir: string; date: string; timeZon
     .all(from, to) as MessageRow[];
   const approvals = db
     .prepare(
-      `SELECT * FROM approvals WHERE (created_at >= ? AND created_at < ?) OR (decided_at >= ? AND decided_at < ?)
-       ORDER BY id`,
+      `${APPROVAL_SELECT} WHERE (a.created_at >= ? AND a.created_at < ?) OR (a.decided_at >= ? AND a.decided_at < ?)
+       ORDER BY a.id`,
     )
-    .all(from, to, from, to) as ApprovalRow[];
+    .all(from, to, from, to) as ApprovalRowWithAction[];
   const data: DailyExport = {
     date: p.date,
     timeZone: p.timeZone,

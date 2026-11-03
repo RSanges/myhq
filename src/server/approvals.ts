@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { strings } from "../ui/strings";
-import { annotationsSchema, decisionText, type Annotation } from "./annotations";
+import { annotationsSchema, decisionText, parseAnnotations, type Annotation } from "./annotations";
 import { getConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db } from "./db";
 import { HqError } from "./errors";
-import { toApproval, type ApprovalDto } from "./feed";
+import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
+import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
 import { loadHome } from "./rooms";
 import { wakeAgents, type RunnerDeps } from "./runner";
@@ -46,23 +47,36 @@ export function revisionTaskText(
 ${decisionText(note, annotations)}`;
 }
 
-/** Whether the agent of an item asks for a task when one of its items is approved. */
-function wantsApprovalTask(config: HqConfig, row: ApprovalRow): boolean {
+/**
+ * What the agent of an item asks for when one of its items is approved: nothing
+ * (null), a task it is woken for (`task`), or a task that waits for its next
+ * run (`queue`).
+ */
+function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" | null {
   const agent = loadHome(config.home)
     .rooms.find((room) => room.name === row.room)
     ?.agents.find((a) => a.id === row.agent_id);
-  return agent?.onApproval === "task";
+  return agent?.onApproval ?? null;
 }
 
 /**
  * Decides a pending approval. `revise` sends the item back to its agent as a
- * new task carrying the user's note. Approving a `room_proposal` writes the
- * room in the home first (see proposal.ts): when that fails, the item stays
- * pending and the error is thrown. Approving an item of an agent with
- * `onApproval: "task"` gives that agent a task to execute it, and wakes it
- * (`wakeAgents`): the agent acts, through its own tools, never MyHQ. No other
- * type is acted on: the item keeps its payload, and publishing or pushing
- * stays the user's.
+ * new task carrying the user's note. It is also the one decision an item
+ * that was already decided accepts: an approved or rejected item can still be
+ * sent back (its previous decision goes to `decision_history`), and an item
+ * already in `revise` only when the new note or remarks differ from the ones
+ * it has. Any other decision on a decided item is `APPROVAL_ALREADY_DECIDED`.
+ * A revision wakes the agent at once (`wakeAgents`, reason `revise`) unless it
+ * has `onRevise: "queue"`; the wake-up needs `config`, the callers of the app
+ * always give it.
+ *
+ * Approving a `room_proposal` writes the room in the home first (see
+ * proposal.ts): when that fails, the item stays pending and the error is
+ * thrown. Approving an item of an agent with `onApproval: "task"` gives that
+ * agent a task to execute it, and wakes it (`wakeAgents`; with `"queue"` the
+ * task waits for its next run): the agent acts, through its own tools, never
+ * MyHQ. No other type is acted on: the item keeps its payload, and publishing
+ * or pushing stays the user's.
  */
 export function decideApproval(
   db: Db,
@@ -72,6 +86,8 @@ export function decideApproval(
   deps: RunnerDeps = {},
 ): ApprovalDto {
   let taskFor: HqConfig | null = null;
+  let queueTaskFor: HqConfig | null = null;
+  let wakeFor: HqConfig | null = decision.decision === "revise" ? (config ?? null) : null;
   if (decision.decision === "approved") {
     const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
     if (row?.status === "pending" && row.type === ROOM_PROPOSAL) {
@@ -79,22 +95,43 @@ export function decideApproval(
     }
     if (row?.status === "pending") {
       const cfg = config ?? getConfig();
-      if (wantsApprovalTask(cfg, row)) taskFor = cfg;
+      const wanted = approvalTaskFor(cfg, row);
+      if (wanted === "task") taskFor = wakeFor = cfg;
+      else if (wanted === "queue") queueTaskFor = cfg;
     }
   }
   const approval = db
     .transaction(() => {
       const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
       if (!row) throw new HqError("APPROVAL_NOT_FOUND", 404, `No approval #${id}.`);
-      if (row.status !== "pending") {
-        throw new HqError("APPROVAL_ALREADY_DECIDED", 409, `Approval #${id} is already ${row.status}.`);
-      }
       const at = now();
       const note = decision.note || null;
       const annotations = decision.annotations ?? [];
+      let history = parseDecisionHistory(row.decision_history);
+      if (row.status !== "pending") {
+        if (decision.decision !== "revise") {
+          throw new HqError("APPROVAL_ALREADY_DECIDED", 409, `Approval #${id} is already ${row.status}.`);
+        }
+        const current: DecisionRecord = {
+          decision: row.status,
+          note: row.decision_note,
+          annotations: parseAnnotations(row.annotations),
+          decidedAt: row.decided_at,
+        };
+        if (row.status === "revise" && current.note === note && JSON.stringify(current.annotations) === JSON.stringify(annotations)) {
+          throw new HqError(
+            "APPROVAL_ALREADY_DECIDED",
+            409,
+            `Approval #${id} is already sent back for a revision: add a new note or remark.`,
+          );
+        }
+        history = [...history, current];
+      }
+      // The agent reads the new decision whether or not it read the previous one.
       db.prepare(
-        "UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ? WHERE id = ?",
-      ).run(decision.decision, note, JSON.stringify(annotations), at, id);
+        `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
+           decision_history = ?, seen_by_agent_at = NULL WHERE id = ?`,
+      ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), id);
       if (decision.decision === "revise") {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
@@ -108,20 +145,20 @@ export function decideApproval(
           at,
         );
       }
-      if (decision.decision === "approved" && taskFor) {
+      if (decision.decision === "approved" && (taskFor || queueTaskFor)) {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?)`,
         ).run(row.room, row.agent_id, id, strings.tasks.executeApproved(id, row.title), at, at);
       }
-      return toApproval(db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow);
+      return toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
     })
     .immediate();
-  if (taskFor) {
+  if (wakeFor) {
     // The decision stands whatever happens next: a busy agent or the daily
     // cap leave the task waiting for the agent's next run.
     try {
-      wakeAgents(taskFor, db, deps);
+      wakeAgents(wakeFor, db, deps);
     } catch (error) {
       console.error(`[approvals] wake after approval #${id} failed`, error);
     }

@@ -103,6 +103,8 @@ export type ApprovalRow = {
   decision_note: string | null;
   /** JSON array of annotations (see annotations.ts) given with a revise or reject decision. */
   annotations: string;
+  /** JSON array of the decisions this item had before its last one (see decision-history.ts). */
+  decision_history: string;
   decided_at: string | null;
   seen_by_agent_at: string | null;
   notified_at: string | null;
@@ -384,6 +386,15 @@ ALTER TABLE chat_messages ADD COLUMN target TEXT;
 -- A revise or reject decision may carry annotations on passages of the body:
 -- a JSON array of { quote, comment, position? }, next to the free note.
 ALTER TABLE approvals ADD COLUMN annotations TEXT NOT NULL DEFAULT '[]';
+`,
+  },
+  {
+    version: 10,
+    sql: `
+-- An approved, rejected or revised item can be sent back for a revision: the
+-- decision it had is kept here, a JSON array of { decision, note, annotations,
+-- decidedAt }, oldest first.
+ALTER TABLE approvals ADD COLUMN decision_history TEXT NOT NULL DEFAULT '[]';
 `,
   },
 ];
