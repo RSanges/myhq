@@ -12,10 +12,11 @@ import type {
   RunRow,
   RunStatus,
 } from "./db";
-import { NOTIFICATION_NOTE } from "./home-settings";
+import { NOTIFICATION_NOTE, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { toPosix, type Home } from "./rooms";
-import { spriteUrl } from "./sprites";
+import { receptionSpriteUrl, spriteUrl } from "./sprites";
+import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
 // Shapes returned by the API (documented in docs/api.md).
 
@@ -184,6 +185,9 @@ export function changesSince(db: Db, since: number, limit = 500): { items: FeedI
   return { items, cursor: changes.length > 0 ? changes[changes.length - 1]!.seq : since };
 }
 
+/** Onboarding runs listed in the state (the sheet of the receptionist). */
+export const RECEPTION_RUNS = 8;
+
 export type AgentState = "working" | "idle" | "failed";
 
 export type StateDto = {
@@ -207,6 +211,12 @@ export type StateDto = {
     }[];
   }[];
   invalidRooms: { room: string; error: string }[];
+  /**
+   * The reception: the floor that draws the onboarding agent as a receptionist
+   * (null when the home has no room), its own character sheet when the home
+   * sets one, and its latest runs, newest first.
+   */
+  reception: { room: string | null; sprite: string | null; runs: RunDto[] };
   scheduler: SchedulerInfo;
   firings: FiringDto[];
   approvals: { pending: ApprovalDto[]; history: ApprovalDto[] };
@@ -253,6 +263,18 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
       }),
     })),
     invalidRooms: home.invalid.map((r) => ({ room: path.basename(r.dir), error: r.error })),
+    reception: {
+      room: resolveReceptionRoom(
+        home.rooms.map((room) => room.name),
+        readReceptionRoom(home.root),
+      ),
+      sprite: receptionSpriteUrl(home.root),
+      runs: (
+        db
+          .prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? ORDER BY id DESC LIMIT ?")
+          .all(RECEPTION_ROOM, RECEPTION_AGENT, RECEPTION_RUNS) as RunRow[]
+      ).map(toRun),
+    },
     scheduler,
     firings: listFirings(db, 50),
     approvals: {

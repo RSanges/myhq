@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { isInside, type HqConfig } from "./config";
 import { HqError } from "./errors";
+import { readReceptionSprite } from "./home-settings";
 import { loadHome, SPRITE_EXTENSIONS, type Agent } from "./rooms";
+import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** A character sheet is a few tens of kilobytes; anything bigger is not one. */
 export const SPRITE_MAX_BYTES = 2 * 1024 * 1024;
@@ -29,6 +31,18 @@ export function spriteUrl(room: string, agent: Agent): string | null {
   return `/api/sprites/${encodeURIComponent(room)}/${encodeURIComponent(agent.id)}`;
 }
 
+/** URL of the receptionist's own sheet (`onboarding.sprite` of myhq.json) when it is set and the file exists, otherwise null (the shipped one). */
+export function receptionSpriteUrl(home: string): string | null {
+  const file = readReceptionSprite(home);
+  if (!file) return null;
+  try {
+    if (!fs.statSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return `/api/sprites/${RECEPTION_ROOM}/${RECEPTION_AGENT}`;
+}
+
 function notFound(message: string): HqError {
   return new HqError("SPRITE_NOT_FOUND", 404, message);
 }
@@ -42,23 +56,31 @@ function notFound(message: string): HqError {
  */
 export function spriteResponse(request: Request, config: HqConfig, roomName: string, agentId: string): Response {
   const home = loadHome(config.home);
-  const room = home.rooms.find((candidate) => candidate.name === roomName);
-  if (!room) {
-    const invalid = home.invalid.find((candidate) => path.basename(candidate.dir) === roomName);
-    if (invalid) throw new HqError("ROOM_INVALID", 422, `Room "${roomName}" is invalid: ${invalid.error}`);
-    throw new HqError("ROOM_NOT_FOUND", 404, `No room "${roomName}" in ${path.join(config.home, "rooms")}.`);
+  let declared: string | null;
+  if (roomName === RECEPTION_ROOM && agentId === RECEPTION_AGENT) {
+    // The receptionist belongs to no room: its sheet is declared in myhq.json.
+    declared = readReceptionSprite(config.home);
+  } else {
+    const room = home.rooms.find((candidate) => candidate.name === roomName);
+    if (!room) {
+      const invalid = home.invalid.find((candidate) => path.basename(candidate.dir) === roomName);
+      if (invalid) throw new HqError("ROOM_INVALID", 422, `Room "${roomName}" is invalid: ${invalid.error}`);
+      throw new HqError("ROOM_NOT_FOUND", 404, `No room "${roomName}" in ${path.join(config.home, "rooms")}.`);
+    }
+    const agent = room.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HqError("AGENT_NOT_FOUND", 404, `No agent "${agentId}" in room "${roomName}".`);
+    declared = agent.sprite;
   }
-  const agent = room.agents.find((candidate) => candidate.id === agentId);
-  if (!agent) throw new HqError("AGENT_NOT_FOUND", 404, `No agent "${agentId}" in room "${roomName}".`);
-  if (!agent.sprite) throw notFound(`Agent "${agentId}" declares no sprite.`);
+  if (!declared) throw notFound(`Agent "${agentId}" declares no sprite.`);
+  const sprite = declared;
 
-  if (!(SPRITE_EXTENSIONS as readonly string[]).includes(path.extname(agent.sprite).toLowerCase())) {
+  if (!(SPRITE_EXTENSIONS as readonly string[]).includes(path.extname(sprite).toLowerCase())) {
     throw notFound("The sprite must be a .png or .webp file.");
   }
   let real: string;
   let realHome: string;
   try {
-    real = fs.realpathSync(agent.sprite);
+    real = fs.realpathSync(sprite);
     realHome = fs.realpathSync(home.root);
   } catch {
     throw notFound(`The sprite of "${agentId}" does not exist.`);

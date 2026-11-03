@@ -347,6 +347,22 @@ export const strings = {
       stuck: (name: string) => `${name} est bloqué.`,
     },
     userDesk: "Votre bureau",
+    /** The receptionist: the onboarding agent at the reception desk of the lobby. */
+    reception: {
+      /** Name plate of the desk, name of the agent in the strip and in the sheet. */
+      name: "Accueil",
+      status: {
+        seated: "à l'accueil",
+        returning: "revient à l'accueil",
+      },
+      intro:
+        "L'agent d'accueil lit le dépôt d'un projet, sans rien y écrire, et dépose sur le bureau une proposition de salle à valider.",
+      recentRuns: "Tours d'accueil récents",
+      noRuns: "Aucun tour d'accueil pour l'instant.",
+      run: (p: { id: number; status: string; date: string }) => `Tour #${p.id} : ${p.status}, ${p.date}`,
+      target: (path: string) => `Dépôt : ${path}`,
+      noTarget: "Dépôt non précisé",
+    },
     tray: "À valider",
     trayCount: (count: number) =>
       count === 0 ? "Rien à valider" : count === 1 ? "1 item à valider" : `${count} items à valider`,
@@ -395,7 +411,7 @@ export const strings = {
     usage: [
       "Usage : npx tsx scripts/replay-fixture.ts <fixture.jsonl> [options]",
       "  --home <dossier>    home jetable (par défaut : <tmp>/myhq-replay-home)",
-      "  --agent <id>        agent qui joue le tour (par défaut : scout)",
+      "  --agent <id>        agent qui joue le tour (par défaut : scout ; onboarding joue l'accueil)",
       "  --agents <n>        nombre d'agents de la salle de démonstration, 2 à 12 (par défaut : 3)",
       "  --interval <ms>     délai entre deux événements (par défaut : 1000)",
       "  --delay <s>         attente avant le premier événement (par défaut : 8)",

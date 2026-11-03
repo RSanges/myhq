@@ -225,6 +225,7 @@ restart.
     }
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
+  "reception": { "room": "demo", "sprite": null, "runs": [] },
   "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
   "firings": [],
   "approvals": { "pending": [], "history": [] },
@@ -238,6 +239,15 @@ restart.
   sheet in `room.json` and the file exists, `null` otherwise (the room view
   then draws the neutral character shipped with the app).
 - `lastRun` is a Run or `null`.
+- `reception`: the onboarding agent seen from the floors. `room` is the one
+  floor that draws it as a receptionist (`reception.room` of `myhq.json` when
+  that room exists, else the room `assistant`, else the first room, `null`
+  when the home has no room); `sprite` is `/api/sprites/_hq/onboarding` when
+  the home sets `onboarding.sprite`, `null` for the shipped sheet; `runs` are
+  its latest eight runs (room `_hq`, agent `onboarding`, task « Propose a room
+  for the repository <path>. »), newest first. The reserved room `_hq` is not
+  in `rooms`; its runs, events and approvals still arrive on the stream like
+  any other.
 - `armed`: whether the agent's routines may start runs (the database value
   once changed, the `armed` of `room.json` until then). `routines`: one entry
   per cron of the agent, `task` `null` for the routine work of the role,
@@ -367,8 +377,9 @@ source.addEventListener("approval", (e) => upsertApproval(JSON.parse(e.data)));
 
 The character sheet of an agent for the room view (`/room`): a PNG or WebP
 image (see `home-layout.md` for the grid). The file is the one declared in the
-agent's `sprite` field of the validated `room.json`: the path is never read
-from the URL, must stay inside the home (symbolic links are resolved), must end
+agent's `sprite` field of the validated `room.json` (for the receptionist,
+`/api/sprites/_hq/onboarding`: the `onboarding.sprite` of `myhq.json`): the
+path is never read from the URL, must stay inside the home (symbolic links are resolved), must end
 in `.png` or `.webp`, must not exceed 2 MiB and must really start like a PNG
 or a WebP. `ETag` follows the modification time and `Cache-Control: no-cache`
 makes the browser revalidate, so a redrawn sheet shows up at the next load

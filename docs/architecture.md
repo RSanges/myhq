@@ -703,6 +703,32 @@ furniture, offices and a graph of the corridors. A template can be refined, or
 a fourth one added, without touching the renderer or the model. More than 12
 agents are listed under the floor but have no office on it.
 
+**The reception.** Onboarding is an agent too (section 3), and it is
+the one agent that no room owns: its runs belong to the reserved room `_hq`. So
+that it is visible, every template has a reception desk in its lobby, next to
+the user's office (a counter with a bell and a small screen, the receptionist
+seated behind it, `lobby.reception` in `floor-templates.ts`), but the desk is
+drawn on **one floor of the home only**: the `reception.room` of `myhq.json`,
+by default the room called `assistant`, otherwise the first room (`GET
+/api/state` gives it as `reception.room`, `resolveReceptionRoom` in
+`reception.ts`). The other floors keep a plain lobby. On that floor the model
+(`room-model.ts`) adds the receptionist to the agents of the room, with the key
+`_hq/onboarding`, and feeds it the runs, events and approvals of `_hq` (the
+store routes them): it sleeps when idle, types while a run reads the repository,
+and on `hq_submit` of its `room_proposal` walks from the counter along the
+lobby to the user's office (the same route as an agent's trip to the tray, the
+folder lands in the tray, the count rises), then goes back; a failed run puts a
+question mark over it. Its name plate reads « Accueil » (`strings.room.reception`),
+its chip is the last of the strip with its state, and clicking either opens its
+sheet: what it does, the « Ajouter une salle » form (the component of the desk's
+form, `add-room.tsx`, which calls `POST /api/onboarding`) and its recent
+onboarding runs with their target repository and cost (from `reception.runs` of
+the state, kept up to date by the stream). Its sheet is
+`public/sprites/receptionist.png`, drawn by the same script as the neutral one
+(`scripts/build-neutral-sprite.mjs`), and a home may replace it with
+`onboarding.sprite`. To see it without a real run:
+`npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl --agent onboarding`.
+
 **Pieces.**
 
 - `src/ui/room-model.ts`: the pure animation model. It takes the entities the
@@ -724,7 +750,9 @@ agents are listed under the floor but have no office on it.
   (never on the server), owns the frame loop, the pointer and the density.
   `src/ui/room.tsx` is the page: header, rooms, the canvas or the compact band,
   the strip of agents, the sheet.
-- Walking follows routes of the layout (`routeToOffice`, `routeToUser`): from
+- Walking follows routes of the layout (`routeToOffice`, `routeToUser`; the
+  receptionist's seat is a spot like an office's: straight ahead to the corridor
+  in front of the counter): from
   the seat round the desk, through the door of the office, along the shortest
   way of the corridors (a graph built from their center lines, Dijkstra), then
   through the other door to where a visitor stands, or to the tray in the

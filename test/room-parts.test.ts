@@ -57,6 +57,7 @@ const state: State = {
     },
   ],
   invalidRooms: [],
+  reception: { room: null, sprite: null, runs: [] },
   scheduler: { enabled: true, running: true, timeZone: "Europe/Paris" },
   firings: [],
   approvals: { pending: [], history: [] },

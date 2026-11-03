@@ -2,6 +2,7 @@ import { Application, Container, Graphics, Rectangle, Sprite, Texture } from "pi
 import type { LabelLayer } from "./room-labels";
 import { DESK_H, DESK_W, SPRITE_SIZE, WALL, type Item, type RoomLayout } from "./room-layout";
 import type { AgentView, RoomView } from "./room-model";
+import { RECEPTION_KEY } from "./reception";
 
 // The drawing of the floor, behind a small interface (create, draw a state,
 // resize, destroy) so that the engine can change without touching the model or
@@ -280,6 +281,19 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       d.roundRect(desk.x + DESK_W / 2 - 6.5, desk.y + 3.7, 13, 5.2, 1).fill(theme.card);
       d.circle(desk.x + DESK_W - 6, desk.y + 8, 2.2).fill(theme.card).stroke({ width: 0.8, color: theme.ink });
     }
+
+    // The reception desk of the lobby: a counter with a bell and a small screen, in front of the receptionist.
+    if (layout.reception) {
+      const { counter, bell, screen } = layout.reception;
+      d.roundRect(counter.x, counter.y, counter.w, counter.h, 2.5).fill(theme.wood).stroke({ width: 1.2, color: theme.woodEdge });
+      d.rect(counter.x + 2, counter.y + counter.h - 3.5, counter.w - 4, 1.4).fill(theme.woodEdge);
+      d.roundRect(screen.x, screen.y, screen.w, screen.h, 1.5).fill(theme.appliance);
+      d.roundRect(screen.x + 1.5, screen.y + 1.5, screen.w - 3, screen.h - 3.5, 1).fill(theme.card);
+      d.rect(screen.x + screen.w / 2 - 2, screen.y + screen.h, 4, 1.6).fill(theme.appliance);
+      d.ellipse(bell.x, bell.y + 1.5, 4.2, 1.2).fill(theme.woodEdge);
+      d.moveTo(bell.x - 3.4, bell.y + 1).arc(bell.x, bell.y + 1, 3.4, Math.PI, 0).closePath().fill(theme.accent).stroke({ width: 0.7, color: theme.woodEdge });
+      d.circle(bell.x, bell.y - 3, 0.9).fill(theme.woodEdge);
+    }
   }
 
   function nodeSheet(node: AgentNode): Sheet | null {
@@ -431,10 +445,15 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         if (node.sheetUrl !== url) node.sheetUrl = url;
         const sheet = nodeSheet(node);
         const own = Boolean(node.sheetUrl && sheets.get(node.sheetUrl));
-        const office = layout.offices.find((spot) => spot.key === agent.key)!;
 
-        // The name plate on the back wall, and a tag under a character that is away from its office.
-        labels.place(`plate:${agent.key}`, { text: agent.name, x: office.plate.x, y: office.plate.y, size: 6.6, weight: 700, box: "plate", ax: office.plate.ax === 0 ? 0 : 1 });
+        // The name plate on the wall outside the door of the office (under the counter for the receptionist), and a tag under a character that is away from its office.
+        if (agent.key === RECEPTION_KEY && layout.reception) {
+          const { plate } = layout.reception;
+          labels.place(`plate:${agent.key}`, { text: agent.name, x: plate.x, y: plate.y, size: 6.6, weight: 700, box: "plate", ax: 0.5, ay: 0 });
+        } else {
+          const office = layout.offices.find((spot) => spot.key === agent.key);
+          if (office) labels.place(`plate:${agent.key}`, { text: agent.name, x: office.plate.x, y: office.plate.y, size: 6.6, weight: 700, box: "plate", ax: office.plate.ax === 0 ? 0 : 1 });
+        }
         if (!agent.seated && agent.alpha > 0.5) {
           labels.place(`tag:${agent.key}`, { text: agent.name, x: agent.x, y: agent.y + 3, size: 7, weight: 700, ay: 0 });
         }

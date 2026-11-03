@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
-import { selectAgents, type TeamAgent } from "./model";
+import { selectAgents } from "./model";
+import { RECEPTION_KEY } from "./reception";
+import { ReceptionSheet } from "./reception-sheet";
 import { RoomCanvas } from "./room-canvas";
 import { buildBoard } from "./room-board";
 import type { AgentStatus, AgentView, Coarse, RoomView } from "./room-model";
@@ -17,8 +19,12 @@ import { useMediaQuery } from "./use-media-query";
 
 const t = strings.room;
 
-/** The wording of what an agent is doing. */
-export function statusText(status: AgentStatus): string {
+/** The receptionist's sheet shipped in public/ (a home may replace it: `onboarding.sprite`). */
+const RECEPTIONIST_SHEET = "/sprites/receptionist.png";
+
+/** The wording of what an agent is doing; the receptionist is at its desk, not at a table. */
+export function statusText(status: AgentStatus, receptionist = false): string {
+  if (receptionist && (status.kind === "seated" || status.kind === "returning")) return t.reception.status[status.kind];
   switch (status.kind) {
     case "visiting":
       return t.status.visiting(status.target);
@@ -94,6 +100,9 @@ export function RoomPage() {
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = roomAgents.find((agent) => agent.key === selectedKey) ?? null;
+  // The reception desk is drawn on one floor of the home only (reception.room of myhq.json).
+  const receptionHere = model.reception.room !== null && model.reception.room === room;
+  const receptionSprite = model.reception.sprite ?? RECEPTIONIST_SHEET;
   const closeSheet = useCallback(() => setSelectedKey(null), []);
 
   const snapshot = useRoomSnapshot(store, room, reduced);
@@ -111,8 +120,11 @@ export function RoomPage() {
   );
   const boardForCanvas = useMemo(() => ({ title: t.board.title, rows: board }), [board]);
   const sprites = useMemo(
-    () => Object.fromEntries(roomAgents.map((agent) => [agent.key, agent.sprite])),
-    [roomAgents],
+    () => ({
+      ...Object.fromEntries(roomAgents.map((agent) => [agent.key, agent.sprite])),
+      ...(receptionHere ? { [RECEPTION_KEY]: receptionSprite } : {}),
+    }),
+    [roomAgents, receptionHere, receptionSprite],
   );
   const statusOf = useMemo(
     () => new Map(snapshot?.view.agents.map((agent) => [agent.key, agent]) ?? []),
@@ -217,12 +229,22 @@ export function RoomPage() {
             {roomAgents.map((agent) => (
               <AgentRow
                 key={agent.key}
-                agent={agent}
+                name={agent.name}
                 status={statusOf.get(agent.key)?.status ?? null}
                 selected={agent.key === selectedKey}
                 onOpen={() => setSelectedKey(agent.key)}
               />
             ))}
+            {receptionHere && (
+              <AgentRow
+                key={RECEPTION_KEY}
+                name={t.reception.name}
+                status={statusOf.get(RECEPTION_KEY)?.status ?? null}
+                receptionist
+                selected={selectedKey === RECEPTION_KEY}
+                onOpen={() => setSelectedKey(RECEPTION_KEY)}
+              />
+            )}
           </ul>
           {wide && <p className="room-strip-tray">{t.trayCount(pending)}</p>}
           <p className="sr-only" role="status" aria-live="polite">
@@ -232,6 +254,9 @@ export function RoomPage() {
       )}
 
       {selected && <AgentSheet key={selected.key} agent={selected} events={model.events} dispatch={dispatch} onClose={closeSheet} />}
+      {receptionHere && selectedKey === RECEPTION_KEY && (
+        <ReceptionSheet key={RECEPTION_KEY} runs={model.reception.runs} dispatch={dispatch} onClose={closeSheet} />
+      )}
     </div>
     {chat.mounted && (
       <ChatPanel open={chat.open} onClose={chat.close} subscribe={subscribeChat} agents={roomAgents} narrow={!wide} />
@@ -242,15 +267,17 @@ export function RoomPage() {
 
 /** One agent of the list under the floor: a button with its name and what it is doing, that opens its sheet. */
 function AgentRow({
-  agent,
+  name,
   status,
   selected,
   onOpen,
+  receptionist = false,
 }: {
-  agent: TeamAgent;
+  name: string;
   status: AgentStatus | null;
   selected: boolean;
   onOpen: () => void;
+  receptionist?: boolean;
 }) {
   return (
     <li>
@@ -260,11 +287,11 @@ function AgentRow({
         data-state={status?.kind}
         aria-expanded={selected}
         aria-haspopup="dialog"
-        title={t.openCard(agent.name)}
+        title={t.openCard(name)}
         onClick={onOpen}
       >
-        <span className="room-agent-name">{agent.name}</span>
-        <span className="room-agent-status">{status ? statusText(status) : ""}</span>
+        <span className="room-agent-name">{name}</span>
+        <span className="room-agent-status">{status ? statusText(status, receptionist) : ""}</span>
       </button>
     </li>
   );

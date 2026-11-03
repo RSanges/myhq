@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Agent, Approval, Firing, HqEvent, Message, Run, Scheduler, State, Usage } from "./schemas";
+import { RECEPTION_AGENT, RECEPTION_ROOM } from "./reception";
+import type { Agent, Approval, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
 import { strings } from "./strings";
 
 // Pure state of the page: a snapshot from /api/state, then upserts from the SSE
@@ -8,12 +9,16 @@ import { strings } from "./strings";
 export const MAX_EVENTS = 300;
 export const MAX_MESSAGES = 150;
 export const MAX_HISTORY = 100;
+/** Onboarding runs kept for the sheet of the receptionist. */
+export const MAX_RECEPTION_RUNS = 8;
 
 export type Model = {
   loaded: boolean;
   cursor: number;
   rooms: State["rooms"];
   invalidRooms: State["invalidRooms"];
+  /** The floor of the receptionist, its own sheet, and the latest onboarding runs, newest first. */
+  reception: Reception;
   latestRuns: Record<string, Run>;
   approvals: Record<number, Approval>;
   events: HqEvent[];
@@ -39,6 +44,7 @@ export const initialModel: Model = {
   cursor: 0,
   rooms: [],
   invalidRooms: [],
+  reception: { room: null, sprite: null, runs: [] },
   latestRuns: {},
   approvals: {},
   events: [],
@@ -84,6 +90,7 @@ export function reducer(model: Model, action: Action): Model {
         cursor: state.cursor,
         rooms: state.rooms,
         invalidRooms: state.invalidRooms,
+        reception: state.reception,
         latestRuns,
         approvals: indexApprovals([state.approvals.pending, state.approvals.history]),
         events: state.recent.events,
@@ -114,7 +121,10 @@ export function reducer(model: Model, action: Action): Model {
       const key = agentKey(action.run.room, action.run.agentId);
       const current = model.latestRuns[key];
       if (current && current.id > action.run.id) return model;
-      return { ...model, latestRuns: { ...model.latestRuns, [key]: action.run } };
+      const next = { ...model, latestRuns: { ...model.latestRuns, [key]: action.run } };
+      if (action.run.room !== RECEPTION_ROOM || action.run.agentId !== RECEPTION_AGENT) return next;
+      const runs = upsertById(model.reception.runs.slice().reverse(), action.run, MAX_RECEPTION_RUNS).reverse();
+      return { ...next, reception: { ...model.reception, runs } };
     }
     case "event":
       return { ...model, events: upsertById(model.events, action.event, MAX_EVENTS) };

@@ -40,6 +40,14 @@ export type RoomSpec = {
   userDesk?: { desk: Rect; chair: Point; monitor: Rect };
 };
 
+/**
+ * The reception desk of the lobby: the counter (visitors on its south side),
+ * where the receptionist's feet are when seated behind it (inside the counter's
+ * rectangle, like an office desk), and the point of a corridor in front of it
+ * where the receptionist joins the corridors.
+ */
+export type ReceptionSpec = { counter: Rect; seat: Point; outside: Point };
+
 export type FloorTemplate = {
   id: "small" | "medium" | "large";
   width: number;
@@ -51,8 +59,12 @@ export type FloorTemplate = {
   corridors: Point[][];
   /** Window bands along the outer walls. */
   windows: [Point, Point][];
-  /** The lobby next to the user's office: the console with the "to approve" tray, and where an agent stands to drop a folder. */
-  lobby: { tray: Rect; console: Rect; stand: Point; items: Item[] };
+  /**
+   * The lobby next to the user's office: the console with the "to approve"
+   * tray, where an agent stands to drop a folder, and the reception desk (drawn
+   * on the one floor of the home that has the receptionist, see reception.ts).
+   */
+  lobby: { tray: Rect; console: Rect; stand: Point; items: Item[]; reception: ReceptionSpec };
 };
 
 // ---- Small builders for furniture --------------------------------------------------------
@@ -203,6 +215,7 @@ const large: FloorTemplate = {
     tray: rect(648, 85, 36, 9),
     stand: p(664, 109),
     items: lobbyItems(590, 82, 790, 342),
+    reception: { counter: rect(700, 130, 56, 13), seat: p(728, 136), outside: p(728, 99) },
   },
 };
 
@@ -247,6 +260,7 @@ const medium: FloorTemplate = {
     tray: rect(478, 85, 36, 9),
     stand: p(494, 109),
     items: lobbyItems(440, 82, 610, 342),
+    reception: { counter: rect(520, 130, 56, 13), seat: p(548, 136), outside: p(548, 99) },
   },
 };
 
@@ -279,6 +293,7 @@ const small: FloorTemplate = {
     tray: rect(351, 85, 32, 9),
     stand: p(367, 109),
     items: [sofa(344, 196, 54), sofa(400, 196, 40), ...plant(440, 140), ...plant(352, 150)],
+    reception: { counter: rect(366, 130, 52, 13), seat: p(392, 136), outside: p(392, 99) },
   },
 };
 

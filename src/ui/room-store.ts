@@ -1,5 +1,7 @@
+import { RECEPTION_AGENT, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run, State } from "./schemas";
 import { applyInput, createRoomModel, type RoomModel } from "./room-model";
+import { strings } from "./strings";
 
 // The room models of the page, one per room, fed by the entities the page
 // already receives (the state snapshot, then the SSE stream). Plain TypeScript
@@ -24,14 +26,16 @@ export type RoomStore = {
 export function createRoomStore(): RoomStore {
   const models = new Map<string, RoomModel>();
   const listeners = new Set<() => void>();
+  /** The floor that has the reception desk: the entities of the reserved room `_hq` go to its model. */
+  let receptionRoom: string | null = null;
   const notify = () => listeners.forEach((listener) => listener());
 
   const update = (room: string, change: (model: RoomModel) => RoomModel) => {
-    const model = models.get(room);
+    const model = models.get(room === RECEPTION_ROOM ? (receptionRoom ?? room) : room);
     if (!model) return;
     const next = change(model);
     if (next !== model) {
-      models.set(room, next);
+      models.set(model.room, next);
       notify();
     }
   };
@@ -48,7 +52,9 @@ export function createRoomStore(): RoomStore {
       switch (change.kind) {
         case "state": {
           const { state } = change;
+          receptionRoom = state.reception.room;
           for (const room of state.rooms) {
+            const here = room.name === receptionRoom;
             const model = models.get(room.name) ?? createRoomModel(room.name);
             models.set(
               room.name,
@@ -57,7 +63,12 @@ export function createRoomStore(): RoomStore {
                 {
                   type: "hydrate",
                   agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun })),
-                  approvals: state.approvals.pending.filter((approval) => approval.room === room.name),
+                  approvals: state.approvals.pending.filter(
+                    (approval) => approval.room === room.name || (here && approval.room === RECEPTION_ROOM),
+                  ),
+                  reception: here
+                    ? { id: RECEPTION_AGENT, name: strings.room.reception.name, lastRun: state.reception.runs[0] ?? null }
+                    : null,
                 },
                 at,
               ),

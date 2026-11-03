@@ -13,6 +13,7 @@
  * create is refused, so the real home is never touched.
  *
  *   npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl
+ *   npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl --agent onboarding
  *   MYHQ_HOME=<printed home> HQ_TELEGRAM_POLLING=false npm run dev -- -p 4343
  */
 import fs from "node:fs";
@@ -22,6 +23,7 @@ import { parseStreamLine } from "../src/server/claude-engine";
 import { now, openDb, type Db } from "../src/server/db";
 import type { RunEvent } from "../src/server/engine";
 import { loadHome, syncHome } from "../src/server/rooms";
+import { onboardingTask, RECEPTION_AGENT, RECEPTION_ROOM } from "../src/ui/reception";
 import { strings } from "../src/ui/strings";
 
 const t = strings.replay;
@@ -107,11 +109,14 @@ function parseArgs(argv: string[]): Options | null {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The room a run belongs to: the onboarding agent (the receptionist) lives in the reserved room `_hq`. */
+const roomOf = (agentId: string): string => (agentId === RECEPTION_AGENT ? RECEPTION_ROOM : ROOM);
+
 function storeEvent(db: Db, runId: number, agentId: string, event: RunEvent): void {
   const { type, ...data } = event;
   db.prepare("INSERT INTO events (run_id, room, agent_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
     runId,
-    ROOM,
+    roomOf(agentId),
     agentId,
     type,
     JSON.stringify(data),
@@ -132,7 +137,7 @@ function mcpSideEffect(db: Db, runId: number, agentId: string, call: { name: str
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       )
       .run(
-        ROOM,
+        roomOf(agentId),
         agentId,
         runId,
         String(input.type ?? "replayed_item"),
@@ -145,7 +150,7 @@ function mcpSideEffect(db: Db, runId: number, agentId: string, call: { name: str
   }
   if (call.name === "mcp__hq__hq_message" && typeof input.to === "string") {
     db.prepare("INSERT INTO messages (room, from_agent, to_agent, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
-      ROOM,
+      roomOf(agentId),
       agentId,
       input.to,
       String(input.text ?? ""),
@@ -171,7 +176,7 @@ async function main(): Promise<void> {
   ensureDemoHome(options.home, agents, options.agents !== null);
   // The room of an existing demo home is the truth (it may have more agents than the default three).
   const known = loadHome(options.home).rooms.find((room) => room.name === ROOM)?.agents.map((agent) => agent.id) ?? agents.map((agent) => agent.id);
-  if (!known.includes(options.agent)) throw new Error(t.unknownAgent(options.agent, known.join(", ")));
+  if (!known.includes(options.agent) && options.agent !== RECEPTION_AGENT) throw new Error(t.unknownAgent(options.agent, known.join(", ")));
   const db = openDb(path.join(options.home, "data", "hq.db"));
   syncHome(db, loadHome(options.home));
 
@@ -185,7 +190,12 @@ async function main(): Promise<void> {
       .prepare(
         "INSERT INTO runs (room, agent_id, engine, task, status, started_at) VALUES (?, ?, 'claude', ?, 'running', ?)",
       )
-      .run(ROOM, options.agent, `Replay of ${path.basename(options.fixture)}`, now()).lastInsertRowid,
+      .run(
+        roomOf(options.agent),
+        options.agent,
+        options.agent === RECEPTION_AGENT ? onboardingTask("../tinylog") : `Replay of ${path.basename(options.fixture)}`,
+        now(),
+      ).lastInsertRowid,
   );
   console.log(t.started(runId, options.agent));
 

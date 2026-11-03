@@ -1,4 +1,8 @@
-// Draws the neutral character sheet shipped with MyHQ: public/sprites/neutral.png.
+// Draws the character sheets shipped with MyHQ: public/sprites/neutral.png (the
+// neutral character, tinted per agent by the room view) and
+// public/sprites/receptionist.png (the receptionist at the reception desk, the
+// onboarding agent: a violet outfit, a headset and a lanyard with a badge, so
+// that it reads as reception; it is not tinted).
 //
 // Run by hand when the drawing changes (`node scripts/build-neutral-sprite.mjs`);
 // the PNG is committed, so a clone never needs to run it. It uses `sharp`,
@@ -15,18 +19,24 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
 const CELL = 128;
-const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public", "sprites", "neutral.png");
+const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public", "sprites");
 
-const BODY = "#f6f6f6";
-const LIMB = "#e2e2e2";
-const HAIR = "#c4c4c4";
-const SHOE = "#a6a6a6";
+// The neutral palette is near white so the room view can tint it (multiply);
+// the receptionist's own palette is already coloured and drawn with accessories.
+const NEUTRAL = { body: "#f6f6f6", limb: "#e2e2e2", limbBack: "#d4d4d4", hair: "#c4c4c4", shoe: "#a6a6a6", reception: false };
+const RECEPTIONIST = { body: "#b79ee6", limb: "#a98bd9", limbBack: "#9a7bcc", hair: "#5b4a78", shoe: "#4d4361", reception: true };
+let look = NEUTRAL;
+let BODY = "";
+let HAIR = "";
+let SHOE = "";
 const LINE = "#4a4a4a";
+const BADGE = "#fafafa";
+const STRAP = "#2f7d6f";
 
 const n = (value) => Math.round(value * 10) / 10;
 
 /** A thick limb: an outline stroke under a lighter one, round caps. */
-function limb(x1, y1, x2, y2, width, fill = LIMB) {
+function limb(x1, y1, x2, y2, width, fill = look.limb) {
   const d = `M${n(x1)} ${n(y1)}L${n(x2)} ${n(y2)}`;
   return (
     `<path d="${d}" stroke="${LINE}" stroke-width="${width + 3.5}" stroke-linecap="round" fill="none"/>` +
@@ -35,7 +45,7 @@ function limb(x1, y1, x2, y2, width, fill = LIMB) {
 }
 
 /** Two-segment limb through a joint. */
-function bent(x1, y1, jx, jy, x2, y2, width, fill = LIMB) {
+function bent(x1, y1, jx, jy, x2, y2, width, fill = look.limb) {
   const d = `M${n(x1)} ${n(y1)}L${n(jx)} ${n(jy)}L${n(x2)} ${n(y2)}`;
   return (
     `<path d="${d}" stroke="${LINE}" stroke-width="${width + 3.5}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>` +
@@ -52,7 +62,30 @@ function torso(x, top, bottom, lean = 0) {
     `M${n(x - w + lean)} ${top + 6}Q${n(x - w + lean)} ${top} ${n(x - w + 8 + lean)} ${top}` +
     `H${n(x + w - 8 + lean)}Q${n(x + w + lean)} ${top} ${n(x + w + lean)} ${top + 6}` +
     `V${bottom - 6}Q${n(x + w)} ${bottom} ${n(x + w - 8)} ${bottom}H${n(x - w + 8)}Q${n(x - w)} ${bottom} ${n(x - w)} ${bottom - 6}Z`;
-  return `<path d="${d}" fill="${BODY}" stroke="${LINE}" stroke-width="3" stroke-linejoin="round"/>`;
+  return (
+    `<path d="${d}" fill="${BODY}" stroke="${LINE}" stroke-width="3" stroke-linejoin="round"/>` +
+    (look.reception ? lanyard(x + lean, top) : "")
+  );
+}
+
+/** The receptionist's lanyard: a V strap from the neck and a badge on the chest. */
+function lanyard(x, top) {
+  return (
+    `<path d="M${n(x - 7)} ${top + 1}L${n(x + 2)} ${top + 17}L${n(x + 10)} ${top + 1}" stroke="${STRAP}" stroke-width="3.2" fill="none" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<rect x="${n(x - 3)}" y="${top + 16}" width="10" height="12" rx="2" fill="${BADGE}" stroke="${LINE}" stroke-width="2"/>` +
+    `<path d="M${n(x - 0.5)} ${top + 21}h5M${n(x - 0.5)} ${top + 25}h3.5" stroke="${STRAP}" stroke-width="1.8" stroke-linecap="round"/>`
+  );
+}
+
+/** The receptionist's headset: a band over the head, an ear cup, a microphone boom. */
+function headset(cx, cy) {
+  return (
+    `<path d="M${cx - 13} ${cy + 3}A16 16 0 0 1 ${cx + 12} ${cy - 10}" stroke="${LINE}" stroke-width="5.5" fill="none" stroke-linecap="round"/>` +
+    `<path d="M${cx - 13} ${cy + 3}A16 16 0 0 1 ${cx + 12} ${cy - 10}" stroke="${STRAP}" stroke-width="2.6" fill="none" stroke-linecap="round"/>` +
+    `<circle cx="${cx - 3}" cy="${cy + 5}" r="6" fill="${STRAP}" stroke="${LINE}" stroke-width="2.6"/>` +
+    `<path d="M${cx - 3} ${cy + 10}Q${cx + 4} ${cy + 18} ${cx + 12} ${cy + 13}" stroke="${LINE}" stroke-width="2.4" fill="none" stroke-linecap="round"/>` +
+    `<circle cx="${cx + 12.5}" cy="${cy + 13}" r="2.6" fill="${STRAP}" stroke="${LINE}" stroke-width="1.8"/>`
+  );
 }
 
 /** The head faces right: hair on the back and top, one eye and a small nose to the front. */
@@ -66,6 +99,7 @@ function head(cx, cy, { tilt = 0, asleep = false } = {}) {
     `<path d="M${cx - 17} ${cy}A17 17 0 0 1 ${cx + 12} ${cy - 12}Q${cx - 2} ${cy - 5} ${cx - 17} ${cy + 4}Z" fill="${HAIR}" stroke="${LINE}" stroke-width="3" stroke-linejoin="round"/>` +
     eye +
     `<path d="M${cx + 16} ${cy + 3}l4 3h-4" stroke="${LINE}" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+    (look.reception ? headset(cx, cy) : "") +
     `</g>`
   );
 }
@@ -76,12 +110,12 @@ function typing(frame) {
   const up = frame === 0;
   return (
     // thighs forward, shins down
-    bent(58, 100, 84, 100, 86, 119, 9, "#d4d4d4") +
+    bent(58, 100, 84, 100, 86, 119, 9, look.limbBack) +
     shoe(90, 120) +
     torso(62, 62, 102, 0) +
     head(66, 44) +
     // arms forward to the keyboard: one hand up, the other down, then swapped
-    bent(62, 72, 74, 90, up ? 96 : 100, up ? 98 : 90, 8, "#d4d4d4") +
+    bent(62, 72, 74, 90, up ? 96 : 100, up ? 98 : 90, 8, look.limbBack) +
     bent(68, 72, 82, 82, up ? 100 : 96, up ? 84 : 94, 8)
   );
 }
@@ -99,9 +133,9 @@ function walking(frame) {
   ][frame];
   return (
     `<g transform="translate(0 ${bob})">` +
-    limb(60, 96, poses.back[0], poses.back[1] - bob - 4, 10, "#d4d4d4") +
+    limb(60, 96, poses.back[0], poses.back[1] - bob - 4, 10, look.limbBack) +
     shoe(poses.back[0] + 3, poses.back[1] - bob) +
-    limb(poses.armBack[0] - (frame === 0 || frame === 2 ? 4 : 0), 92, poses.armBack[0], poses.armBack[1] - 4, 8, "#d4d4d4") +
+    limb(poses.armBack[0] - (frame === 0 || frame === 2 ? 4 : 0), 92, poses.armBack[0], poses.armBack[1] - 4, 8, look.limbBack) +
     torso(64, 58, 100) +
     limb(68, 96, poses.front[0], poses.front[1] - bob - 4, 10) +
     shoe(poses.front[0] + 3, poses.front[1] - bob) +
@@ -117,12 +151,12 @@ function thinking(frame) {
   const sway = frame === 0 ? 0 : 1.5;
   return (
     `<g transform="translate(${sway} 0)">` +
-    limb(60, 96, 58, 117, 10, "#d4d4d4") +
+    limb(60, 96, 58, 117, 10, look.limbBack) +
     shoe(61, 120) +
     limb(68, 96, 70, 117, 10) +
     shoe(73, 120) +
     // the other arm folded across
-    bent(60, 72, 52, 86, 70, 90, 8, "#d4d4d4") +
+    bent(60, 72, 52, 86, 70, 90, 8, look.limbBack) +
     torso(64, 58, 100) +
     head(66, 40, { tilt: frame === 0 ? 4 : 7 }) +
     // the hand rests on the chin
@@ -136,7 +170,7 @@ function thinking(frame) {
 function sleeping(frame) {
   const breathe = frame === 0 ? 0 : 1.6;
   return (
-    bent(54, 104, 82, 104, 84, 119, 9, "#d4d4d4") +
+    bent(54, 104, 82, 104, 84, 119, 9, look.limbBack) +
     shoe(90, 120) +
     `<g transform="translate(0 ${breathe})">` +
     torso(66, 70, 106, 8) +
@@ -147,20 +181,25 @@ function sleeping(frame) {
   );
 }
 
-const rows = [
-  [typing(0), typing(1)],
-  [walking(0), walking(1), walking(2), walking(3)],
-  [thinking(0), thinking(1)],
-  [sleeping(0), sleeping(1)],
-];
+async function build(name, palette) {
+  look = palette;
+  ({ body: BODY, hair: HAIR, shoe: SHOE } = palette);
+  const rows = [
+    [typing(0), typing(1)],
+    [walking(0), walking(1), walking(2), walking(3)],
+    [thinking(0), thinking(1)],
+    [sleeping(0), sleeping(1)],
+  ];
+  const cells = rows
+    .flatMap((frames, row) =>
+      frames.map((content, col) => `<g transform="translate(${col * CELL} ${row * CELL})">${content}</g>`),
+    )
+    .join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CELL * 4}" height="${CELL * 4}" viewBox="0 0 ${CELL * 4} ${CELL * 4}">${cells}</svg>`;
+  const out = path.join(OUT_DIR, name);
+  await sharp(Buffer.from(svg), { density: 72 }).png({ compressionLevel: 9 }).toFile(out);
+  console.log(`Wrote ${path.relative(process.cwd(), out)}`);
+}
 
-const cells = rows
-  .flatMap((frames, row) =>
-    frames.map((content, col) => `<g transform="translate(${col * CELL} ${row * CELL})">${content}</g>`),
-  )
-  .join("");
-
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CELL * 4}" height="${CELL * 4}" viewBox="0 0 ${CELL * 4} ${CELL * 4}">${cells}</svg>`;
-
-await sharp(Buffer.from(svg), { density: 72 }).png({ compressionLevel: 9 }).toFile(OUT);
-console.log(`Wrote ${path.relative(process.cwd(), OUT)}`);
+await build("neutral.png", NEUTRAL);
+await build("receptionist.png", RECEPTIONIST);

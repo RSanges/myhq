@@ -33,6 +33,19 @@ export const homeSettingsSchema = z.looseObject({
    * Informational approval types: an item of one of them is stored already
    * approved (note « notification ») and sent to Telegram in full, without buttons.
    */
+  /**
+   * The floor that draws the reception desk and the receptionist (the
+   * onboarding agent): the room named here when it exists, else the room
+   * `assistant`, else the first room.
+   */
+  reception: z.strictObject({ room: z.string().trim().min(1) }).optional(),
+  /** The onboarding agent's own settings. */
+  onboarding: z
+    .strictObject({
+      /** Character sheet of the receptionist, relative to the home (the shipped one when absent). */
+      sprite: z.string().trim().min(1).optional(),
+    })
+    .optional(),
   notifyTypes: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,62}$/, "an approval type in snake_case")).default([]),
 });
 
@@ -67,6 +80,27 @@ export function readNotifyTypes(home: string): string[] {
   } catch (error) {
     console.error(`[notify] ${(error as Error).message}`);
     return [];
+  }
+}
+
+/** The `reception.room` of myhq.json, null when absent. Never throws: an invalid file is logged. */
+export function readReceptionRoom(home: string): string | null {
+  try {
+    return readHomeSettings(home)?.reception?.room ?? null;
+  } catch (error) {
+    console.error(`[reception] ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/** The receptionist's own character sheet (`onboarding.sprite`), as an absolute path, null when absent. Never throws. */
+export function readReceptionSprite(home: string): string | null {
+  try {
+    const sprite = readHomeSettings(home)?.onboarding?.sprite;
+    return sprite ? path.resolve(home, sprite) : null;
+  } catch (error) {
+    console.error(`[reception] ${(error as Error).message}`);
+    return null;
   }
 }
 

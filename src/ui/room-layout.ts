@@ -8,6 +8,7 @@ import {
   type RoomSpec,
   type Side,
 } from "./floor-templates";
+import { RECEPTION_KEY } from "./reception";
 
 // The floor plan the room view draws and the agents walk in, in world units
 // (one unit is one pixel at a scale of 1). It is built from a hand-designed
@@ -48,6 +49,21 @@ export type Office = {
   outside: number;
 };
 
+/**
+ * The reception desk of the lobby, on the floor that has the receptionist. Its
+ * `office` is the receptionist's spot, like an agent's: the same routes (to the
+ * tray, to a colleague) start from it.
+ */
+export type Reception = {
+  counter: Rect;
+  /** The bell on the counter, and the small screen. */
+  bell: Point;
+  screen: Rect;
+  /** Where the name of the desk is written, under the counter. */
+  plate: Point;
+  office: Office;
+};
+
 export type PlacedRoom = { kind: RoomKind; rect: Rect; vacant: boolean };
 
 export type RoomLayout = {
@@ -63,6 +79,8 @@ export type RoomLayout = {
   /** Desks of agents with nobody at them (drawn like the others). */
   vacantDesks: Rect[];
   offices: Office[];
+  /** The reception desk and its receptionist's spot, null on the floors that do not have one. */
+  reception: Reception | null;
   meeting: { rect: Rect; board: Rect } | null;
   coffee: Rect | null;
   user: {
@@ -113,15 +131,16 @@ function attach(graph: Graph, point: Point): number {
     const distance = Math.hypot(point.x - q.x, point.y - q.y);
     if (!best || distance < best.distance) best = { edge, q, distance };
   });
-  const own = nodeAt(graph, point);
-  if (!best) return own;
+  if (!best) return nodeAt(graph, point);
   const { edge, q } = best as { edge: number; q: Point };
   const [i, j] = graph.edges[edge]!;
+  // The corridor is split at q first, so that a point that lies on a corridor joins it.
   let qId = graph.nodes.findIndex((node) => same(node, q));
   if (qId < 0) {
     qId = nodeAt(graph, q);
     graph.edges.splice(edge, 1, [i, qId], [qId, j]);
   }
+  const own = nodeAt(graph, point);
   if (qId !== own) graph.edges.push([own, qId]);
   return own;
 }
@@ -227,8 +246,43 @@ function buildOffice(graph: Graph, key: string, spec: RoomSpec, door: Door, desk
   };
 }
 
-/** The floor plan for the given agent keys, in order, from the smallest template that seats them. */
-export function layoutRoom(keys: string[]): RoomLayout {
+function buildReception(graph: Graph, spec: FloorTemplate["lobby"]["reception"]): Reception {
+  const { counter, seat, outside } = spec;
+  const outsideNode = attach(graph, outside);
+  // The receptionist leaves straight ahead, away from the visitors' side of the counter.
+  const ahead = { x: seat.x, y: seat.y - 18 };
+  const exit = tidy([seat, ahead, outside]);
+  return {
+    counter,
+    bell: { x: counter.x + 11, y: counter.y + 4.5 },
+    screen: { x: counter.x + counter.w - 22, y: counter.y - 3, w: 14, h: 9 },
+    plate: { x: counter.x + counter.w / 2, y: counter.y + counter.h + 4 },
+    office: {
+      key: RECEPTION_KEY,
+      room: counter,
+      door: { x: outside.x, y: outside.y, w: DOOR_W, wall: "top" },
+      desk: counter,
+      chair: { x: seat.x, y: seat.y - 7 },
+      seat,
+      plate: { x: counter.x + counter.w / 2, y: counter.y + counter.h + 4, ax: 0 },
+      exit,
+      visit: tidy([...exit].reverse()),
+      outside: outsideNode,
+    },
+  };
+}
+
+export type LayoutOptions = {
+  /** Draw the reception desk of the lobby (the floor that has the receptionist). */
+  reception?: boolean;
+};
+
+/**
+ * The floor plan for the given agent keys, in order, from the smallest template
+ * that seats them. The reception desk is added to the lobby on request: it
+ * seats nobody of `keys`, the receptionist belongs to the home, not to a room.
+ */
+export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLayout {
   const template = templateFor(keys.length);
   const graph: Graph = { nodes: [], edges: [] };
   for (const line of template.corridors) {
@@ -272,6 +326,7 @@ export function layoutRoom(keys: string[]): RoomLayout {
   for (let i = 0; i < outline.length; i += 1) walls.push({ a: outline[i]!, b: outline[(i + 1) % outline.length]! });
 
   const standNode = attach(graph, template.lobby.stand);
+  const reception = options.reception ? buildReception(graph, template.lobby.reception) : null;
   const user = userSpec.userDesk;
   return {
     template: template.id,
@@ -284,6 +339,7 @@ export function layoutRoom(keys: string[]): RoomLayout {
     items,
     vacantDesks,
     offices,
+    reception,
     meeting,
     coffee,
     user: {
@@ -302,6 +358,7 @@ export function layoutRoom(keys: string[]): RoomLayout {
 }
 
 export function officeOf(layout: RoomLayout, key: string): Office | null {
+  if (key === RECEPTION_KEY) return layout.reception?.office ?? null;
   return layout.offices.find((office) => office.key === key) ?? null;
 }
 

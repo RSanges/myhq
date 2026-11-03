@@ -7,6 +7,7 @@ import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { loadHome, toPosix, type Agent, type Model, type Room } from "./rooms";
 import { launchRun, type RunnerDeps } from "./runner";
+import { onboardingTask, RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 import { strings } from "../ui/strings";
 import { listRoleTemplates, roleTemplatesDir, ROLE_PLACEHOLDERS } from "./templates";
 
@@ -17,8 +18,8 @@ import { listRoleTemplates, roleTemplatesDir, ROLE_PLACEHOLDERS } from "./templa
  * Its runs belong to a reserved room, `_hq`, that no folder of the home can
  * take (room names start with a letter or a digit).
  */
-export const ONBOARDING_ROOM = "_hq";
-export const ONBOARDING_AGENT = "onboarding";
+export const ONBOARDING_ROOM = RECEPTION_ROOM;
+export const ONBOARDING_AGENT = RECEPTION_AGENT;
 
 export const onboardingSchema = z.strictObject({
   path: z.string().trim().min(1).max(1_000),
@@ -168,7 +169,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
   const agent = onboardingAgent(config, target, deps.model ?? "sonnet");
   room.agents.push(agent);
   const targetRepo = toPosix(path.relative(config.home, target)) || ".";
-  const task = `Propose a room for the repository ${targetRepo}.`;
+  const task = onboardingTask(targetRepo);
   return launchRun({
     config,
     deps,

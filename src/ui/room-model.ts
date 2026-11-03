@@ -1,4 +1,5 @@
 import { agentKey, viewEvent } from "./model";
+import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run } from "./schemas";
 import {
   layoutRoom,
@@ -82,8 +83,13 @@ export type ApprovalSeed = Pick<Approval, "id" | "room" | "agentId" | "status">;
 export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null };
 
 export type RoomInput =
-  /** The room as the snapshot of /api/state describes it (first load, reconnection). */
-  | { type: "hydrate"; agents: AgentSeed[]; approvals: ApprovalSeed[] }
+  /**
+   * The room as the snapshot of /api/state describes it (first load,
+   * reconnection). `reception` is the receptionist (the onboarding agent of
+   * the reserved room `_hq`) when this floor is the one that has the reception
+   * desk; its runs, events and approvals then belong to this room's model too.
+   */
+  | { type: "hydrate"; agents: AgentSeed[]; approvals: ApprovalSeed[]; reception?: AgentSeed | null }
   | { type: "run"; run: RunSeed }
   | { type: "event"; event: HqEvent }
   | { type: "approval"; approval: ApprovalSeed };
@@ -123,13 +129,20 @@ type ApprovalState = { agentKey: string; status: Approval["status"]; shownAt: nu
 
 export type RoomModel = {
   room: string;
+  /** This floor has the reception desk: the receptionist (key `_hq/onboarding`) is the last of `agents`. */
+  reception: boolean;
   layout: RoomLayout;
   agents: AgentRuntime[];
   approvals: Record<number, ApprovalState>;
 };
 
 export function createRoomModel(room: string): RoomModel {
-  return { room, layout: layoutRoom([]), agents: [], approvals: {} };
+  return { room, reception: false, layout: layoutRoom([]), agents: [], approvals: {} };
+}
+
+/** Whether the entities of `room` belong to this model: its own room, and the reserved onboarding room on the floor with the reception. */
+function owns(model: RoomModel, room: string): boolean {
+  return room === model.room || (model.reception && room === RECEPTION_ROOM);
 }
 
 const tripEnd = (trip: Trip): number => trip.start + trip.legMs * 2 + trip.stayMs;
@@ -224,7 +237,7 @@ function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRu
 }
 
 function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
-  if (event.room !== model.room) return model;
+  if (!owns(model, event.room)) return model;
   const view = viewEvent(event);
   return replaceAgent(model, agentKey(event.room, event.agentId), (agent) => {
     const active = { ...agent, lastActive: at };
@@ -257,7 +270,7 @@ function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
 }
 
 function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
-  if (run.room !== model.room) return model;
+  if (!owns(model, run.room)) return model;
   return replaceAgent(model, agentKey(run.room, run.agentId), (agent) => {
     if (run.id < agent.runId) return agent;
     if (run.status === "running") {
@@ -278,7 +291,7 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
 }
 
 function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): RoomModel {
-  if (approval.room !== model.room) return model;
+  if (!owns(model, approval.room)) return model;
   const key = agentKey(approval.room, approval.agentId);
   const known = model.approvals[approval.id];
   if (approval.status !== "pending") {
@@ -309,8 +322,10 @@ function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): Ro
 
 function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydrate" }>, at: number): RoomModel {
   const keys = input.agents.map((agent) => agentKey(model.room, agent.id));
-  const agents = input.agents.map((seed, index): AgentRuntime => {
-    const key = keys[index]!;
+  const reception = input.reception ?? null;
+  const seeded: { key: string; seed: AgentSeed }[] = input.agents.map((seed, index) => ({ key: keys[index]!, seed }));
+  if (reception) seeded.push({ key: RECEPTION_KEY, seed: reception });
+  const agents = seeded.map(({ key, seed }): AgentRuntime => {
     const kept = model.agents.find((agent) => agent.key === key);
     if (kept) return { ...kept, name: seed.name };
     const run = seed.lastRun;
@@ -330,15 +345,24 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
   });
   const approvals: Record<number, ApprovalState> = {};
   for (const approval of input.approvals) {
-    if (approval.room !== model.room) continue;
+    if (approval.room !== model.room && !(reception && approval.room === RECEPTION_ROOM)) continue;
     approvals[approval.id] = {
       agentKey: agentKey(approval.room, approval.agentId),
       status: approval.status,
       shownAt: model.approvals[approval.id]?.shownAt ?? Number.NEGATIVE_INFINITY,
     };
   }
-  const sameKeys = keys.length === model.agents.length && keys.every((key, index) => key === model.agents[index]?.key);
-  return { ...model, layout: sameKeys ? model.layout : layoutRoom(keys), agents, approvals };
+  const sameKeys =
+    (reception !== null) === model.reception &&
+    keys.length + (reception ? 1 : 0) === model.agents.length &&
+    keys.every((key, index) => key === model.agents[index]?.key);
+  return {
+    ...model,
+    reception: reception !== null,
+    layout: sameKeys ? model.layout : layoutRoom(keys, { reception: reception !== null }),
+    agents,
+    approvals,
+  };
 }
 
 /** Feeds one entity of the stream (or a snapshot) to the model, at time `at`. */

@@ -99,10 +99,14 @@ export const firingSchema = z.object({
 export const schedulerSchema = z.object({ enabled: z.boolean(), running: z.boolean(), timeZone: z.string() });
 const schedulerOff = { enabled: false, running: false, timeZone: "UTC" };
 
+/** The floor that draws the receptionist (the onboarding agent), its own sheet, and its latest runs, newest first. */
+export const receptionSchema = z.object({ room: z.string().nullable(), sprite: z.string().nullable(), runs: z.array(runSchema) });
+
 export const stateSchema = z.object({
   cursor: z.number().int(),
   rooms: z.array(z.object({ name: z.string(), agents: z.array(agentSchema) })),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
+  reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
   scheduler: schedulerSchema.default(schedulerOff),
   firings: z.array(firingSchema).default([]),
   approvals: z.object({ pending: z.array(approvalSchema), history: z.array(approvalSchema) }),
@@ -198,6 +202,7 @@ export type Approval = z.infer<typeof approvalSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 export type State = z.infer<typeof stateSchema>;
 export type Usage = z.infer<typeof usageSchema>;
+export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;
 export type Scheduler = z.infer<typeof schedulerSchema>;
 export type Routine = z.infer<typeof routineSchema>;

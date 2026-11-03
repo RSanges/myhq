@@ -136,7 +136,8 @@ The onboarding fixture has reads and an `hq_submit` (the agent walks to your
 desk and drops a folder in the tray), `stream-json-message.synthetic.jsonl`
 an `hq_message` (a walk to a colleague's table, a synthetic file, see its first
 line), `stream-json-auth-error.jsonl` a failed run (a question mark). Options:
-`--agent <id>` (scout, writer or analyst by default), `--agents <n>` (a floor of
+`--agent <id>` (scout, writer or analyst by default; `onboarding` plays the
+receptionist at the reception desk of the floor), `--agents <n>` (a floor of
 2 to 12 offices), `--interval <ms>`, `--delay <s>`, `--home <dir>`. The script refuses a folder it did not create, so it never
 writes into your real home, and it never starts `claude`.
 
