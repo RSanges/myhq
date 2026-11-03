@@ -136,8 +136,10 @@ test("an unreadable annotations column counts as none", () => {
 
 test("PATCH /api/approvals/[id] accepts annotations and refuses the invalid ones", async () => {
   const { config, db } = fresh();
-  const saved = process.env.MYHQ_HOME;
+  const saved = { home: process.env.MYHQ_HOME, bin: process.env.HQ_CLAUDE_BIN };
   process.env.MYHQ_HOME = config.home;
+  // A revision wakes the agent: a binary that does not exist, so that no real run starts.
+  process.env.HQ_CLAUDE_BIN = "claude-binary-not-installed-in-tests";
   try {
     const patch = (id: number, body: unknown) =>
       PATCH(
@@ -164,7 +166,9 @@ test("PATCH /api/approvals/[id] accepts annotations and refuses the invalid ones
     assert.deepEqual(approval.annotations, ANNOTATIONS);
     assert.equal(approval.decisionNote, null);
   } finally {
-    if (saved === undefined) delete process.env.MYHQ_HOME;
-    else process.env.MYHQ_HOME = saved;
+    if (saved.home === undefined) delete process.env.MYHQ_HOME;
+    else process.env.MYHQ_HOME = saved.home;
+    if (saved.bin === undefined) delete process.env.HQ_CLAUDE_BIN;
+    else process.env.HQ_CLAUDE_BIN = saved.bin;
   }
 });

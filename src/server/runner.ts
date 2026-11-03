@@ -160,13 +160,29 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
   });
 }
 
-type WakeCandidate = { room: string; agent_id: string; source: "approval" | "message" };
+type WakeCandidate = { room: string; agent_id: string; source: "approval" | "message" | "revise" | "chat" };
+
+/** Whether a task of this source wakes the agent: every one does unless the agent opted out (`queue`). */
+function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
+  switch (source) {
+    case "approval":
+      return agent.onApproval === "task";
+    case "message":
+      return agent.onMessage !== "queue";
+    case "revise":
+      return agent.onRevise !== "queue";
+    case "chat":
+      return true;
+  }
+}
 
 /**
- * Starts a run, at once, for each agent that has a reason to wake up: a task
- * from an approved item (`onApproval: "task"`, reason `approval`) or from a
- * message (`onMessage: "run"`, reason `message`) created since the agent's
- * last run started. A busy agent or the daily cap leaves the task pending: it
+ * Starts a run, at once, for each agent that has a task to take: one from an
+ * approved item (`onApproval: "task"`, reason `approval`), a message
+ * (reason `message`), a revision (reason `revise`) or a request of the chat
+ * (reason `chat`), created since the agent's last run started. A message or a
+ * revision wakes the agent unless it opted out (`onMessage` or `onRevise` set
+ * to `"queue"`), and the task then waits for its next run. A busy agent or the daily cap leaves the task pending: it
  * is taken by the agent's next run, and an agent still busy is woken again
  * when its run ends (the app calls this after each decision, on each tool
  * result and at the end of each run). Tasks given back by a failed run are
@@ -177,7 +193,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const candidates = db
     .prepare(
       `SELECT t.room, t.agent_id, t.source FROM tasks t
-       WHERE t.status = 'pending' AND t.source IN ('approval', 'message')
+       WHERE t.status = 'pending' AND t.source IN ('approval', 'message', 'revise', 'chat')
          AND t.created_at > COALESCE(
            (SELECT MAX(r.started_at) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id), '')
        ORDER BY t.id`,
@@ -192,8 +208,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     if (done.has(key)) continue;
     const agent = home.rooms.find((r) => r.name === candidate.room)?.agents.find((a) => a.id === candidate.agent_id);
     if (!agent) continue;
-    const wanted = candidate.source === "approval" ? agent.onApproval === "task" : agent.onMessage === "run";
-    if (!wanted) continue;
+    if (!wakesAgent(agent, candidate.source)) continue;
     done.add(key);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };

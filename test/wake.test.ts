@@ -13,7 +13,11 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, ca
 const done: RunEvent = { type: "end", status: "done", reason: "success", summary: "ok", usage, costUsd: 0 };
 const failed: RunEvent = { type: "end", status: "failed", reason: "spawn_error", summary: "boom", usage, costUsd: 0 };
 
-/** A home with a scout, a mailer (onApproval: task) and a writer (onMessage: run). */
+/**
+ * A home with a scout and a writer (the defaults: woken by a message and by a
+ * revision), and a mailer (onApproval: task) that batches its work: it opted
+ * out of waking for messages and revisions.
+ */
 function wakeHome(overrides: Partial<HqConfig> = {}): HqConfig {
   const base = { role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] };
   return makeHome(overrides, {
@@ -21,8 +25,8 @@ function wakeHome(overrides: Partial<HqConfig> = {}): HqConfig {
     targetRepo: "../demo-project",
     agents: [
       { id: "scout", name: "Scout", ...base },
-      { id: "mailer", name: "Mailer", ...base, onApproval: "task" },
-      { id: "writer", name: "Writer", ...base, onMessage: "run" },
+      { id: "mailer", name: "Mailer", ...base, onApproval: "task", onMessage: "queue", onRevise: "queue" },
+      { id: "writer", name: "Writer", ...base },
     ],
   });
 }
@@ -67,17 +71,29 @@ async function until(predicate: () => boolean, timeoutMs = 5_000): Promise<void>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("room.json: onApproval and onMessage are optional, null by default, and checked", () => {
+test("room.json: onApproval, onMessage and onRevise are optional, null (the default) unless set, and checked", () => {
   const config = wakeHome();
   const agents = loadHome(config.home).rooms[0]!.agents;
   assert.deepEqual(
-    agents.map((a) => [a.id, a.onApproval, a.onMessage]),
+    agents.map((a) => [a.id, a.onApproval, a.onMessage, a.onRevise]),
     [
-      ["scout", null, null],
-      ["mailer", "task", null],
-      ["writer", null, "run"],
+      ["scout", null, null, null],
+      ["mailer", "task", "queue", "queue"],
+      ["writer", null, null, null],
     ],
   );
+  const queued = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "x",
+      agents: [
+        { id: "scout", name: "S", role: "roles/scout.md", model: "haiku", allowedTools: [], onApproval: "queue", onMessage: "run", onRevise: "run" },
+      ],
+    },
+  );
+  const [scout] = loadHome(queued.home).rooms[0]!.agents;
+  assert.deepEqual([scout!.onApproval, scout!.onMessage, scout!.onRevise], ["queue", "run", "run"]);
   const bad = makeHome(
     {},
     {
@@ -170,7 +186,7 @@ test("with the daily cap reached, the task waits for the next run", async () => 
   assert.equal(approvalTasks(db)[0]!.status, "pending");
 });
 
-test("an hq_message to an onMessage agent starts its run at once; to another agent, it waits", async () => {
+test("an hq_message starts the run of its recipient at once; an agent that opted out only queues it", async () => {
   const config = wakeHome();
   const db = getDbAt(config.dbPath);
   const seen: RunInput[] = [];
@@ -199,7 +215,7 @@ test("an hq_message to an onMessage agent starts its run at once; to another age
   assert.match(seen.find((i) => i.agentId === "writer")!.prompt, /\[task \d+, message\] Message from scout: Draft the post\./);
   await sleep(50);
   assert.equal(runsOf(db, "writer").length, 1);
-  assert.equal(runsOf(db, "mailer").length, 0, "the mailer does not wake on messages");
+  assert.equal(runsOf(db, "mailer").length, 0, "the mailer opted out of waking on messages");
   const waiting = db.prepare("SELECT * FROM tasks WHERE agent_id = 'mailer' AND status = 'pending'").all() as TaskRow[];
   assert.equal(waiting.length, 1);
 });
@@ -225,4 +241,118 @@ test("a woken run that fails is not woken again in a loop", async () => {
   assert.equal(runsOf(db, "writer").length, 1);
   const task = db.prepare("SELECT * FROM tasks WHERE agent_id = 'writer' AND source = 'message'").get() as TaskRow;
   assert.equal(task.status, "pending", "the message waits for the writer's next run");
+});
+
+test("a revise decision starts a run of the agent at once, with the reason revise", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  const id = addApproval(db, "scout", "A reply");
+  decideApproval(db, id, { decision: "revise", note: "Shorter." }, config, { engine: engine({}, seen), send: async () => true });
+  const [run] = runsOf(db, "scout");
+  assert.ok(run, "a run started at once");
+  assert.equal(run.reason, "revise");
+  assert.equal(run.task, WAKE_TASK);
+  await waitForRun(db, run.id);
+  assert.ok(seen[0]!.prompt.includes(`, revise] Revise your submission #${id} "A reply" (mail_reply). User's note: Shorter.`));
+  const task = db.prepare("SELECT status FROM tasks WHERE source = 'revise'").get() as TaskRow;
+  assert.equal(task.status, "done");
+});
+
+test("a revision of an approved item wakes the agent too", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  const deps = { engine: engine({}, seen), send: async () => true };
+  const id = addApproval(db, "scout", "A reply");
+  decideApproval(db, id, { decision: "approved" }, config, deps);
+  assert.equal(runsOf(db, "scout").length, 0, "approving gives the scout no task");
+  decideApproval(db, id, { decision: "revise", note: "Not that tone." }, config, deps);
+  const [run] = runsOf(db, "scout");
+  assert.equal(run?.reason, "revise");
+  await waitForRun(db, run!.id);
+});
+
+test("an agent with onRevise: queue only gets the task, for its next run", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  const id = addApproval(db, "mailer", "A mail");
+  decideApproval(db, id, { decision: "revise", note: "Redo." }, config, { engine: engine({}, seen), send: async () => true });
+  await sleep(50);
+  assert.equal(runsOf(db, "mailer").length, 0);
+  const task = db.prepare("SELECT * FROM tasks WHERE source = 'revise'").get() as TaskRow;
+  assert.equal(task.agent_id, "mailer");
+  assert.equal(task.status, "pending");
+});
+
+test("a revision while the agent is busy waits, then wakes it once its run ends", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let calls = 0;
+  const scripts: Record<string, Script> = {
+    scout: async function* () {
+      if (calls++ === 0) await gate;
+      yield done;
+    },
+  };
+  const deps = { config, engine: engine(scripts, seen), send: async () => true };
+  const busy = startRun({ room: "demo", agent: "scout" }, deps);
+  await sleep(5);
+  decideApproval(db, addApproval(db, "scout", "Busy"), { decision: "revise", note: "Redo." }, config, deps);
+  assert.equal(runsOf(db, "scout").length, 1, "no second run while the lock is held");
+  release();
+  await waitForRun(db, busy.id);
+  await until(() => runsOf(db, "scout").length === 2);
+  assert.equal(runsOf(db, "scout")[1]!.reason, "revise");
+  await sleep(50);
+  assert.equal(runsOf(db, "scout").length, 2, "woken once");
+});
+
+test("a revision whose woken run fails is not woken again in a loop", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  const deps = { engine: engine({ scout: async function* () { yield failed; } }, seen), send: async () => true };
+  decideApproval(db, addApproval(db, "scout", "Fails"), { decision: "revise", note: "Redo." }, config, deps);
+  await until(() => runsOf(db, "scout").length === 1);
+  await waitForRun(db, runsOf(db, "scout")[0]!.id);
+  await sleep(100);
+  assert.equal(runsOf(db, "scout").length, 1);
+  const task = db.prepare("SELECT status FROM tasks WHERE source = 'revise'").get() as TaskRow;
+  assert.equal(task.status, "pending", "the revision waits for the agent's next run");
+});
+
+test("onApproval: queue creates the task of an approved item but does not wake the agent", async () => {
+  const base = { role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] };
+  const config = makeHome({}, {
+    name: "demo",
+    targetRepo: "../demo-project",
+    agents: [{ id: "scout", name: "Scout", ...base, onApproval: "queue" }],
+  });
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  decideApproval(db, addApproval(db, "scout", "Batch"), { decision: "approved" }, config, { engine: engine({}, seen) });
+  await sleep(50);
+  assert.equal(approvalTasks(db).length, 1);
+  assert.equal(approvalTasks(db)[0]!.status, "pending");
+  assert.equal(runsOf(db, "scout").length, 0);
+});
+
+test("an hq_message wakes an agent that did not set onMessage (the default)", async () => {
+  const config = wakeHome();
+  const db = getDbAt(config.dbPath);
+  const seen: RunInput[] = [];
+  const deps = { config, engine: engine({}, seen), send: async () => true };
+  const sender = startRun({ room: "demo", agent: "writer" }, deps);
+  await waitForRun(db, sender.id);
+  hqMessage(db, { dbPath: config.dbPath, runId: sender.id, agentId: "writer", room: "demo" }, { to: "scout", text: "Hi." });
+  const { wakeAgents } = await import("../src/server/runner");
+  wakeAgents(config, db, deps);
+  const [run] = runsOf(db, "scout");
+  assert.equal(run?.reason, "message", "scout has no onMessage: it wakes by default");
+  await waitForRun(db, run!.id);
 });

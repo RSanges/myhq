@@ -76,10 +76,16 @@ const agentSchema = z.strictObject({
   maxBudgetUsd: z.number().positive().optional(),
   /** Character sheet of the room view, relative to the home (the neutral one when left out). */
   sprite: spriteSchema.optional(),
-  /** "task": approving one of its items gives the agent a task to execute it, and wakes it. */
-  onApproval: z.enum(["task"]).optional(),
-  /** "run": a message from another agent (hq_message) wakes it at once. */
-  onMessage: z.enum(["run"]).optional(),
+  /**
+   * "task": approving one of its items gives the agent a task to execute it, and wakes it
+   * (the default: left out, an approval gives it no task). "queue": the task is created
+   * but the agent is not woken, it finds it at its next run.
+   */
+  onApproval: z.enum(["task", "queue"]).optional(),
+  /** A message from another agent (hq_message) wakes it at once ("run", the default); "queue": it waits for the next run. */
+  onMessage: z.enum(["run", "queue"]).optional(),
+  /** A revise decision wakes the agent at once ("run", the default); "queue": the revision waits for the next run. */
+  onRevise: z.enum(["run", "queue"]).optional(),
   /** "summary": the final text of each run that ends well is sent to Telegram. */
   notifyRuns: z.enum(["summary"]).optional(),
 });
@@ -118,10 +124,12 @@ export type Agent = {
   maxBudgetUsd: number | null;
   /** Absolute path of the agent's character sheet, always inside the home, or null for the neutral one. */
   sprite: string | null;
-  /** "task": an approved item becomes a task for the agent, and wakes it (see wakeAgents). */
-  onApproval: "task" | null;
-  /** "run": a message addressed to the agent wakes it (see wakeAgents). */
-  onMessage: "run" | null;
+  /** "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; null: no task (see wakeAgents). */
+  onApproval: "task" | "queue" | null;
+  /** A message addressed to the agent wakes it, unless "queue" (null is the default: wake, see wakeAgents). */
+  onMessage: "run" | "queue" | null;
+  /** A revise decision wakes the agent, unless "queue" (null is the default: wake, see wakeAgents). */
+  onRevise: "run" | "queue" | null;
   /** "summary": the summary of each run that ends `done` is sent to Telegram. */
   notifyRuns: "summary" | null;
 };
@@ -233,6 +241,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       sprite,
       onApproval: agent.onApproval ?? null,
       onMessage: agent.onMessage ?? null,
+      onRevise: agent.onRevise ?? null,
       notifyRuns: agent.notifyRuns ?? null,
     };
   });

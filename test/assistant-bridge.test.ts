@@ -255,7 +255,17 @@ test("button presses from another chat are ignored", async () => {
 // --- Core commands -------------------------------------------------------------
 
 test("core commands: approve, reject, revise, run and status", async () => {
-  const config = makeHome();
+  // The scout queues its revisions: /revise must not start a run here, /status counts none.
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "../demo-project",
+      agents: [
+        { id: "scout", name: "Scout", role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"], onRevise: "queue" },
+      ],
+    },
+  );
   const { db, fake, assistant } = await setup({ config });
   const a = addApproval(db, "First");
   const b = addApproval(db, "Second");
