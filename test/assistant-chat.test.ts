@@ -228,7 +228,7 @@ test("GET /api/chat/history shape: the last messages, oldest first, never more t
       ["user", `m${KEPT_MESSAGES + 4}`],
     ],
   );
-  assert.deepEqual(Object.keys(last[0]!).sort(), ["channel", "createdAt", "id", "kind", "role", "text", "to"]);
+  assert.deepEqual(Object.keys(last[0]!).sort(), ["channel", "choices", "createdAt", "id", "kind", "role", "text", "to"]);
 });
 
 test("alerts the bot really sent go into the conversation, unsent ones do not", async () => {
@@ -342,7 +342,7 @@ test("assistant.json: chat.preamble is validated, command or file", () => {
     fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat", preamble } }));
   write({ command: "npx tsx assistant/chat/preamble.ts" });
   assert.deepEqual(loadAssistantConfig(home).chat!.preamble, {
-    fields: ["datetime", "pending", "runs"],
+    fields: ["datetime", "lastExchange", "pending", "runs"],
     command: "npx tsx assistant/chat/preamble.ts",
     file: null,
     maxChars: 600,

@@ -144,6 +144,8 @@ export const armResponseSchema = z.object({ agent: z.object({ room: z.string(), 
 export const errorBodySchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 export const runResponseSchema = z.object({ run: runSchema });
 export const approvalResponseSchema = z.object({ approval: approvalSchema });
+/** An item of a selection list (a task list in a reply of the chat). */
+const choiceSchema = z.object({ id: z.string().nullable(), label: z.string() });
 export const chatMessageSchema = z.object({
   id: z.number().int(),
   role: z.enum(["user", "assistant", "bot"]),
@@ -151,6 +153,7 @@ export const chatMessageSchema = z.object({
   channel: z.enum(["telegram", "desk"]),
   to: z.object({ room: z.string(), agent: z.string() }).nullable(),
   text: z.string(),
+  choices: z.array(choiceSchema).nullable().default(null),
   createdAt: z.string(),
 });
 
@@ -173,6 +176,7 @@ export const chatReplySchema = z.object({
   ok: z.boolean(),
   reply: z.string(),
   pendingConfirmation: z.object({ summary: z.string() }).optional(),
+  choices: z.array(choiceSchema).optional(),
   messages: z.array(chatMessageSchema),
   dispatch: z.object({ run: runSchema }).optional(),
 });

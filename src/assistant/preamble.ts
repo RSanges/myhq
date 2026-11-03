@@ -6,7 +6,7 @@ import { strings } from "../ui/strings";
 import { runShell, type ShellResult } from "./shell";
 
 /** Facts of the core the preamble can give. */
-export const PREAMBLE_FIELDS = ["datetime", "pending", "runs"] as const;
+export const PREAMBLE_FIELDS = ["datetime", "lastExchange", "pending", "runs"] as const;
 export type PreambleField = (typeof PREAMBLE_FIELDS)[number];
 
 export type PreambleConfig = {
@@ -27,6 +27,51 @@ const TITLE_LIMIT = 50;
 
 function cut(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+}
+
+/** The parts of a date in a time zone (hour on 24 hours). */
+function zonedParts(at: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(at);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
+}
+
+/**
+ * How long ago the user last wrote to the chat, worded for the preamble: so
+ * that the chat knows whether to greet. Only messages to the chat count (not
+ * the tasks given to an agent), and the message of the turn in progress is
+ * not recorded yet.
+ */
+export function lastExchangeText(db: Db, timeZone: string, at: Date): string {
+  const t = strings.assistant.preamble;
+  const row = db
+    .prepare("SELECT created_at FROM chat_messages WHERE role = 'user' AND target IS NULL ORDER BY id DESC LIMIT 1")
+    .get() as { created_at: string } | undefined;
+  const last = row ? new Date(row.created_at) : null;
+  if (!last || Number.isNaN(last.getTime()) || last.getTime() > at.getTime()) return t.lastExchange(t.lastExchangeFirst);
+  const from = zonedParts(last, timeZone);
+  const to = zonedParts(at, timeZone);
+  const days = Math.round(
+    (Date.UTC(to.year, to.month - 1, to.day) - Date.UTC(from.year, from.month - 1, from.day)) / 86_400_000,
+  );
+  const clock = `${from.hour} h ${String(from.minute).padStart(2, "0")}`;
+  if (days === 0) {
+    const minutes = Math.floor((at.getTime() - last.getTime()) / 60_000);
+    if (minutes < 1) return t.lastExchange(t.lastExchangeNow);
+    if (minutes < 60) return t.lastExchange(t.lastExchangeMinutes(minutes));
+    return t.lastExchange(t.lastExchangeHours(Math.floor(minutes / 60), minutes % 60));
+  }
+  if (days === 1) return t.lastExchange(t.lastExchangeYesterday(clock));
+  const day = new Intl.DateTimeFormat(strings.locale, { timeZone, weekday: "long", day: "numeric", month: "long" }).format(last);
+  return t.lastExchange(t.lastExchangeEarlier(day, clock));
 }
 
 /** The lines of the core's own facts, in the order of `fields`. */
@@ -50,6 +95,8 @@ export function corePreamble(
         minute: "2-digit",
       }).format(at);
       lines.push(t.datetime(text, config.timeZone));
+    } else if (field === "lastExchange") {
+      lines.push(lastExchangeText(db, config.timeZone, at));
     } else if (field === "pending") {
       const rows = db
         .prepare(

@@ -549,6 +549,22 @@ two channels meet in the same place:
   straight to the held actions' answer, then to the chat. The Telegram-only
   parts stay in `Assistant`: commands, extensions, voice notes and files, the
   buttons, the hand-over of an approved item, the typing indicator.
+- **Selection lists.** A reply that holds a GFM task list (`- [ ] 1. label`, at
+  most 12 items, `src/assistant/choices.ts`) is a list of choices: the service
+  puts `choices` in the `TurnResult`, `POST /api/chat` returns them and every
+  stored reply carries them (computed from its text, nothing more is stored).
+  On the desk the panel draws them as checkboxes with « Envoyer la sélection »
+  and « Tout » / « Rien », for the last message of the conversation only, and
+  posts « Sélection : 1, 3, 5 » (the leading ids, or the full labels when there
+  is none) as a normal message. On Telegram the `Assistant` sends the reply text
+  with an inline keyboard (one ☐ / ☑ toggle per item, label cut at 40
+  characters, then « Valider la sélection » and « Annuler »); a toggle edits the
+  keyboard in place, « Valider » queues the same message through the chat
+  pipeline as if typed (after the messages already waiting), « Annuler » only
+  removes the keyboard. The ticks live in `PendingSelections` (by message id,
+  kept an hour like a pending question, then the press answers that the list
+  expired). Both ways the round trip is an ordinary user message and reply, so
+  it is in the history.
 - **Every message knows its channel** (`chat_messages.channel`: `telegram` or
   `desk`), and the history is the one conversation, whatever the channel.
 - **Tasks for agents.** `POST /api/chat` with `to` does not ask the chat: it is

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { selectionMessage, textWithoutChoices, type Choice } from "../assistant/choices";
 import { formatClock } from "./format";
 import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
@@ -86,7 +87,73 @@ function agentName(agents: TeamAgent[], to: { room: string; agent: string }): st
   return agents.find((agent) => agent.room === to.room && agent.id === to.agent)?.name ?? `${to.room} / ${to.agent}`;
 }
 
-function Bubble({ message, agents }: { message: Pick<ChatMessage, "role" | "kind" | "channel" | "to" | "text"> & { createdAt?: string }; agents: TeamAgent[] }) {
+/**
+ * The items of a selection list (a task list in the chat's reply) as real
+ * checkboxes. While the list is the last thing said, it can be ticked and
+ * sent as « Sélection : 1, 3, 5 »; once the conversation has moved on it is
+ * only shown.
+ */
+function ChoiceList({ choices, active, onSend }: { choices: Choice[]; active: boolean; onSend: (text: string) => void }) {
+  const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
+  const toggle = (index: number) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (!next.delete(index)) next.add(index);
+      return next;
+    });
+  return (
+    <form
+      className="chat-confirm"
+      aria-label={t.selectionTitle}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (active && selected.size > 0) onSend(selectionMessage(choices, selected));
+      }}
+    >
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {choices.map((choice, index) => (
+          <li key={index}>
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={selected.has(index)}
+                disabled={!active}
+                onChange={() => toggle(index)}
+              />
+              <span>{choice.label}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {active && (
+        <div className="chat-confirm-actions">
+          <button type="submit" className="chat-btn chat-btn-primary" disabled={selected.size === 0}>
+            {t.selectionSend}
+          </button>
+          <button
+            type="button"
+            className="chat-btn"
+            onClick={() => setSelected(selected.size === choices.length ? new Set() : new Set(choices.keys()))}
+          >
+            {selected.size === choices.length ? t.selectionNone : t.selectionAll}
+          </button>
+        </div>
+      )}
+    </form>
+  );
+}
+
+function Bubble({
+  message,
+  agents,
+  onSelect,
+}: {
+  message: Pick<ChatMessage, "role" | "kind" | "channel" | "to" | "text"> & { createdAt?: string; choices?: Choice[] | null };
+  agents: TeamAgent[];
+  /** Sends a selection; given only to the message whose list can still be ticked. */
+  onSelect?: (text: string) => void;
+}) {
   const meta = [
     message.createdAt ? formatClock(message.createdAt) : null,
     message.channel === "telegram" ? t.via.telegram : null,
@@ -99,19 +166,22 @@ function Bubble({ message, agents }: { message: Pick<ChatMessage, "role" | "kind
       : message.role === "assistant"
         ? t.assistantName
         : (t.botKind[message.kind ?? ""] ?? t.botDefault);
+  const text = message.choices ? textWithoutChoices(message.text) : message.text;
   return (
     <li className="chat-msg" data-role={message.role} data-kind={message.kind ?? undefined}>
       <p className="chat-msg-meta">
         <span className="chat-msg-who">{who}</span>
         {meta.length > 0 && <span>{meta.join(" · ")}</span>}
       </p>
-      {message.role === "assistant" ? (
-        <div className="chat-msg-text">
-          <Markdown source={message.text} />
-        </div>
-      ) : (
-        <p className="chat-msg-text">{message.text}</p>
-      )}
+      {text &&
+        (message.role === "assistant" ? (
+          <div className="chat-msg-text">
+            <Markdown source={text} />
+          </div>
+        ) : (
+          <p className="chat-msg-text">{text}</p>
+        ))}
+      {message.choices && <ChoiceList choices={message.choices} active={onSelect !== undefined} onSend={onSelect ?? (() => undefined)} />}
     </li>
   );
 }
@@ -206,8 +276,18 @@ export function ChatPanel({
         {chat.loadFailed && !chat.loaded && <p className="chat-note">{t.loadFailed}</p>}
         {chat.loaded && messages.length === 0 && outgoing.length === 0 && <p className="chat-note">{t.emptyLog(name)}</p>}
         <ul className="chat-msgs">
-          {messages.map((message) => (
-            <Bubble key={message.id} message={message} agents={agents} />
+          {messages.map((message, index) => (
+            <Bubble
+              key={message.id}
+              message={message}
+              agents={agents}
+              // Only the last word of the conversation can still be answered by a selection.
+              onSelect={
+                index === messages.length - 1 && outgoing.length === 0 && inflight === 0
+                  ? (text) => void chat.send(text, null)
+                  : undefined
+              }
+            />
           ))}
           {outgoing.map((message) => (
             <Bubble

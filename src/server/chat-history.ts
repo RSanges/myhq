@@ -1,3 +1,4 @@
+import { extractChoices, type Choice } from "../assistant/choices";
 import { strings } from "../ui/strings";
 import { publishChat } from "./chat-hub";
 import { now, type Db } from "./db";
@@ -28,6 +29,8 @@ export type ChatMessageDto = {
   /** The agent a task was addressed to, null for a message to the chat. */
   to: ChatTarget | null;
   text: string;
+  /** The task-list items of a reply of the chat (a selection list), null when it has none. */
+  choices: Choice[] | null;
   createdAt: string;
 };
 
@@ -68,6 +71,7 @@ const toDto = (row: ChatMessageRow): ChatMessageDto => ({
   channel: row.channel,
   to: parseTarget(row.target),
   text: row.text,
+  choices: row.role === "assistant" ? extractChoices(row.text) : null,
   createdAt: row.created_at,
 });
 

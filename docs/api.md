@@ -525,6 +525,7 @@ of the assistant's chat turns, and the daily cap.
   "channel": "desk",
   "to": null,
   "text": "...",
+  "choices": null,
   "createdAt": "..."
 }
 ```
@@ -535,7 +536,10 @@ message the bot sent on its own); `kind` says which for a bot message (`alert`,
 and is `null` otherwise. `channel` is where it was exchanged: `telegram` or
 `desk` (the panel of `/` and `/room`); bot messages are the ones Telegram
 accepted. `to` is `{ "room", "agent" }` for a message the user addressed to an
-agent from the desk, `null` otherwise.
+agent from the desk, `null` otherwise. `choices` is `[{ "id": string | null, "label": string }]`
+for a reply of the chat that holds a selection list (see `POST /api/chat`), `null`
+otherwise; it is computed from the stored text, so every message of the history
+and every `chat` event carries it.
 
 ```json
 { "running": true, "queued": 1, "pendingConfirmation": { "summary": "approuver l'item #14" } }
@@ -564,6 +568,7 @@ another turn is in progress, the message waits for it (see TurnState).
   "ok": true,
   "reply": "Réponse...",
   "pendingConfirmation": { "summary": "approuver l'item #14" },
+  "choices": [{ "id": "1", "label": "1. Mairie de Paris : recours FPS" }],
   "messages": [{ "...": "ChatMessage of the user" }, { "...": "ChatMessage of the reply" }]
 }
 ```
@@ -573,6 +578,17 @@ another turn is in progress, the message waits for it (see TurnState).
   confirme) executes them, « non » (annule, stop) drops them, anything else drops
   them with a note and goes on as a message. The reply of a « oui » is the result
   line of each action.
+- `choices` is only present when the reply holds a selection list: a GFM task
+  list, lines `- [ ] label` (also `*` or `+`), twelve items at most (a longer list
+  stays plain text and has no `choices`). Each item is `{ "id", "label" }`: `label`
+  is the text after the box, and `id` the short id it starts with (digits, or one
+  letter then digits, followed by `.` or `)` and a space: `1. `, `A3) `), `null`
+  when it has none. The text of `reply` still holds the list. A client turns the
+  items into checkboxes and answers by posting a normal message to this same
+  route, « Sélection : 1, 3, 5 » (the ids of the ticked items in the order of the
+  list, or their full labels joined by commas when they have no id), which the
+  assistant reads as the answer. The desk's panel and the Telegram bridge do
+  exactly this.
 - `ok` is false when the turn gave no answer (budget, timeout, error): `reply`
   then says why, `messages` is empty, nothing is added to the conversation. The
   status is still 200.
@@ -611,9 +627,9 @@ exchanged: no token, no configuration.
 ```json
 {
   "messages": [
-    { "id": 41, "role": "bot", "kind": "alert", "channel": "telegram", "to": null, "text": "MyHQ : un item attend ta validation (#14) ...", "createdAt": "..." },
-    { "id": 42, "role": "user", "kind": null, "channel": "telegram", "to": null, "text": "oui", "createdAt": "..." },
-    { "id": 43, "role": "assistant", "kind": null, "channel": "telegram", "to": null, "text": "...", "createdAt": "..." }
+    { "id": 41, "role": "bot", "kind": "alert", "channel": "telegram", "to": null, "text": "MyHQ : un item attend ta validation (#14) ...", "choices": null, "createdAt": "..." },
+    { "id": 42, "role": "user", "kind": null, "channel": "telegram", "to": null, "text": "oui", "choices": null, "createdAt": "..." },
+    { "id": 43, "role": "assistant", "kind": null, "channel": "telegram", "to": null, "text": "...", "choices": null, "createdAt": "..." }
   ],
   "turn": { "running": false, "queued": 0, "pendingConfirmation": null }
 }

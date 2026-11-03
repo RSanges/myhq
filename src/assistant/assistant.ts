@@ -12,6 +12,7 @@ import { formatCost, formatDateTime } from "../ui/format";
 import { branchHandover, claudeMdHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
+import { selectionMessage } from "./choices";
 import type { ChatRunner } from "./chat";
 import { ChatService, type TurnResult } from "./chat-service";
 import {
@@ -27,10 +28,11 @@ import {
 import type { AssistantCommand, AssistantContext, LoadedExtension } from "./extension";
 import type { AssistantConfig } from "./home-config";
 import { confirmationAnswer } from "./actions";
-import type { PendingQuestions, DecisionQuestion } from "./pending";
+import { PendingSelections, type PendingQuestions, type DecisionQuestion } from "./pending";
+import { parseSelectionData, selectionKeyboard } from "./selection-buttons";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
-import type { BotCommand, CallbackQuery, Telegram, TelegramMessage, Update } from "./telegram";
+import type { BotCommand, CallbackQuery, InlineKeyboard, Telegram, TelegramMessage, Update } from "./telegram";
 import { splitMessage, toTelegramMessages } from "./text";
 
 /** The Bot API refuses to hand over files above 20 MB. */
@@ -56,6 +58,8 @@ export type AssistantDeps = {
   log?: (message: string) => void;
   typingIntervalMs?: number;
   questions?: PendingQuestions;
+  /** The selection keyboards waiting to be ticked. */
+  selections?: PendingSelections;
   /** The chat pipeline shared with the HTTP routes; one is made from the other dependencies when left out. */
   chatService?: ChatService;
 };
@@ -97,6 +101,7 @@ function describe(error: unknown): string {
 export class Assistant {
   private readonly log: (message: string) => void;
   private readonly questions: PendingQuestions;
+  private readonly selections: PendingSelections;
   private readonly extEnv: Env;
   private readonly chat: ChatService;
   private queue: Promise<void> = Promise.resolve();
@@ -119,6 +124,7 @@ export class Assistant {
         questions: deps.questions,
       });
     this.questions = this.chat.questions;
+    this.selections = deps.selections ?? new PendingSelections();
   }
 
   /** Core commands, then the extensions' commands (a core name always wins). */
@@ -158,8 +164,13 @@ export class Assistant {
       this.log(`message from chat ${message.chat.id} ignored (not the configured chat)`);
       return;
     }
+    this.enqueue(() => this.handleMessage(message));
+  }
+
+  /** Runs `job` after the messages before it. A failure is logged and answered, never thrown. */
+  private enqueue(job: () => Promise<void>): void {
     this.queue = this.queue
-      .then(() => this.handleMessage(message))
+      .then(job)
       .catch((error) => {
         this.log(`message failed: ${describe(error)}`);
         return this.reply(strings.assistant.internalError);
@@ -174,14 +185,23 @@ export class Assistant {
 
   /** Sends a reply as plain text, cut at 4000 characters. Never throws. */
   async reply(text: string): Promise<void> {
-    for (const part of toTelegramMessages(text)) {
+    await this.send(text);
+  }
+
+  /** Like `reply`; a keyboard goes under the last part, whose id and text are returned (null when nothing went out). */
+  private async send(text: string, keyboard?: InlineKeyboard): Promise<{ messageId: number; text: string } | null> {
+    const parts = toTelegramMessages(text);
+    let last: { messageId: number; text: string } | null = null;
+    for (const [index, part] of parts.entries()) {
       try {
-        await this.deps.telegram.sendMessage(this.deps.chatId, part);
+        const withKeyboard = keyboard && index === parts.length - 1;
+        last = { messageId: await this.deps.telegram.sendMessage(this.deps.chatId, part, withKeyboard ? keyboard : undefined), text: part };
       } catch (error) {
         this.log(`reply not sent: ${describe(error)}`);
-        return;
+        return null;
       }
     }
+    return last;
   }
 
   /** Turns the "typing..." indicator on; returns the function that turns it off. */
@@ -475,6 +495,8 @@ export class Assistant {
       return;
     }
     const tg = this.deps.telegram;
+    const choice = parseSelectionData(query.data);
+    if (choice) return this.handleSelection(query, choice);
     const button = parseButtonData(query.data);
     if (!button) {
       await tg.answerCallbackQuery(query.id);
@@ -517,11 +539,69 @@ export class Assistant {
     );
   }
 
+  // --- Selection lists ------------------------------------------------------
+
+  /** A press on the keyboard of a selection list: toggle an item, send the selection, or drop it. */
+  private async handleSelection(query: CallbackQuery, button: NonNullable<ReturnType<typeof parseSelectionData>>): Promise<void> {
+    const tg = this.deps.telegram;
+    const t = strings.assistant.selection;
+    const message = query.message;
+    if (!message) {
+      await tg.answerCallbackQuery(query.id);
+      return;
+    }
+    const selection = this.selections.get(message.message_id);
+    if (!selection) {
+      // Over (an hour, a restart): the list is shown as it was, without buttons.
+      await tg.answerCallbackQuery(query.id, t.expired);
+      await this.editMessage(message.message_id, message.text ?? "");
+      return;
+    }
+    if (button.action === "toggle") {
+      if (button.index >= selection.choices.length) {
+        await tg.answerCallbackQuery(query.id);
+        return;
+      }
+      if (!selection.selected.delete(button.index)) selection.selected.add(button.index);
+      await tg.answerCallbackQuery(query.id);
+      await this.editMessage(message.message_id, selection.text, selectionKeyboard(selection.choices, selection.selected));
+      return;
+    }
+    if (button.action === "cancel") {
+      this.selections.remove(message.message_id);
+      await tg.answerCallbackQuery(query.id);
+      await this.editMessage(message.message_id, t.cancelled(selection.text));
+      return;
+    }
+    if (selection.selected.size === 0) {
+      await tg.answerCallbackQuery(query.id, t.nothing);
+      return;
+    }
+    // The selection goes through the pipeline as if it had been typed, after the messages already waiting.
+    const text = selectionMessage(selection.choices, selection.selected);
+    this.selections.remove(message.message_id);
+    await tg.answerCallbackQuery(query.id);
+    await this.editMessage(message.message_id, t.sent(selection.text, text));
+    this.log(`selection sent (${selection.selected.size} of ${selection.choices.length})`);
+    this.enqueue(() => this.handleText(text));
+  }
+
+  /** Replaces a message's text and keyboard. Never throws. */
+  private async editMessage(messageId: number, text: string, keyboard?: InlineKeyboard): Promise<void> {
+    try {
+      await this.deps.telegram.editMessageText(this.deps.chatId, messageId, text, keyboard);
+    } catch (error) {
+      this.log(`selection message not updated: ${describe(error)}`);
+    }
+  }
+
   // --- Conversation ---------------------------------------------------------
 
-  /** Sends what a chat turn gave back, then hands over the items it approved. */
+  /** Sends what a chat turn gave back (with the keyboard of a selection list), then hands over the items it approved. */
   private async sendResult(result: TurnResult): Promise<void> {
-    await this.reply(result.reply);
+    const keyboard = result.choices ? selectionKeyboard(result.choices, new Set()) : undefined;
+    const sent = await this.send(result.reply, keyboard);
+    if (sent && result.choices) this.selections.add(sent.messageId, { choices: result.choices, selected: new Set(), text: sent.text });
     for (const approval of result.approved) await this.handOver(approval);
   }
 

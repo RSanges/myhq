@@ -35,6 +35,7 @@ export async function handleChatPost(request: Request): Promise<Response> {
       ok: result.ok,
       reply: result.reply,
       ...(result.pendingConfirmation ? { pendingConfirmation: result.pendingConfirmation } : {}),
+      ...(result.choices ? { choices: result.choices } : {}),
       messages: result.messages,
     });
   } catch (error) {

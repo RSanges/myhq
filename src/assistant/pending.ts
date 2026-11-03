@@ -1,4 +1,5 @@
 import type { ChatAction } from "./actions";
+import type { Choice } from "./choices";
 
 /** The reason or comment a Reject or Revise button asks for. */
 export type DecisionQuestion = {
@@ -64,5 +65,42 @@ export class PendingQuestions {
 
   clear(): void {
     this.current = null;
+  }
+}
+
+/** A selection list sent with its keyboard: the items, and which ones are ticked. */
+export type Selection = { choices: Choice[]; selected: Set<number>; text: string };
+
+/** The most selection keyboards that stay alive at once (the oldest one expires first). */
+export const MAX_SELECTIONS = 10;
+
+/**
+ * The selection keyboards on Telegram, by the id of the message that carries
+ * them. A keyboard expires after one hour, like a question; an expired one is
+ * forgotten when it is looked up.
+ */
+export class PendingSelections {
+  private readonly byMessage = new Map<number, { selection: Selection; askedAt: number }>();
+
+  constructor(private readonly ttlMs = QUESTION_TTL_MS) {}
+
+  add(messageId: number, selection: Selection, now = Date.now()): void {
+    this.byMessage.set(messageId, { selection, askedAt: now });
+    while (this.byMessage.size > MAX_SELECTIONS) this.byMessage.delete(this.byMessage.keys().next().value!);
+  }
+
+  /** The keyboard's selection, or null when it never existed, is over or has expired. */
+  get(messageId: number, now = Date.now()): Selection | null {
+    const entry = this.byMessage.get(messageId);
+    if (!entry) return null;
+    if (now - entry.askedAt > this.ttlMs) {
+      this.byMessage.delete(messageId);
+      return null;
+    }
+    return entry.selection;
+  }
+
+  remove(messageId: number): void {
+    this.byMessage.delete(messageId);
   }
 }

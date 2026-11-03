@@ -20,6 +20,7 @@ import { loadHome } from "../server/rooms";
 import { recordChatTurn } from "../server/usage";
 import { strings } from "../ui/strings";
 import { confirmationAnswer, describeAction, isUntrustedTool, takeChatActions, type ChatAction } from "./actions";
+import { extractChoices, type Choice } from "./choices";
 import { askChat, chatEnv, composeChatInput, type ChatOutcome, type ChatRunner } from "./chat";
 import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type ChatConfig } from "./home-config";
 import { PendingQuestions } from "./pending";
@@ -47,6 +48,8 @@ export type TurnResult = {
   messages: ChatMessageDto[];
   /** Items approved by the turn's actions, for the channel to hand over (Telegram sends their body). */
   approved: ApprovalDto[];
+  /** The reply's task list (a selection list to tick), null when it has none or too many items. */
+  choices: Choice[] | null;
 };
 
 export type DispatchResult = { reply: string; run: RunRow; messages: ChatMessageDto[] };
@@ -226,6 +229,7 @@ export class ChatService {
       pendingConfirmation: this.state().pendingConfirmation,
       messages: [],
       approved: [],
+      choices: null,
     });
     if (!chat) return done(failure(t.chat.notConfigured));
     const startedAt = new Date().toISOString();
@@ -292,6 +296,7 @@ export class ChatService {
         pendingConfirmation: this.state().pendingConfirmation,
         messages,
         approved,
+        choices: extractChoices(outcome.text),
       };
       await done(result);
       if (chat.requestsDir) {
@@ -338,6 +343,7 @@ export class ChatService {
       pendingConfirmation: this.state().pendingConfirmation,
       messages,
       approved,
+      choices: null,
     };
     await deliver?.(result);
     return result;
@@ -355,6 +361,7 @@ export class ChatService {
       pendingConfirmation: this.state().pendingConfirmation,
       messages,
       approved: [],
+      choices: null,
     };
     await deliver?.(result);
     return result;

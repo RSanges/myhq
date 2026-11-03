@@ -495,6 +495,10 @@ export const strings = {
     no: "Non",
     failedTurn: "Pas de réponse",
     dispatched: (agent: string, runId: number) => `Tâche transmise à ${agent}, tour n° ${runId} lancé`,
+    selectionTitle: "Ta sélection",
+    selectionSend: "Envoyer la sélection",
+    selectionAll: "Tout",
+    selectionNone: "Rien",
   },
   /** The assistant on Telegram (plain text, no Markdown). */
   assistant: {
@@ -610,6 +614,24 @@ export const strings = {
         `- n° ${p.id}, ${p.agent}, ${p.type} : ${p.title}`,
       pendingMore: (count: number) => (count === 1 ? "- et 1 autre" : `- et ${count} autres`),
       runs: (count: number, max: number) => `Tours d'agents aujourd'hui : ${count} sur ${max}.`,
+      lastExchange: (when: string) => `Dernier échange : ${when}.`,
+      lastExchangeNow: "à l'instant",
+      lastExchangeMinutes: (minutes: number) => `il y a ${minutes} min`,
+      lastExchangeHours: (hours: number, minutes: number) =>
+        `il y a ${hours} h${minutes > 0 ? ` ${String(minutes).padStart(2, "0")}` : ""}`,
+      lastExchangeYesterday: (time: string) => `hier à ${time}`,
+      lastExchangeEarlier: (day: string, time: string) => `${day} à ${time}`,
+      lastExchangeFirst: "premier échange aujourd'hui",
+    },
+    /** Selection lists: a reply with a task list becomes choices to tick. */
+    selection: {
+      message: (values: string[]) => `Sélection : ${values.join(", ")}`,
+      validate: "Valider la sélection",
+      cancel: "Annuler",
+      nothing: "Rien n'est coché.",
+      expired: "Cette liste a expiré, demande-la moi de nouveau.",
+      sent: (text: string, message: string) => `${text}\n\n${message} (envoyée)`,
+      cancelled: (text: string) => `${text}\n\n(sélection annulée)`,
     },
     /** The conversation MyHQ keeps, as given to the chat at the start of a turn. */
     history: {

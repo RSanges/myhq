@@ -338,6 +338,7 @@ call:
 ```
 [Contexte à cet instant, le plus récent fait foi]
 Nous sommes le mardi 3 novembre 2026 à 14:05 (Europe/Paris).
+Dernier échange : il y a 12 min.
 À valider (7) :
 - n° 14, Mail, mail_reply : Réponse à la mairie
 - ... (five at most)
@@ -351,11 +352,20 @@ Tours d'agents aujourd'hui : 3 sur 12.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `fields` | `["datetime", "pending", "runs"]` | The core's facts, in this order: the date and time in `HQ_TIMEZONE`; the pending items (number, agent, type and a title cut at 50 characters, five at most, then how many others); the runs started today against the daily cap. |
+| `fields` | `["datetime", "lastExchange", "pending", "runs"]` | The core's facts, in this order: the date and time in `HQ_TIMEZONE`; `lastExchange`, the time since the user last wrote to the chat (below); the pending items (number, agent, type and a title cut at 50 characters, five at most, then how many others); the runs started today against the daily cap. |
 | `command` | none | Shell command run in the home (same shell and environment as `transcribe`); its trimmed stdout ends the block (for example the day's appointments from a cache of the home). |
 | `file` | none | Instead of `command`: a text file of the home whose content ends the block. |
 | `maxChars` | 600 | Characters of the block at most, marks included (100 to 4000). The home's text is cut first; the core's lines only when they alone do not fit. |
 | `timeoutSeconds` | 3 | A command still running after this is killed and left out. |
+
+`lastExchange` lets the chat decide whether to greet. It is worded from the last
+message the user sent to the chat (a task given to an agent from the desk does
+not count; the turn in progress is not recorded yet), in `HQ_TIMEZONE`:
+« Dernier échange : à l'instant » (under a minute), « il y a 12 min », « il y a
+3 h 05 » (same day), « hier à 22 h 40 », « vendredi 30 octobre à 22 h 40 »
+(older), or « premier échange aujourd'hui » when the conversation holds no
+message of the user (new, or after `/new`). Leave it out of `fields` to turn it
+off.
 
 The home's part is computed at most once a minute (cached 60 seconds); the
 core's facts are read at each message. A command that fails, prints nothing
