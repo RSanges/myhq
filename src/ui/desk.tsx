@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import type { Annotation } from "@/server/annotations";
+import { AnnotatedBody } from "./annotated-body";
 import { decideApproval, errorText } from "./api";
 import { HandoverControls } from "./copy-button";
 import { formatDateTime } from "./format";
-import { Markdown } from "./markdown-view";
 import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, type Action } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
@@ -28,13 +29,24 @@ function ApprovalHeader({ approval }: { approval: Approval }) {
   );
 }
 
-function ApprovalContent({ approval, showControls = true }: { approval: Approval; showControls?: boolean }) {
+/** The body, with its remarks: editable while the item is pending (`onAnnotations`), read-only after. */
+function ApprovalContent({
+  approval,
+  showControls = true,
+  annotations,
+  onAnnotations,
+}: {
+  approval: Approval;
+  showControls?: boolean;
+  annotations: readonly Annotation[];
+  onAnnotations?: (next: Annotation[]) => void;
+}) {
   return (
     <>
       {approval.body.trim() === "" ? (
         <p className="text-sm text-muted">{strings.desk.emptyBody}</p>
       ) : (
-        <Markdown source={approval.body} />
+        <AnnotatedBody source={approval.body} annotations={annotations} onChange={onAnnotations} />
       )}
       {showControls && <HandoverControls approval={approval} prominent={false} />}
     </>
@@ -45,10 +57,15 @@ function PendingCard({
   approval,
   dispatch,
   onApproved,
+  annotations,
+  onAnnotations,
 }: {
   approval: Approval;
   dispatch: Dispatch;
   onApproved: (approval: Approval) => void;
+  /** The remarks made on the body so far: kept by the desk until the decision is sent. */
+  annotations: Annotation[];
+  onAnnotations: (next: Annotation[]) => void;
 }) {
   const [mode, setMode] = useState<NoteMode | null>(null);
   const [note, setNote] = useState("");
@@ -70,11 +87,16 @@ function PendingCard({
 
   const submitNote = () => {
     if (mode === null) return;
-    if (note.trim() === "") {
+    // A revision may rest on its remarks alone; a refusal always has a reason.
+    if (note.trim() === "" && (mode === "rejected" || annotations.length === 0)) {
       setError(strings.desk.noteRequired);
       return;
     }
-    void send({ decision: mode, note: note.trim() });
+    void send({
+      decision: mode,
+      ...(note.trim() !== "" ? { note: note.trim() } : {}),
+      ...(annotations.length > 0 ? { annotations } : {}),
+    });
   };
 
   const chooseMode = (next: NoteMode) => {
@@ -82,13 +104,19 @@ function PendingCard({
     setError(null);
   };
 
-  const label = mode === "rejected" ? strings.desk.rejectLabel : strings.desk.reviseLabel;
+  const noteOptional = mode === "revise" && annotations.length > 0;
+  const label =
+    mode === "rejected"
+      ? strings.desk.rejectLabel
+      : noteOptional
+        ? strings.desk.reviseLabelOptional
+        : strings.desk.reviseLabel;
   const fieldId = `note-${approval.id}`;
 
   return (
     <li className="space-y-3 rounded-lg border border-line bg-card p-4">
       <ApprovalHeader approval={approval} />
-      <ApprovalContent approval={approval} />
+      <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
       {mode === null ? (
         <div className="flex flex-wrap gap-2">
           <button
@@ -118,9 +146,10 @@ function PendingCard({
             value={note}
             onChange={(event) => setNote(event.target.value)}
             maxLength={5000}
-            required
+            required={!noteOptional}
             autoFocus
           />
+          {annotations.length > 0 && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -167,7 +196,11 @@ function HistoryCard({ approval }: { approval: Approval }) {
       <details>
         <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
         <div className="mt-2 space-y-3">
-          <ApprovalContent approval={approval} showControls={approval.status !== "approved"} />
+          <ApprovalContent
+            approval={approval}
+            showControls={approval.status !== "approved"}
+            annotations={approval.annotations}
+          />
         </div>
       </details>
     </li>
@@ -175,6 +208,8 @@ function HistoryCard({ approval }: { approval: Approval }) {
 }
 
 type Tab = "pending" | "history";
+
+const NO_ANNOTATIONS: Annotation[] = [];
 
 export function Desk({
   pending,
@@ -186,6 +221,8 @@ export function Desk({
   dispatch: Dispatch;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
+  // Remarks made on pending items, kept here (not in the cards) until the decision is sent: a tab switch or a refresh keeps them.
+  const [drafts, setDrafts] = useState<Record<number, Annotation[]>>({});
   // An approved item that points to a thread, a branch to push or a CLAUDE.md block is now the user's: show it in the history.
   const showHandover = (approval: Approval) => {
     if (payloadUrl(approval.payload) || branchHandover(approval) || claudeMdHandover(approval)) setTab("history");
@@ -228,7 +265,14 @@ export function Desk({
           ) : (
             <ul className="space-y-3">
               {pending.map((approval) => (
-                <PendingCard key={approval.id} approval={approval} dispatch={dispatch} onApproved={showHandover} />
+                <PendingCard
+                  key={approval.id}
+                  approval={approval}
+                  dispatch={dispatch}
+                  onApproved={showHandover}
+                  annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
+                  onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
+                />
               ))}
             </ul>
           )
