@@ -30,9 +30,16 @@ import {
 } from "./commands";
 import type { AssistantCommand, AssistantContext, LoadedExtension } from "./extension";
 import type { AssistantConfig } from "./home-config";
-import { PendingQuestions, type PendingQuestion } from "./pending";
+import {
+  confirmationAnswer,
+  describeAction,
+  isUntrustedTool,
+  takeChatActions,
+  type ChatAction,
+} from "./actions";
+import { PendingQuestions, type DecisionQuestion } from "./pending";
 import { Preamble } from "./preamble";
-import { processChatRequests } from "./requests";
+import { CHAT_REASON, processChatRequests } from "./requests";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
 import type { BotCommand, CallbackQuery, Telegram, TelegramMessage, Update } from "./telegram";
@@ -203,10 +210,26 @@ export class Assistant {
     if (!command) {
       const pending = this.questions.peek();
       if (pending.status === "expired") {
-        await this.reply(strings.assistant.questionExpired(pending.question.approvalId));
+        const question = pending.question;
+        await this.reply(
+          "actions" in question
+            ? strings.assistant.actions.expired
+            : strings.assistant.questionExpired(question.approvalId),
+        );
       } else if (pending.status === "active") {
         this.questions.clear();
-        return this.answerQuestion(pending.question, text.trim());
+        const question = pending.question;
+        if (!("actions" in question)) return this.answerQuestion(question, text.trim());
+        // Held actions run on a yes only; anything else drops them.
+        const answer = confirmationAnswer(text);
+        if (answer === "yes") return this.confirmActions(text, question.actions);
+        if (answer === "no") {
+          this.remember("user", text);
+          this.remember("assistant", strings.assistant.actions.cancelled);
+          return this.reply(strings.assistant.actions.cancelled);
+        }
+        this.log(`${question.actions.length} held chat action(s) dropped`);
+        await this.reply(strings.assistant.actions.dropped);
       }
     }
     if (command && isCoreCommand(command.name)) return this.runCore(command.name, command.args);
@@ -426,7 +449,7 @@ export class Assistant {
     return strings.assistant.internalError;
   }
 
-  private async answerQuestion(question: PendingQuestion, note: string): Promise<void> {
+  private async answerQuestion(question: DecisionQuestion, note: string): Promise<void> {
     try {
       const approval = this.decide(question.approvalId, question.decision, note);
       const label = strings.desk.decision[approval.status];
@@ -438,7 +461,7 @@ export class Assistant {
   }
 
   /** Shows the decision on the alert and removes its buttons. */
-  private async markAlert(alert: PendingQuestion["alert"], label: string): Promise<void> {
+  private async markAlert(alert: DecisionQuestion["alert"], label: string): Promise<void> {
     if (!alert) return;
     try {
       await this.deps.telegram.editMessageText(
@@ -500,6 +523,94 @@ export class Assistant {
     );
   }
 
+  // --- Chat actions ---------------------------------------------------------
+
+  /**
+   * Executes actions the chat asked for, one at a time, with the code of the
+   * buttons and of the commands (`decideApproval`, `startRun`, `setArmed`):
+   * same lock, cap and errors. Returns one French line per action and the
+   * items approved, to hand over like a button does.
+   */
+  private executeActions(actions: ChatAction[]): { lines: string[]; approved: ApprovalDto[] } {
+    const t = strings.assistant;
+    const lines: string[] = [];
+    const approved: ApprovalDto[] = [];
+    for (const action of actions) {
+      const what = describeAction(action);
+      try {
+        switch (action.action) {
+          case "approve": {
+            const approval = this.decide(action.approvalId!, "approved");
+            approved.push(approval);
+            lines.push(t.decided(approval.id, strings.desk.decision[approval.status]));
+            break;
+          }
+          case "reject":
+          case "revise": {
+            const decision = action.action === "reject" ? "rejected" : "revise";
+            const approval = this.decide(action.approvalId!, decision, action.note);
+            lines.push(t.decided(approval.id, strings.desk.decision[approval.status]));
+            break;
+          }
+          case "run":
+          case "arm":
+          case "disarm": {
+            const room = this.roomOf(action);
+            if (typeof room !== "string") {
+              lines.push(t.actions.failed(what, room.error));
+              break;
+            }
+            if (action.action === "run") {
+              const start =
+                this.deps.startRun ??
+                ((request: StartRunRequest) => defaultStartRun(request, { config: this.deps.config }));
+              const run = start({
+                room,
+                agent: action.agent!,
+                ...(action.task ? { task: action.task } : {}),
+                reason: CHAT_REASON,
+              });
+              lines.push(t.runStarted({ id: run.id, room: run.room, agent: run.agent_id }));
+            } else {
+              const armed = setArmed(this.deps.config, this.deps.db, room, action.agent!, action.action === "arm");
+              lines.push(t.armed({ room, agent: action.agent!, armed }));
+            }
+            break;
+          }
+        }
+      } catch (error) {
+        lines.push(t.actions.failed(what, this.errorText(error)));
+      }
+    }
+    this.log(`chat actions executed: ${actions.map((a) => a.action).join(", ")}`);
+    return { lines, approved };
+  }
+
+  /** The room of an action on an agent: the one given, or the only room that has that agent. */
+  private roomOf(action: ChatAction): string | { error: string } {
+    if (action.room) return action.room;
+    const rooms = loadHome(this.deps.config.home)
+      .rooms.filter((room) => room.agents.some((agent) => agent.id === action.agent))
+      .map((room) => room.name);
+    if (rooms.length === 1) return rooms[0]!;
+    return {
+      error:
+        rooms.length === 0
+          ? strings.assistant.actions.unknownAgent(action.agent!)
+          : strings.assistant.actions.ambiguousAgent(action.agent!, rooms),
+    };
+  }
+
+  /** The user said yes to held actions: they run now, and the results are the reply. */
+  private async confirmActions(text: string, actions: ChatAction[]): Promise<void> {
+    const { lines, approved } = this.executeActions(actions);
+    const reply = lines.join("\n");
+    this.remember("user", text);
+    this.remember("assistant", reply);
+    await this.reply(reply);
+    for (const approval of approved) await this.handOver(approval);
+  }
+
   // --- Conversation ---------------------------------------------------------
 
   private async converse(text: string): Promise<void> {
@@ -535,10 +646,37 @@ export class Assistant {
     if (outcome.ok) {
       this.continueChat = true;
       this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
-      const answer = outcome.text.trim() || strings.assistant.chat.empty;
+      // Actions asked for in this turn: executed now, or held for a yes when
+      // the turn read untrusted content (a mail, a web page), whose text could
+      // have asked for them. The core's own lines close the reply.
+      const lines: string[] = [];
+      let approved: ApprovalDto[] = [];
+      if (chat.requestsDir) {
+        const taken = takeChatActions(chat.requestsDir, chat.actions, this.log);
+        lines.push(...taken.refused);
+        if (taken.actions.length > 0) {
+          const untrusted =
+            outcome.tools === undefined
+              ? ["(unknown)"]
+              : [...new Set(outcome.tools.filter((tool) => isUntrustedTool(tool, chat)))];
+          if (untrusted.length > 0) {
+            this.questions.ask({ actions: taken.actions });
+            this.log(`chat actions held for confirmation (untrusted: ${untrusted.join(", ")})`);
+            lines.push(strings.assistant.actions.confirm(taken.actions.map(describeAction)));
+          } else {
+            const done = this.executeActions(taken.actions);
+            lines.push(...done.lines);
+            approved = done.approved;
+          }
+        }
+      }
+      const answer = [outcome.text.trim() || strings.assistant.chat.empty, ...(lines.length ? [lines.join("\n")] : [])].join(
+        "\n\n",
+      );
       this.remember("user", text);
       this.remember("assistant", answer);
       await this.reply(answer);
+      for (const approval of approved) await this.handOver(approval);
       if (chat.requestsDir) {
         processChatRequests(chat.requestsDir, {
           config: this.deps.config,
@@ -551,6 +689,11 @@ export class Assistant {
       return;
     }
     this.log(`chat failed (${outcome.reason}): ${outcome.detail.slice(0, 500)}`);
+    if (chat.requestsDir) {
+      // Actions of a turn that did not answer are never executed.
+      const dropped = takeChatActions(chat.requestsDir, chat.actions, this.log).actions.length;
+      if (dropped > 0) this.log(`${dropped} chat action(s) of the failed turn dropped`);
+    }
     if (outcome.reason === "budget") {
       this.continueChat = true;
       return this.reply(strings.assistant.chat.budget);

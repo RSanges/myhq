@@ -307,8 +307,9 @@ assistant runs with its core commands only.
 | `chat.model` | no | `opus`, `sonnet` (default) or `haiku`. |
 | `chat.addDirs` | no | Directories the chat may read and write (`--add-dir`). Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
-| `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. Default: none. |
-| `chat.requests` | no | `{ "dir": "<path relative to the home>" }`: where the chat leaves requests for the agents (below). The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
+| `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. A server may add `"untrusted": false` (MyHQ's own flag, never written to the MCP config): every server is untrusted by default (see "Chat actions"). Default: none. |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`); default none. The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
+| `chat.untrustedTools` | no | More tools whose results count as untrusted for chat actions, by exact name or with a final `*` (`mcp__mail__*`). The web tools and the tools of untrusted servers always count. Default: none. |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
 | `chat.afterReply` | no | Shell command run in `chat.cwd` after each reply. Its output goes to the log, never to Telegram. |
@@ -410,6 +411,52 @@ leave the task waiting for the agent's next run. A file that is not valid JSON,
 does not match the shape or names an unknown room or agent is logged and moved
 to `<dir>/rejected/`. Other files are left alone. The agent keeps its own tools
 and the approval queue: the request only gives it work.
+
+### Chat actions
+
+The chat can also ask the core itself to act on the HQ, as the user would
+with a button or a command, by writing a JSON file in the same
+`chat.requests.dir` with an `action` key:
+
+```json
+{ "action": "approve", "id": 14 }
+{ "action": "reject", "id": 15, "note": "Pas ce mois-ci." }
+{ "action": "revise", "id": 16, "note": "Plus court." }
+{ "action": "run", "agent": "watch", "task": "Optional task." }
+{ "action": "arm", "room": "demo", "agent": "watch" }
+{ "action": "disarm", "agent": "watch" }
+```
+
+- Only the actions listed in `chat.requests.actions` are taken; an action
+  outside it, or a file that does not match (an unknown action, `reject` or
+  `revise` without a `note`, a decision without `id`, which `approvalId` may
+  replace, a `run`, `arm` or `disarm` without `agent`), is moved to
+  `<dir>/rejected/`, logged, and a line of the reply says so.
+- `room` may be left out when exactly one room has an agent of that id.
+- After a reply that succeeds, the action files are taken in name order (before
+  the requests to the agents) and executed with the code of the buttons and of
+  the commands: `decideApproval` for `approve`, `reject` and `revise` (an item
+  already decided or unknown is refused with the usual error, an approved item
+  is handed over like an Approuver button does), `startRun` for `run` (agent
+  lock, daily cap, reason `chat`), the armed state for `arm` and `disarm`. The
+  core appends one French line per action to the chat's reply (« Item #14 :
+  Approuvé. », « Tour #7 lancé pour demo / watch. », or the refusal). The
+  chat's own text never decides anything.
+- **Confirmation guard.** When the turn called an untrusted tool, the actions
+  are not executed: the reply ends with a line naming them and asking for
+  « oui ». A mail or a web page read in that turn could have asked for them.
+  Untrusted tools are `WebFetch`, `WebSearch`, the tools matching
+  `chat.untrustedTools`, and every tool of a chat MCP server that is not marked
+  `"untrusted": false` (so a home marks only its own action server as trusted,
+  never a mail or calendar server). A turn whose tools are unknown counts as
+  untrusted. The held actions are a pending question, like the reason a
+  Refuser button asks for: the next text message that is not a command
+  answers it. « oui », « ok », « vas-y » (case and final punctuation ignored)
+  executes them and the results are the reply, with no chat turn; « non »
+  drops them; any other message drops them with a short notice and goes on as
+  usual. After one hour they expire. A new question (a button pressed)
+  replaces them.
+- The actions of a turn that fails are dropped, never executed.
 
 ### Shell commands and isolation
 

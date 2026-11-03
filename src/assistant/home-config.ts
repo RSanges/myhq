@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { MODELS, mcpServersSchema, type McpServerConfig } from "../server/rooms";
+import { CHAT_ACTIONS, type ChatActionName } from "./actions";
 import { PREAMBLE_FIELDS, type PreambleConfig } from "./preamble";
 
 const relativePath = z.string().trim().min(1);
@@ -29,10 +30,24 @@ const chatSchema = z.strictObject({
   model: z.enum(MODELS).default("sonnet"),
   addDirs: z.array(relativePath).default([]),
   allowedTools: z.array(z.string().min(1)).default([]),
-  /** Same shape and placeholders as `agents[].mcpServers` of room.json; never `hq`. */
-  mcpServers: mcpServersSchema.default({}),
-  /** Where the chat leaves requests for the agents (relative to the home). */
-  requests: z.strictObject({ dir: relativePath }).optional(),
+  /**
+   * Same shape and placeholders as `agents[].mcpServers` of room.json; never
+   * `hq`. Each server may add `"untrusted": false` (default true): see actions.ts.
+   */
+  mcpServers: mcpServersSchema.default({}).superRefine((servers, ctx) => {
+    for (const [name, server] of Object.entries(servers)) {
+      const flag = (server as { untrusted?: unknown }).untrusted;
+      if (flag !== undefined && typeof flag !== "boolean") {
+        ctx.addIssue({ code: "custom", message: "must be true or false", path: [name, "untrusted"] });
+      }
+    }
+  }),
+  /** Where the chat leaves requests for the agents and actions for the core (relative to the home). */
+  requests: z
+    .strictObject({ dir: relativePath, actions: z.array(z.enum(CHAT_ACTIONS)).default([]) })
+    .optional(),
+  /** Tools whose results are untrusted, besides the web tools and the untrusted servers (`name` or `prefix*`). */
+  untrustedTools: z.array(z.string().trim().min(1)).default([]),
   permissionMode: z.enum(CHAT_PERMISSION_MODES).default("default"),
   timeoutMinutes: z.number().positive().max(120).default(10),
   afterReply: z.string().trim().min(1).optional(),
@@ -69,6 +84,12 @@ export type ChatConfig = {
   mcpServers: Record<string, McpServerConfig>;
   /** Absolute path of the directory the chat writes its requests to, or null. */
   requestsDir: string | null;
+  /** Actions on the HQ the chat may ask for in that directory (none by default). */
+  actions: ChatActionName[];
+  /** MCP servers of the chat marked `"untrusted": false`. */
+  trustedServers: string[];
+  /** Extra untrusted tools (`chat.untrustedTools`). */
+  untrustedTools: string[];
   permissionMode: (typeof CHAT_PERMISSION_MODES)[number];
   timeoutMs: number;
   afterReply: string | null;
@@ -120,8 +141,20 @@ export function loadAssistantConfig(home: string): AssistantConfig {
           addDirs: data.chat.addDirs.map(resolve),
           model: data.chat.model,
           allowedTools: data.chat.allowedTools,
-          mcpServers: data.chat.mcpServers,
+          // The flag is MyHQ's: it never reaches the CLI's MCP config.
+          mcpServers: Object.fromEntries(
+            Object.entries(data.chat.mcpServers).map(([name, server]) => {
+              const copy = { ...server } as McpServerConfig & { untrusted?: boolean };
+              delete copy.untrusted;
+              return [name, copy];
+            }),
+          ),
           requestsDir: data.chat.requests ? resolve(data.chat.requests.dir) : null,
+          actions: data.chat.requests?.actions ?? [],
+          trustedServers: Object.entries(data.chat.mcpServers)
+            .filter(([, server]) => (server as { untrusted?: boolean }).untrusted === false)
+            .map(([name]) => name),
+          untrustedTools: data.chat.untrustedTools,
           permissionMode: data.chat.permissionMode,
           timeoutMs: data.chat.timeoutMinutes * 60_000,
           afterReply: data.chat.afterReply ?? null,

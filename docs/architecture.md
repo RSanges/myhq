@@ -425,8 +425,10 @@ A text message (typed, or transcribed from a voice note) goes through, in
 order:
 
 1. **The pending question**, if any (see buttons below), unless the text is a
-   command: it becomes the reason or the comment of the decision. A question
-   expires after one hour; the user is told, and the message goes on.
+   command: it becomes the reason or the comment of the decision, or, for chat
+   actions held for confirmation, « oui » executes them and « non » drops
+   them (any other text drops them and goes on). A question expires after one
+   hour; the user is told, and the message goes on.
 2. **Core commands**: `/start`, `/new` (the next chat turn starts a new
    conversation, and the conversation MyHQ keeps is emptied), `/pending` (id,
    room and agent, title), `/approve <id>`,
@@ -468,8 +470,16 @@ order:
    and `${NAME}` placeholders as an agent's, plus `HQ_DB_PATH`, `HQ_ROOM` =
    `_chat`, `HQ_AGENT_ID` = `chat` and `HQ_RUN_ID` = a turn id; never the `hq`
    server; the file is deleted after the turn), and `chat.allowedTools` may
-   name their tools. After a successful reply, the optional `chat.requests.dir`
-   is scanned (`src/assistant/requests.ts`): each `{ room, agent, task,
+   name their tools. After a successful reply, the action files of
+   `chat.requests.dir` are taken first (`src/assistant/actions.ts`): `approve`,
+   `reject`, `revise`, `run`, `arm` and `disarm`, whitelisted by
+   `chat.requests.actions`, executed with the code of the buttons and the
+   commands, each with one French line appended to the reply; when the turn
+   called an untrusted tool (the web tools, `chat.untrustedTools`, any chat MCP
+   server not marked `"untrusted": false`), they wait for the user's « oui »
+   as a pending question of one hour instead, so that a mail or a page cannot
+   get anything approved. Then the directory
+   is scanned for requests (`src/assistant/requests.ts`): each `{ room, agent, task,
    reason? }` file becomes a pending task (source `chat`) of that agent and a
    run starts at once under the usual lock and cap (reason `chat`, or the
    given one); the file is deleted, a malformed one is moved to

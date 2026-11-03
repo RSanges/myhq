@@ -1,10 +1,18 @@
-/** A question asked to the user, answered by their next text message. */
-export type PendingQuestion = {
+import type { ChatAction } from "./actions";
+
+/** The reason or comment a Reject or Revise button asks for. */
+export type DecisionQuestion = {
   decision: "rejected" | "revise";
   approvalId: number;
   /** The alert whose buttons were pressed, edited once the decision is taken. */
   alert: { messageId: number; text: string } | null;
 };
+
+/** Actions of a chat turn that read untrusted content, held until the user says yes. */
+export type ConfirmationQuestion = { actions: ChatAction[] };
+
+/** A question asked to the user, answered by their next text message. */
+export type PendingQuestion = DecisionQuestion | ConfirmationQuestion;
 
 /** Like the questions of the previous bot, a question expires after one hour. */
 export const QUESTION_TTL_MS = 60 * 60 * 1000;

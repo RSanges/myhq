@@ -491,6 +491,30 @@ export const strings = {
       firing: (p: { at: string; room: string; agent: string; outcome: string; runId: number | null }) =>
         `${p.at} ${p.room} / ${p.agent} : ${p.outcome}${p.runId !== null ? ` (tour #${p.runId})` : ""}`,
     },
+    /** Actions on the HQ the chat asks for (chat.requests.actions), executed by the core. */
+    actions: {
+      describe: {
+        approve: (id: number) => `approuver l'item #${id}`,
+        reject: (id: number, note: string) => `refuser l'item #${id} (motif : ${note})`,
+        revise: (id: number, note: string) => `renvoyer l'item #${id} à son agent (commentaire : ${note})`,
+        run: (agent: string, task: string | null) => `lancer un tour de ${agent}${task ? ` (tâche : ${task})` : ""}`,
+        arm: (agent: string) => `armer les routines de ${agent}`,
+        disarm: (agent: string) => `désarmer les routines de ${agent}`,
+      },
+      failed: (what: string, why: string) => `Je n'ai pas pu ${what} : ${why}`,
+      invalid: "Une action demandée était mal formée, je l'ai écartée (détail dans le journal).",
+      notAllowed: (action: string) => `L'action « ${action} » ne m'est pas permise ici, je l'ai écartée.`,
+      unknownAgent: (agent: string) => `je ne connais aucun agent « ${agent} ».`,
+      ambiguousAgent: (agent: string, rooms: string[]) =>
+        `plusieurs salles ont un agent « ${agent} » (${rooms.join(", ")}), précise laquelle.`,
+      confirm: (actions: string[]) =>
+        `Cette réponse s'appuie sur du courrier ou du web, alors je n'agis pas sans ton accord. Je dois ${actions.join(", puis ")}. Réponds « oui » pour confirmer ou « non » pour annuler (valable une heure).`,
+      cancelled: "D'accord, je n'en fais rien.",
+      dropped: "Je laisse tomber les actions qui attendaient ton accord.",
+      expired: "Les actions qui attendaient ton accord datent de plus d'une heure, je les ai abandonnées.",
+      yes: ["oui", "ok", "okay", "vas-y", "vas y", "go", "confirme"],
+      no: ["non", "annule", "stop"],
+    },
     /** The block of facts that precedes each message given to the chat (chat.preamble). */
     preamble: {
       head: "[Contexte à cet instant, le plus récent fait foi]",

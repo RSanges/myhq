@@ -6,7 +6,10 @@ import { after, test } from "node:test";
 import { Assistant } from "../src/assistant/assistant";
 import type { ChatOutcome, ChatRunner } from "../src/assistant/chat";
 import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type ChatConfig } from "../src/assistant/home-config";
+import { confirmationAnswer, isUntrustedTool } from "../src/assistant/actions";
 import { corePreamble, fitPreamble, type PreambleConfig } from "../src/assistant/preamble";
+import { HqError } from "../src/server/errors";
+import { strings } from "../src/ui/strings";
 import { PendingQuestions } from "../src/assistant/pending";
 import { Telegram } from "../src/assistant/telegram";
 import { chatTranscript, KEPT_MESSAGES, listChatHistory, recordBotMessage, recordChatMessage } from "../src/server/chat-history";
@@ -353,4 +356,257 @@ test("assistant.json: chat.preamble is validated, command or file", () => {
   assert.throws(() => loadAssistantConfig(home), /chat\.preamble\.fields/);
   fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat" } }));
   assert.equal(loadAssistantConfig(home).chat!.preamble, null, "no preamble unless asked");
+});
+
+// --- C2: actions on the HQ from the chat, and the confirmation guard -----------------
+
+const ALL_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm"] as const;
+
+/** A chat whose turn writes the given action files, then answers having called `tools`. */
+async function actionChat(options: {
+  files: (n: number) => Record<string, unknown>[];
+  tools: (n: number) => string[] | undefined;
+  chat?: Partial<ChatConfig>;
+  config?: HqConfig;
+  startRun?: (request: StartRunRequest) => RunRow;
+  questions?: PendingQuestions;
+}) {
+  const config = options.config ?? makeHome();
+  const requestsDir = path.join(config.home, "chat", "requests");
+  const ctx = await setup({
+    config,
+    startRun: options.startRun,
+    questions: options.questions,
+    chat: {
+      requestsDir,
+      actions: [...ALL_ACTIONS],
+      mcpServers: { mail: { command: "node" }, rom2: { command: "node" } },
+      trustedServers: ["rom2"],
+      ...options.chat,
+    },
+    answer: (_seen, n) => {
+      fs.mkdirSync(requestsDir, { recursive: true });
+      options.files(n).forEach((file, i) =>
+        fs.writeFileSync(path.join(requestsDir, `act-${n}-${i}.json`), JSON.stringify(file)),
+      );
+      const tools = options.tools(n);
+      return { ok: true, text: `Réponse ${n}`, costUsd: 0, ...(tools ? { tools } : {}) };
+    },
+  });
+  return { ...ctx, requestsDir };
+}
+
+const status = (db: Db, id: number) =>
+  (db.prepare("SELECT status FROM approvals WHERE id = ?").get(id) as { status: string }).status;
+
+test("an action asked by a turn that read nothing untrusted is executed at once, its line closing the reply", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const id = Number(
+    db
+      .prepare(
+        "INSERT INTO approvals (room, agent_id, type, title, body, payload, status, created_at) VALUES ('demo', 'scout', 'community_reply', 'Reply', 'The reply.', ?, 'pending', ?)",
+      )
+      .run(JSON.stringify({ url: "https://example.com/t/1" }), new Date().toISOString()).lastInsertRowid,
+  );
+  const rejectMe = addApproval(db, "Garage");
+  const { fake, requestsDir, say } = await actionChat({
+    config,
+    files: () => [
+      { action: "approve", id },
+      { action: "reject", approvalId: rejectMe, note: "Pas maintenant." },
+    ],
+    tools: () => ["Read", "mcp__rom2__rom2_act"],
+  });
+  await say("Approuve la réponse et refuse le garage");
+  assert.equal(status(db, id), "approved");
+  assert.equal(status(db, rejectMe), "rejected");
+  // The reply, then the core's lines, then the hand-over of the approved item, as a button does.
+  assert.deepEqual(fake.sent(), [
+    `Réponse 1\n\nItem #${id} : Approuvé.\nItem #${rejectMe} : Refusé.`,
+    "The reply.",
+    "https://example.com/t/1",
+  ]);
+  assert.deepEqual(fs.readdirSync(requestsDir), []);
+  // The history keeps what the user read.
+  assert.match(listChatHistory(db, 5).at(-1)!.text, /Item #\d+ : Refusé\.$/);
+});
+
+test("a turn that read a mail holds its actions until the user says oui", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const id = addApproval(db);
+  const { fake, seen, say, logs } = await actionChat({
+    config,
+    files: (n) => (n === 1 ? [{ action: "approve", id }] : []),
+    tools: (n) => (n === 1 ? ["mcp__mail__mail_search", "mcp__rom2__rom2_act"] : []),
+  });
+  await say("Approuve le brouillon pour la mairie");
+  assert.equal(status(db, id), "pending", "nothing happens before the yes");
+  assert.match(fake.sent()[0]!, /^Réponse 1\n\nCette réponse s'appuie sur du courrier ou du web/);
+  assert.ok(fake.sent()[0]!.includes(`approuver l'item #${id}`));
+  assert.ok(logs.some((l) => /held for confirmation \(untrusted: mcp__mail__mail_search\)/.test(l)));
+
+  await say("Oui !");
+  assert.equal(status(db, id), "approved");
+  assert.equal(fake.sent().at(-1), `Item #${id} : Approuvé.`);
+  assert.equal(seen.length, 1, "the yes is not a chat turn");
+
+  // A second yes has nothing left to confirm: it goes to the chat.
+  await say("oui");
+  assert.equal(seen.length, 2);
+});
+
+test("non drops the held actions, another message drops them too and goes on, and they expire after an hour", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const id = addApproval(db);
+  const web = await actionChat({
+    config,
+    files: (n) => (n <= 2 ? [{ action: "approve", id }] : []),
+    tools: () => ["WebFetch"],
+  });
+  await web.say("Approuve");
+  await web.say("non");
+  assert.equal(status(db, id), "pending");
+  assert.equal(web.fake.sent().at(-1), "D'accord, je n'en fais rien.");
+  await web.say("Approuve encore");
+  await web.say("Attends, qui l'a écrit ?");
+  assert.equal(status(db, id), "pending");
+  assert.ok(web.fake.sent().includes("Je laisse tomber les actions qui attendaient ton accord."));
+  assert.equal(web.seen.length, 3, "the other message went to the chat");
+
+  const late = await actionChat({
+    config,
+    questions: new PendingQuestions(0),
+    files: (n) => (n === 1 ? [{ action: "approve", id }] : []),
+    tools: () => undefined, // A runner that does not say which tools it called is not trusted.
+  });
+  await late.say("Approuve");
+  await new Promise((r) => setTimeout(r, 5));
+  await late.say("oui");
+  assert.equal(status(db, id), "pending");
+  assert.ok(late.fake.sent().includes("Les actions qui attendaient ton accord datent de plus d'une heure, je les ai abandonnées."));
+});
+
+test("run, arm and disarm go through the same lock, cap and errors; the room may be left out for a unique agent", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const requests: StartRunRequest[] = [];
+  let busy = false;
+  const decided = addApproval(db);
+  db.prepare("UPDATE approvals SET status = 'approved' WHERE id = ?").run(decided);
+  const { fake, say } = await actionChat({
+    config,
+    files: () => [
+      { action: "run", agent: "scout", task: "Lance la veille." },
+      { action: "run", room: "demo", agent: "scout" },
+      { action: "disarm", agent: "scout" },
+      { action: "arm", room: "demo", agent: "scout" },
+      { action: "run", agent: "ghost" },
+      { action: "approve", id: decided },
+      { action: "approve", id: 999 },
+    ],
+    tools: () => [],
+    startRun: (request) => {
+      requests.push(request);
+      if (busy) throw new HqError("AGENT_BUSY", 409, "busy");
+      busy = true;
+      return { id: 7, room: request.room, agent_id: request.agent } as RunRow;
+    },
+  });
+  await say("Lance la veille");
+  assert.deepEqual(requests, [
+    { room: "demo", agent: "scout", task: "Lance la veille.", reason: "chat" },
+    { room: "demo", agent: "scout", reason: "chat" },
+  ]);
+  const armed = (db.prepare("SELECT armed FROM agents WHERE room = 'demo' AND id = 'scout'").get() as { armed: number }).armed;
+  assert.equal(armed, 1);
+  const lines = fake.sent()[0]!.split("\n\n")[1]!.split("\n");
+  assert.deepEqual(lines, [
+    "Tour #7 lancé pour demo / scout.",
+    `Je n'ai pas pu lancer un tour de demo / scout : ${strings.errors.byCode.AGENT_BUSY}`,
+    "Routines de demo / scout désarmées.",
+    "Routines de demo / scout armées.",
+    "Je n'ai pas pu lancer un tour de ghost : je ne connais aucun agent « ghost ».",
+    `Je n'ai pas pu approuver l'item #${decided} : ${strings.errors.byCode.APPROVAL_ALREADY_DECIDED}`,
+    `Je n'ai pas pu approuver l'item #999 : ${strings.errors.byCode.APPROVAL_NOT_FOUND}`,
+  ]);
+});
+
+test("actions outside the whitelist or malformed are refused with a line, requests to agents are left alone, a failed turn drops its actions", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const id = addApproval(db);
+  const { fake, requestsDir, say, logs } = await actionChat({
+    config,
+    chat: { actions: ["run"] },
+    files: () => [{ action: "approve", id }, { action: "reject", id }, { action: "explode" }],
+    tools: () => [],
+  });
+  await say("Approuve");
+  assert.equal(status(db, id), "pending");
+  const [, lines] = fake.sent()[0]!.split("\n\n");
+  assert.deepEqual(lines!.split("\n"), [
+    "L'action « approve » ne m'est pas permise ici, je l'ai écartée.",
+    "Une action demandée était mal formée, je l'ai écartée (détail dans le journal).",
+    "Une action demandée était mal formée, je l'ai écartée (détail dans le journal).",
+  ]);
+  assert.equal(fs.readdirSync(path.join(requestsDir, "rejected")).length, 3);
+  assert.ok(logs.some((l) => /reject needs a note/.test(l)));
+
+  const failing = await setup({
+    config,
+    chat: { requestsDir, actions: [...ALL_ACTIONS] },
+    answer: () => {
+      fs.writeFileSync(path.join(requestsDir, "a.json"), JSON.stringify({ action: "approve", id }));
+      fs.writeFileSync(path.join(requestsDir, "b.json"), JSON.stringify({ room: "demo", agent: "scout", task: "Later." }));
+      return { ok: false, reason: "budget", detail: "error_max_budget_usd" };
+    },
+  });
+  await failing.say("Approuve");
+  assert.equal(status(db, id), "pending");
+  assert.deepEqual(
+    fs.readdirSync(requestsDir).filter((name) => name.endsWith(".json")),
+    ["b.json"],
+    "the request to an agent waits as before",
+  );
+});
+
+test("which tools are untrusted: web tools, chat.untrustedTools, and every server not marked untrusted: false", () => {
+  const chat = { mcpServers: { mail: { command: "n" }, rom2: { command: "n" } }, trustedServers: ["rom2"], untrustedTools: ["mcp__rom2__rom2_fetch*", "Read"] };
+  assert.equal(isUntrustedTool("WebFetch", chat), true);
+  assert.equal(isUntrustedTool("WebSearch", chat), true);
+  assert.equal(isUntrustedTool("mcp__mail__mail_search", chat), true);
+  assert.equal(isUntrustedTool("mcp__other__x", chat), true, "an unknown server is untrusted");
+  assert.equal(isUntrustedTool("mcp__rom2__rom2_act", chat), false);
+  assert.equal(isUntrustedTool("mcp__rom2__rom2_fetch_page", chat), true);
+  assert.equal(isUntrustedTool("Read", chat), true);
+  assert.equal(isUntrustedTool("Grep", chat), false);
+  assert.equal(confirmationAnswer("  Vas-y. "), "yes");
+  assert.equal(confirmationAnswer("OK"), "yes");
+  assert.equal(confirmationAnswer("Non!"), "no");
+  assert.equal(confirmationAnswer("oui mais attends"), null);
+});
+
+test("assistant.json: actions whitelist, untrusted flags kept out of the MCP config, untrustedTools", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-assistant-"));
+  const write = (chat: unknown) =>
+    fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat", ...(chat as object) } }));
+  write({
+    mcpServers: { courrier: { command: "node" }, rom2: { command: "node", untrusted: false }, agenda: { command: "node", untrusted: true } },
+    requests: { dir: "chat/requests", actions: ["approve", "run"] },
+    untrustedTools: ["mcp__agenda__*"],
+  });
+  const chat = loadAssistantConfig(home).chat!;
+  assert.deepEqual(chat.actions, ["approve", "run"]);
+  assert.deepEqual(chat.trustedServers, ["rom2"]);
+  assert.deepEqual(chat.untrustedTools, ["mcp__agenda__*"]);
+  assert.deepEqual(chat.mcpServers.rom2, { command: "node" }, "the flag is MyHQ's, not the CLI's");
+  write({ requests: { dir: "chat/requests" } });
+  assert.deepEqual(loadAssistantConfig(home).chat!.actions, [], "no action unless whitelisted");
+  write({ requests: { dir: "r", actions: ["delete"] } });
+  assert.throws(() => loadAssistantConfig(home), /chat\.requests\.actions/);
+  write({ mcpServers: { rom2: { command: "node", untrusted: "no" } } });
+  assert.throws(() => loadAssistantConfig(home), /chat\.mcpServers\.rom2\.untrusted/);
 });
