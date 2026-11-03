@@ -326,6 +326,30 @@ ALTER TABLE tasks_new RENAME TO tasks;
 CREATE INDEX IF NOT EXISTS tasks_agent ON tasks (room, agent_id, status);
 `,
   },
+  {
+    version: 6,
+    sql: `
+-- One row per turn of the assistant's chat, which is not a run (no lock, no
+-- daily cap) but is metered like one.
+CREATE TABLE IF NOT EXISTS chat_turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  engine TEXT NOT NULL,
+  model TEXT,
+  status TEXT NOT NULL CHECK (status IN ('done', 'failed')),
+  reason TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  tools TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT NOT NULL,
+  ended_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_turns_started ON chat_turns (started_at);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

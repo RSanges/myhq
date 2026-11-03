@@ -112,11 +112,24 @@ const totalsSchema = z.object({
   costUsd: z.number(),
 });
 
+const agentTotalsSchema = totalsSchema.extend({ room: z.string(), agentId: z.string() });
+const chatTotalsSchema = z.object({
+  turns: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheCreationInputTokens: z.number(),
+  cacheReadInputTokens: z.number(),
+  costUsd: z.number(),
+  toolCalls: z.number(),
+});
+
 export const usageSchema = z.object({
   today: totalsSchema,
   week: totalsSchema,
   cap: z.object({ maxRunsPerDay: z.number(), runsToday: z.number(), remaining: z.number() }),
   budget: z.object({ weeklyUsd: z.number(), spentUsd: z.number(), share: z.number() }).nullable().default(null),
+  agents: z.object({ today: z.array(agentTotalsSchema), week: z.array(agentTotalsSchema) }).nullable().default(null),
+  chat: z.object({ today: chatTotalsSchema, week: chatTotalsSchema }).nullable().default(null),
 });
 
 export const routinesResponseSchema = z.object({ scheduler: schedulerSchema, firings: z.array(firingSchema) });

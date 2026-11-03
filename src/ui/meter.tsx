@@ -54,6 +54,45 @@ function Budget({ budget }: { budget: NonNullable<Usage["budget"]> }) {
   );
 }
 
+/** Where the week's tokens went: each agent that ran, then the conversation. */
+function ByAgent({ agents, chat }: { agents: NonNullable<Usage["agents"]>["week"]; chat: NonNullable<Usage["chat"]>["week"] | null }) {
+  const tokens = (t: { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number }) =>
+    t.inputTokens + t.outputTokens + t.cacheCreationInputTokens + t.cacheReadInputTokens;
+  const rows = agents.map((a) => ({
+    key: `${a.room}/${a.agentId}`,
+    label: strings.meter.agentLine({ room: a.room, agent: a.agentId }),
+    count: strings.meter.runs(a.runs),
+    cost: a.costUsd,
+    tokens: tokens(a),
+  }));
+  if (chat && chat.turns > 0) {
+    rows.push({ key: "_chat", label: strings.meter.chat, count: strings.meter.turns(chat.turns), cost: chat.costUsd, tokens: tokens(chat) });
+  }
+  return (
+    <div className="mt-3 min-w-0 rounded-lg border border-line bg-card p-4">
+      <p className="text-sm font-medium">{strings.meter.byAgentTitle}</p>
+      {rows.length === 0 ? (
+        <p className="mt-1 text-xs text-muted">{strings.meter.byAgentEmpty}</p>
+      ) : (
+        <ul className="mt-2 space-y-1 text-sm">
+          {rows.map((row) => (
+            <li key={row.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span className="min-w-0 break-words">{row.label}</span>
+              <span className="text-muted">
+                <span className="font-medium text-foreground">{formatCost(row.cost)}</span>
+                {" · "}
+                <span title={formatInteger(row.tokens)}>{strings.meter.tokens(formatCompact(row.tokens))}</span>
+                {" · "}
+                {row.count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function Meter({ usage, failed }: { usage: Usage | null; failed: boolean }) {
   const cap = usage?.cap;
   const share = cap && cap.maxRunsPerDay > 0 ? Math.min(100, (cap.runsToday / cap.maxRunsPerDay) * 100) : 100;
@@ -87,6 +126,7 @@ export function Meter({ usage, failed }: { usage: Usage | null; failed: boolean 
           {usage.budget && <Budget budget={usage.budget} />}
         </div>
       )}
+      {usage?.agents && <ByAgent agents={usage.agents.week} chat={usage.chat?.week ?? null} />}
     </Section>
   );
 }

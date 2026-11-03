@@ -68,6 +68,8 @@ const usage: Usage = {
   week: { runs: 3, inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, costUsd: 0.4 },
   cap: { maxRunsPerDay: 12, runsToday: 3, remaining: 9 },
   budget: null,
+  agents: null,
+  chat: null,
 };
 
 const firing = (over: Partial<Firing> = {}): Firing => ({

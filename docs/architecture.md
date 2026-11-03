@@ -261,7 +261,8 @@ through the approval queue.
 - **Data**: SQLite (`better-sqlite3`), one file in the home's `data/`
   directory, ignored by Git. Idempotent SQL migrations in the code. Tables:
   `rooms`, `agents` (with the armed state of their routines), `runs`,
-  `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`.
+  `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`,
+  `chat_turns` (the assistant's chat turns, metered).
   Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`), a `summary` and a `reason`. A task comes from a run's own
@@ -430,7 +431,8 @@ order:
    conversation), `/pending` (id, room and agent, title), `/approve <id>`,
    `/reject <id> <reason>`, `/revise <id> <comment>`, `/run <room>/<agent>
    [task]` (same lock and cap as the API), `/status` (runs and cost today and
-   this week, the share of the weekly budget when `HQ_WEEKLY_BUDGET_USD` is
+   this week, the conversation's messages and cost this week, the share of
+   the weekly budget when `HQ_WEEKLY_BUDGET_USD` is
    set, runs left under the cap, the scheduler's state, agents' states with,
    for those that have routines, whether they are armed and their next fire,
    and the last five routine firings), `/arm <room>/<agent>` and `/disarm
@@ -499,7 +501,13 @@ free name, with a companion `.md` note holding the caption when there is one.
 The Bot API does not hand over files above 20 MB; the user is told.
 
 The assistant's chat is not a run: it does not count towards the daily cap and
-its cost is written to the log, not to the `runs` table.
+is not in the `runs` table. Each turn, answered or failed, is recorded in
+`chat_turns` instead: engine, model, status and failure reason, the four token
+counts, the cost, the number of tool calls and their names. `GET /api/usage`
+gives its totals for today and the week next to each agent's (`agents`,
+`chat`), the desk's meter lists the week per agent and for the conversation,
+and `/status` adds a line for the conversation. This is the measure that says
+which work to move to a local engine first.
 
 ## 6. Daily export and integrations
 

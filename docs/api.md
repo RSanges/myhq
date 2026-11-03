@@ -417,8 +417,8 @@ cap allows; otherwise the task waits. The decision never fails because of it.
 
 ### `GET /api/usage`
 
-Tokens and cost of the runs, by local calendar day of the server, and the
-daily cap.
+Tokens and cost of the runs, by local calendar day of the server, per agent,
+of the assistant's chat turns, and the daily cap.
 
 ```json
 {
@@ -426,7 +426,15 @@ daily cap.
   "week": { "start": "2026-11-02", "runs": 3, "...": "same totals" },
   "days": [{ "date": "2026-10-27", "runs": 0, "...": "same totals" }],
   "cap": { "maxRunsPerDay": 12, "runsToday": 3, "remaining": 9 },
-  "budget": { "weeklyUsd": 10, "spentUsd": 0.17, "share": 0.017 }
+  "budget": { "weeklyUsd": 10, "spentUsd": 0.17, "share": 0.017 },
+  "agents": {
+    "today": [{ "room": "demo", "agentId": "scout", "runs": 3, "...": "same totals" }],
+    "week": [{ "room": "demo", "agentId": "scout", "runs": 3, "...": "same totals" }]
+  },
+  "chat": {
+    "today": { "turns": 5, "inputTokens": 30, "outputTokens": 900, "cacheCreationInputTokens": 9000, "cacheReadInputTokens": 60000, "costUsd": 0.12, "toolCalls": 4 },
+    "week": { "turns": 21, "...": "same totals" }
+  }
 }
 ```
 
@@ -435,6 +443,11 @@ daily cap.
 - Every run started counts towards the cap, whatever its status.
 - `budget` is `null` unless `HQ_WEEKLY_BUDGET_USD` is set; `share` is
   `week.costUsd / weeklyUsd` (above 1 when the budget is exceeded).
+- `agents`: the totals of each agent that has runs in the period (today, or
+  Monday to today), most expensive first. The desk's meter lists the week's.
+- `chat`: the turns of the assistant's chat (`chat_turns`), answered or not,
+  with the tool calls they made. The chat is not a run: its turns are not in
+  `today`, `week`, `days`, the cap nor `budget`.
 
 ### `PATCH /api/rooms/[room]/agents/[agent]`
 

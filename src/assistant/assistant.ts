@@ -10,12 +10,13 @@ import { loadHome } from "../server/rooms";
 import { startOnboarding as defaultStartOnboarding } from "../server/onboarding";
 import { listFirings, schedulerInfo, setArmed } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
-import { getUsage } from "../server/usage";
+import { ZERO_USAGE } from "../server/engine";
+import { getUsage, recordChatTurn } from "../server/usage";
 import { formatCost, formatDateTime } from "../ui/format";
 import { branchHandover, claudeMdHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
-import { askChat, chatEnv, type ChatRunner } from "./chat";
+import { askChat, chatEnv, type ChatOutcome, type ChatRunner } from "./chat";
 import {
   CORE_COMMANDS,
   isCoreCommand,
@@ -347,6 +348,7 @@ export class Assistant {
     return [
       t.today(usage.today.runs, formatCost(usage.today.costUsd)),
       t.week(usage.week.runs, formatCost(usage.week.costUsd)),
+      t.chatWeek(usage.chat.week.turns, formatCost(usage.chat.week.costUsd)),
       ...(budget
         ? [t.budget(Math.round(budget.share * 100), formatCost(budget.spentUsd), formatCost(budget.weeklyUsd))]
         : []),
@@ -494,6 +496,7 @@ export class Assistant {
   private async converse(text: string): Promise<void> {
     const chat = this.deps.assistant.chat;
     if (!chat) return this.reply(strings.assistant.chat.notConfigured);
+    const startedAt = new Date().toISOString();
     const outcome = await this.withTyping(() =>
       askChat({
         chat,
@@ -510,6 +513,7 @@ export class Assistant {
         run: this.deps.runChat,
       }),
     );
+    this.meter(outcome, chat.model, startedAt);
     if (outcome.ok) {
       this.continueChat = true;
       this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
@@ -534,6 +538,25 @@ export class Assistant {
       return this.reply(strings.assistant.chat.timeout(Math.round(chat.timeoutMs / 60_000)));
     }
     return this.reply(strings.assistant.chat.failed(outcome.detail.slice(0, 500)));
+  }
+
+  /** Records the turn for the meter (`chat_turns`). Never throws. */
+  private meter(outcome: ChatOutcome, model: string, startedAt: string): void {
+    try {
+      recordChatTurn(this.deps.db, {
+        engine: "claude",
+        model: outcome.model ?? model,
+        status: outcome.ok ? "done" : "failed",
+        reason: outcome.ok ? null : outcome.reason,
+        usage: outcome.usage ?? ZERO_USAGE,
+        costUsd: outcome.costUsd ?? 0,
+        tools: outcome.tools ?? [],
+        startedAt,
+        endedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      this.log(`chat turn not metered: ${describe(error)}`);
+    }
   }
 
   /** The home's post-reply command: its output goes to the log only. */

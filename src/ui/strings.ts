@@ -168,6 +168,12 @@ export const strings = {
     budgetShare: (percent: number) => `${percent} %`,
     budgetDetail: (spent: string, budget: string) => `${spent} sur ${budget}`,
     budgetOver: "Budget hebdomadaire dépassé.",
+    byAgentTitle: "Par agent, cette semaine",
+    byAgentEmpty: "Aucun tour ni message cette semaine.",
+    agentLine: (p: { room: string; agent: string }) => `${p.room} / ${p.agent}`,
+    chat: "Conversation",
+    turns: (count: number) => (count === 1 ? "1 message" : `${count} messages`),
+    tokens: (value: string) => `${value} tokens`,
   },
   routines: {
     title: "Le journal des routines",
@@ -466,6 +472,7 @@ export const strings = {
     status: {
       today: (runs: number, cost: string) => `Aujourd'hui : ${runs} tour(s), ${cost}`,
       week: (runs: number, cost: string) => `Cette semaine : ${runs} tour(s), ${cost}`,
+      chatWeek: (turns: number, cost: string) => `Conversation cette semaine : ${turns} message(s), ${cost}`,
       cap: (remaining: number, max: number) => `Tours restants aujourd'hui : ${remaining} sur ${max}`,
       agentsTitle: "Agents :",
       agent: (p: { room: string; agent: string; state: string }) => `${p.room} / ${p.agent} : ${p.state}`,

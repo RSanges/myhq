@@ -4,7 +4,7 @@ import { decideApproval, decisionSchema } from "../src/server/approvals";
 import { getDbAt, type Db } from "../src/server/db";
 import { HqError } from "../src/server/errors";
 import { changesSince, currentCursor } from "../src/server/feed";
-import { getUsage } from "../src/server/usage";
+import { getUsage, recordChatTurn } from "../src/server/usage";
 import { makeHome } from "./helpers";
 
 function freshDb(): Db {
@@ -90,4 +90,61 @@ test("usage sums today's runs and reports the cap", () => {
   assert.equal(usage.today.costUsd, 0.75);
   assert.equal(usage.week.runs, 2);
   assert.deepEqual(usage.cap, { maxRunsPerDay: 12, runsToday: 2, remaining: 10 });
+});
+
+test("usage gives the tokens and cost of each agent, and of the chat turns", () => {
+  const db = freshDb();
+  const at = new Date().toISOString();
+  const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  db.prepare(
+    `INSERT INTO runs (room, agent_id, engine, task, status, input_tokens, output_tokens, cache_read_input_tokens, cost_usd, started_at)
+     VALUES ('demo', 'scout', 'claude', 't', 'done', 10, 20, 100, 0.5, ?), ('demo', 'scout', 'claude', 't', 'done', 1, 2, 0, 0.25, ?),
+            ('demo', 'writer', 'claude', 't', 'done', 5, 5, 0, 1, ?), ('demo', 'writer', 'claude', 't', 'done', 5, 5, 0, 9, ?)`,
+  ).run(at, at, at, old);
+  recordChatTurn(db, {
+    engine: "claude",
+    model: "claude-haiku-4-5",
+    status: "done",
+    reason: null,
+    usage: { inputTokens: 3, outputTokens: 40, cacheCreationInputTokens: 1000, cacheReadInputTokens: 2000 },
+    costUsd: 0.02,
+    tools: ["Read", "mcp__mail__mail_search"],
+    startedAt: at,
+    endedAt: at,
+  });
+  recordChatTurn(db, {
+    engine: "claude",
+    model: null,
+    status: "failed",
+    reason: "budget",
+    usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+    costUsd: 0.5,
+    tools: [],
+    startedAt: old,
+    endedAt: old,
+  });
+  const usage = getUsage(db, 12);
+  assert.deepEqual(
+    usage.agents.week.map((a) => [a.room, a.agentId, a.runs, a.costUsd]),
+    [
+      ["demo", "writer", 1, 1],
+      ["demo", "scout", 2, 0.75],
+    ],
+  );
+  assert.equal(usage.agents.today.find((a) => a.agentId === "scout")!.cacheReadInputTokens, 100);
+  assert.deepEqual(usage.chat.today, {
+    turns: 1,
+    inputTokens: 3,
+    outputTokens: 40,
+    cacheCreationInputTokens: 1000,
+    cacheReadInputTokens: 2000,
+    costUsd: 0.02,
+    toolCalls: 2,
+  });
+  assert.equal(usage.chat.week.turns, 1, "a turn of last month is not in the week");
+  // The runs' own totals are unchanged by the chat.
+  assert.equal(usage.today.costUsd, 1.75);
+  const row = db.prepare("SELECT model, tools FROM chat_turns WHERE status = 'done'").get() as { model: string; tools: string };
+  assert.equal(row.model, "claude-haiku-4-5");
+  assert.deepEqual(JSON.parse(row.tools), ["Read", "mcp__mail__mail_search"]);
 });
