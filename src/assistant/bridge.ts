@@ -6,6 +6,7 @@ import { acquireLock } from "../server/lock";
 import type { StartRunRequest } from "../server/runner";
 import { Assistant } from "./assistant";
 import type { ChatRunner } from "./chat";
+import { getChatService } from "./chat-service";
 import { loadExtensions, tsImporter, type ModuleImporter } from "./extension";
 import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type AssistantConfig } from "./home-config";
 import { readSettings } from "./settings";
@@ -110,6 +111,15 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge |
     runChat: options.runChat,
     startRun: options.startRun,
     log,
+    // The same pipeline as the desk's panel (POST /api/chat): one turn at a time across both.
+    chatService: getChatService(config, {
+      chat: assistantConfig.chat,
+      env,
+      chatMaxBudgetUsd: settings.chatMaxBudgetUsd,
+      runChat: options.runChat,
+      startRun: options.startRun,
+      log,
+    }),
   });
 
   // The command menu is set at start, or after the first successful poll if

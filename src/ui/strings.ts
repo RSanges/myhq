@@ -401,6 +401,7 @@ export const strings = {
       ROOM_EXISTS: "Une salle de ce nom existe déjà : rien n'a été écrit. Refuse la proposition ou demande un autre nom.",
       PROPOSAL_INVALID: "La proposition de salle est invalide : rien n'a été écrit. Le détail est dans le journal.",
       WORKTREE_FAILED: "Le worktree Git de l'agent n'a pas pu être créé : rien n'a été écrit. Le détail est dans le journal.",
+      CHAT_NOT_CONFIGURED: "La conversation n'est pas configurée (section chat de assistant.json).",
       EXPORT_NOT_CONFIGURED: "L'export quotidien n'est pas configuré (export.dir dans myhq.json).",
       INTERNAL: "Erreur interne du serveur.",
     } as Record<string, string>,
@@ -413,6 +414,48 @@ export const strings = {
       `MyHQ : ${p.title} (#${p.id})\n${p.room} / ${p.agent} : ${p.type}`,
     runFailed: (p: { room: string; agent: string; runId: number; summary: string }) =>
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
+  },
+  /** The conversation panel of the desk and of the floor (the same conversation as Telegram's). */
+  chat: {
+    assistantName: "Rom2",
+    toggle: "Discuter",
+    toggleLabel: (name: string) => `Discuter avec ${name} (raccourci : c)`,
+    close: "Fermer",
+    newLink: "/new",
+    newTitle: "Effacer la conversation et repartir de zéro",
+    recipientsLabel: "Destinataire",
+    chatChip: (name: string) => name,
+    agentChip: (p: { name: string; room: string | null; state: string }) =>
+      `${p.name}${p.room ? ` (${p.room})` : ""}, ${p.state}`,
+    placeholderChat: (name: string) => `Écris à ${name}...`,
+    placeholderAgent: (name: string) => `Donne une tâche à ${name}...`,
+    composerLabel: "Message",
+    hint: "Entrée pour envoyer, Maj+Entrée pour un saut de ligne.",
+    hintAgent: (name: string) => `Entrée envoie la tâche à ${name} : un tour démarre aussitôt.`,
+    send: "Envoyer",
+    sendAgent: "Confier",
+    emptyLog: (name: string) => `Rien pour l'instant. Écris à ${name}, ou choisis un agent pour lui confier une tâche.`,
+    loading: "Chargement de la conversation...",
+    loadFailed: "Impossible de charger la conversation.",
+    logLabel: "Conversation",
+    typing: (name: string) => `${name} écrit...`,
+    busyOther: (name: string) => `${name} répond à un autre message`,
+    you: "Vous",
+    toAgent: (name: string) => `À ${name}`,
+    via: { telegram: "Telegram", desk: "Bureau" } as Record<string, string>,
+    botKind: {
+      alert: "Alerte",
+      notification: "Notification",
+      summary: "Compte rendu",
+      dispatch: "Tâche transmise",
+    } as Record<string, string>,
+    botDefault: "Message automatique",
+    confirmTitle: "À confirmer",
+    confirmLead: (summary: string) => `Je dois ${summary}.`,
+    yes: "Oui",
+    no: "Non",
+    failedTurn: "Pas de réponse",
+    dispatched: (agent: string, runId: number) => `Tâche transmise à ${agent}, tour n° ${runId} lancé`,
   },
   /** The assistant on Telegram (plain text, no Markdown). */
   assistant: {
@@ -509,6 +552,8 @@ export const strings = {
         `plusieurs salles ont un agent « ${agent} » (${rooms.join(", ")}), précise laquelle.`,
       confirm: (actions: string[]) =>
         `Cette réponse s'appuie sur du courrier ou du web, alors je n'agis pas sans ton accord. Je dois ${actions.join(", puis ")}. Réponds « oui » pour confirmer ou « non » pour annuler (valable une heure).`,
+      /** The held actions as one phrase, for the panel's confirmation card. */
+      summary: (actions: string[]) => actions.join(", puis "),
       cancelled: "D'accord, je n'en fais rien.",
       dropped: "Je laisse tomber les actions qui attendaient ton accord.",
       expired: "Les actions qui attendaient ton accord datent de plus d'une heure, je les ai abandonnées.",
@@ -533,9 +578,10 @@ export const strings = {
       headSince: "[Messages envoyés de ta part depuis notre dernier échange]",
       end: "[Fin de la conversation récente]",
       user: "Utilisateur",
+      userTo: (who: string) => `Utilisateur (à ${who})`,
       assistant: "Toi",
       bot: (kind: string | null) =>
-        `Toi, message automatique${kind ? ` (${({ alert: "alerte", notification: "notification", summary: "compte rendu" } as Record<string, string>)[kind] ?? kind})` : ""}`,
+        `Toi, message automatique${kind ? ` (${({ alert: "alerte", notification: "notification", summary: "compte rendu", dispatch: "tâche transmise" } as Record<string, string>)[kind] ?? kind})` : ""}`,
     },
     chat: {
       notConfigured: "La conversation n'est pas configurée (section chat de assistant.json).",

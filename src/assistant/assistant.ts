@@ -1,23 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { z } from "zod";
-import { decideApproval, decisionSchema } from "../server/approvals";
 import type { Env, HqConfig } from "../server/config";
 import type { Db, RunRow } from "../server/db";
-import { HqError } from "../server/errors";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
 import { startOnboarding as defaultStartOnboarding } from "../server/onboarding";
 import { listFirings, schedulerInfo, setArmed } from "../server/routines";
 import { startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
-import { ZERO_USAGE } from "../server/engine";
-import { getUsage, recordChatTurn } from "../server/usage";
+import { getUsage } from "../server/usage";
 import { formatCost, formatDateTime } from "../ui/format";
 import { branchHandover, claudeMdHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
-import { chatTranscript, clearChatHistory, recordChatMessage, type ChatRole } from "../server/chat-history";
-import { askChat, chatEnv, composeChatInput, type ChatOutcome, type ChatRunner } from "./chat";
+import type { ChatRunner } from "./chat";
+import { ChatService, type TurnResult } from "./chat-service";
 import {
   CORE_COMMANDS,
   isCoreCommand,
@@ -30,16 +26,8 @@ import {
 } from "./commands";
 import type { AssistantCommand, AssistantContext, LoadedExtension } from "./extension";
 import type { AssistantConfig } from "./home-config";
-import {
-  confirmationAnswer,
-  describeAction,
-  isUntrustedTool,
-  takeChatActions,
-  type ChatAction,
-} from "./actions";
-import { PendingQuestions, type DecisionQuestion } from "./pending";
-import { Preamble } from "./preamble";
-import { CHAT_REASON, processChatRequests } from "./requests";
+import { confirmationAnswer } from "./actions";
+import type { PendingQuestions, DecisionQuestion } from "./pending";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
 import type { BotCommand, CallbackQuery, Telegram, TelegramMessage, Update } from "./telegram";
@@ -48,7 +36,6 @@ import { splitMessage, toTelegramMessages } from "./text";
 /** The Bot API refuses to hand over files above 20 MB. */
 export const FILE_LIMIT_BYTES = 20 * 1024 * 1024;
 const TRANSCRIBE_TIMEOUT_MS = 5 * 60_000;
-const AFTER_REPLY_TIMEOUT_MS = 2 * 60_000;
 const TELEGRAM_COMMAND_LIMIT = 100;
 
 type Decision = "approved" | "rejected" | "revise";
@@ -69,6 +56,8 @@ export type AssistantDeps = {
   log?: (message: string) => void;
   typingIntervalMs?: number;
   questions?: PendingQuestions;
+  /** The chat pipeline shared with the HTTP routes; one is made from the other dependencies when left out. */
+  chatService?: ChatService;
 };
 
 /** Local `YYYY-MM-DD HHhMM`, for the names of received files. */
@@ -109,15 +98,27 @@ export class Assistant {
   private readonly log: (message: string) => void;
   private readonly questions: PendingQuestions;
   private readonly extEnv: Env;
-  private readonly preamble: Preamble;
-  private continueChat = true;
+  private readonly chat: ChatService;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: AssistantDeps) {
     this.log = deps.log ?? ((message) => console.log(`[assistant] ${message}`));
-    this.questions = deps.questions ?? new PendingQuestions();
     this.extEnv = extensionEnv(deps.env);
-    this.preamble = new Preamble({ db: deps.db, config: deps.config, env: this.extEnv, log: this.log });
+    this.chat =
+      deps.chatService ??
+      new ChatService({
+        config: deps.config,
+        db: deps.db,
+        chat: deps.assistant.chat,
+        // The home's commands (afterReply, preamble) never see the Telegram variables.
+        env: deps.env,
+        chatMaxBudgetUsd: deps.chatMaxBudgetUsd,
+        runChat: deps.runChat,
+        startRun: deps.startRun,
+        log: this.log,
+        questions: deps.questions,
+      });
+    this.questions = this.chat.questions;
   }
 
   /** Core commands, then the extensions' commands (a core name always wins). */
@@ -183,15 +184,21 @@ export class Assistant {
     }
   }
 
-  /** Keeps the "typing..." indicator on while `work` runs. */
-  private async withTyping<T>(work: () => Promise<T>): Promise<T> {
+  /** Turns the "typing..." indicator on; returns the function that turns it off. */
+  private startTyping(): () => void {
     const ping = () => void this.deps.telegram.sendChatAction(this.deps.chatId, "typing").catch(() => undefined);
     ping();
     const timer = setInterval(ping, this.deps.typingIntervalMs ?? 4_000);
+    return () => clearInterval(timer);
+  }
+
+  /** Keeps the "typing..." indicator on while `work` runs. */
+  private async withTyping<T>(work: () => Promise<T>): Promise<T> {
+    const stop = this.startTyping();
     try {
       return await work();
     } finally {
-      clearInterval(timer);
+      stop();
     }
   }
 
@@ -222,12 +229,8 @@ export class Assistant {
         if (!("actions" in question)) return this.answerQuestion(question, text.trim());
         // Held actions run on a yes only; anything else drops them.
         const answer = confirmationAnswer(text);
-        if (answer === "yes") return this.confirmActions(text, question.actions);
-        if (answer === "no") {
-          this.remember("user", text);
-          this.remember("assistant", strings.assistant.actions.cancelled);
-          return this.reply(strings.assistant.actions.cancelled);
-        }
+        if (answer === "yes") return this.sendResult(await this.chat.confirm(text, "telegram", question.actions));
+        if (answer === "no") return this.sendResult(await this.chat.cancel(text, "telegram"));
         this.log(`${question.actions.length} held chat action(s) dropped`);
         await this.reply(strings.assistant.actions.dropped);
       }
@@ -267,9 +270,8 @@ export class Assistant {
       case "start":
         return this.reply(t.welcome(this.extensionCommands().map((c) => c.command)));
       case "new":
-        this.continueChat = false;
         try {
-          clearChatHistory(this.deps.db);
+          await this.chat.newConversation();
         } catch (error) {
           this.log(`chat history not cleared: ${describe(error)}`);
         }
@@ -397,12 +399,7 @@ export class Assistant {
 
   /** Same code path as PATCH /api/approvals/[id]. Throws HqError or ZodError. */
   private decide(id: number, decision: Decision, note?: string) {
-    return decideApproval(
-      this.deps.db,
-      id,
-      decisionSchema.parse({ decision, ...(note ? { note } : {}) }),
-      this.deps.config,
-    );
+    return this.chat.decide(id, decision, note);
   }
 
   private decideText(id: number, decision: Decision, note?: string): string {
@@ -443,10 +440,7 @@ export class Assistant {
   }
 
   private errorText(error: unknown): string {
-    if (error instanceof HqError) return strings.errors.byCode[error.code] ?? strings.errors.generic;
-    if (error instanceof z.ZodError) return strings.errors.byCode.INVALID_INPUT ?? strings.errors.generic;
-    this.log(`unexpected error: ${describe(error)}`);
-    return strings.assistant.internalError;
+    return this.chat.errorText(error);
   }
 
   private async answerQuestion(question: DecisionQuestion, note: string): Promise<void> {
@@ -523,222 +517,26 @@ export class Assistant {
     );
   }
 
-  // --- Chat actions ---------------------------------------------------------
-
-  /**
-   * Executes actions the chat asked for, one at a time, with the code of the
-   * buttons and of the commands (`decideApproval`, `startRun`, `setArmed`):
-   * same lock, cap and errors. Returns one French line per action and the
-   * items approved, to hand over like a button does.
-   */
-  private executeActions(actions: ChatAction[]): { lines: string[]; approved: ApprovalDto[] } {
-    const t = strings.assistant;
-    const lines: string[] = [];
-    const approved: ApprovalDto[] = [];
-    for (const action of actions) {
-      const what = describeAction(action);
-      try {
-        switch (action.action) {
-          case "approve": {
-            const approval = this.decide(action.approvalId!, "approved");
-            approved.push(approval);
-            lines.push(t.decided(approval.id, strings.desk.decision[approval.status]));
-            break;
-          }
-          case "reject":
-          case "revise": {
-            const decision = action.action === "reject" ? "rejected" : "revise";
-            const approval = this.decide(action.approvalId!, decision, action.note);
-            lines.push(t.decided(approval.id, strings.desk.decision[approval.status]));
-            break;
-          }
-          case "run":
-          case "arm":
-          case "disarm": {
-            const room = this.roomOf(action);
-            if (typeof room !== "string") {
-              lines.push(t.actions.failed(what, room.error));
-              break;
-            }
-            if (action.action === "run") {
-              const start =
-                this.deps.startRun ??
-                ((request: StartRunRequest) => defaultStartRun(request, { config: this.deps.config }));
-              const run = start({
-                room,
-                agent: action.agent!,
-                ...(action.task ? { task: action.task } : {}),
-                reason: CHAT_REASON,
-              });
-              lines.push(t.runStarted({ id: run.id, room: run.room, agent: run.agent_id }));
-            } else {
-              const armed = setArmed(this.deps.config, this.deps.db, room, action.agent!, action.action === "arm");
-              lines.push(t.armed({ room, agent: action.agent!, armed }));
-            }
-            break;
-          }
-        }
-      } catch (error) {
-        lines.push(t.actions.failed(what, this.errorText(error)));
-      }
-    }
-    this.log(`chat actions executed: ${actions.map((a) => a.action).join(", ")}`);
-    return { lines, approved };
-  }
-
-  /** The room of an action on an agent: the one given, or the only room that has that agent. */
-  private roomOf(action: ChatAction): string | { error: string } {
-    if (action.room) return action.room;
-    const rooms = loadHome(this.deps.config.home)
-      .rooms.filter((room) => room.agents.some((agent) => agent.id === action.agent))
-      .map((room) => room.name);
-    if (rooms.length === 1) return rooms[0]!;
-    return {
-      error:
-        rooms.length === 0
-          ? strings.assistant.actions.unknownAgent(action.agent!)
-          : strings.assistant.actions.ambiguousAgent(action.agent!, rooms),
-    };
-  }
-
-  /** The user said yes to held actions: they run now, and the results are the reply. */
-  private async confirmActions(text: string, actions: ChatAction[]): Promise<void> {
-    const { lines, approved } = this.executeActions(actions);
-    const reply = lines.join("\n");
-    this.remember("user", text);
-    this.remember("assistant", reply);
-    await this.reply(reply);
-    for (const approval of approved) await this.handOver(approval);
-  }
-
   // --- Conversation ---------------------------------------------------------
 
+  /** Sends what a chat turn gave back, then hands over the items it approved. */
+  private async sendResult(result: TurnResult): Promise<void> {
+    await this.reply(result.reply);
+    for (const approval of result.approved) await this.handOver(approval);
+  }
+
   private async converse(text: string): Promise<void> {
-    const chat = this.deps.assistant.chat;
-    if (!chat) return this.reply(strings.assistant.chat.notConfigured);
-    const startedAt = new Date().toISOString();
-    // MyHQ keeps the conversation: a fresh turn gets the transcript, a turn
-    // that resumes the CLI's conversation only what the bot sent since.
-    const resume = chat.resume === "cli" && this.continueChat;
-    const transcript = (since: "all" | "lastExchange") =>
-      chatTranscript(this.deps.db, { turns: chat.historyTurns, maxChars: chat.historyMaxChars, since });
-    const outcome = await this.withTyping(async () => {
-      // The facts of this instant come last, right before the user's words.
-      const preamble = chat.preamble ? await this.preamble.build(chat.preamble) : null;
-      const freshText = composeChatInput([transcript("all"), preamble], text);
-      return askChat({
-        chat,
-        text: resume ? composeChatInput([transcript("lastExchange"), preamble], text) : freshText,
-        freshText,
-        continue: resume,
-        bin: this.deps.config.claudeBin,
-        env: chatEnv(this.deps.env),
-        maxBudgetUsd: this.deps.chatMaxBudgetUsd,
-        mcp: {
-          dir: path.join(this.deps.config.dataDir, "assistant", "chat"),
-          dbPath: this.deps.config.dbPath,
-          appEnv: this.deps.env,
-        },
-        run: this.deps.runChat,
-      });
-    });
-    this.meter(outcome, chat.model, startedAt);
-    if (outcome.ok) {
-      this.continueChat = true;
-      this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
-      // Actions asked for in this turn: executed now, or held for a yes when
-      // the turn read untrusted content (a mail, a web page), whose text could
-      // have asked for them. The core's own lines close the reply.
-      const lines: string[] = [];
-      let approved: ApprovalDto[] = [];
-      if (chat.requestsDir) {
-        const taken = takeChatActions(chat.requestsDir, chat.actions, this.log);
-        lines.push(...taken.refused);
-        if (taken.actions.length > 0) {
-          const untrusted =
-            outcome.tools === undefined
-              ? ["(unknown)"]
-              : [...new Set(outcome.tools.filter((tool) => isUntrustedTool(tool, chat)))];
-          if (untrusted.length > 0) {
-            this.questions.ask({ actions: taken.actions });
-            this.log(`chat actions held for confirmation (untrusted: ${untrusted.join(", ")})`);
-            lines.push(strings.assistant.actions.confirm(taken.actions.map(describeAction)));
-          } else {
-            const done = this.executeActions(taken.actions);
-            lines.push(...done.lines);
-            approved = done.approved;
-          }
-        }
-      }
-      const answer = [outcome.text.trim() || strings.assistant.chat.empty, ...(lines.length ? [lines.join("\n")] : [])].join(
-        "\n\n",
-      );
-      this.remember("user", text);
-      this.remember("assistant", answer);
-      await this.reply(answer);
-      for (const approval of approved) await this.handOver(approval);
-      if (chat.requestsDir) {
-        processChatRequests(chat.requestsDir, {
-          config: this.deps.config,
-          db: this.deps.db,
-          startRun: this.deps.startRun,
-          log: this.log,
-        });
-      }
-      await this.afterReply(chat.afterReply, chat.cwd);
-      return;
-    }
-    this.log(`chat failed (${outcome.reason}): ${outcome.detail.slice(0, 500)}`);
-    if (chat.requestsDir) {
-      // Actions of a turn that did not answer are never executed.
-      const dropped = takeChatActions(chat.requestsDir, chat.actions, this.log).actions.length;
-      if (dropped > 0) this.log(`${dropped} chat action(s) of the failed turn dropped`);
-    }
-    if (outcome.reason === "budget") {
-      this.continueChat = true;
-      return this.reply(strings.assistant.chat.budget);
-    }
-    if (outcome.reason === "timeout") {
-      return this.reply(strings.assistant.chat.timeout(Math.round(chat.timeoutMs / 60_000)));
-    }
-    return this.reply(strings.assistant.chat.failed(outcome.detail.slice(0, 500)));
-  }
-
-  /** Adds a message to the conversation MyHQ keeps. Never throws. */
-  private remember(role: ChatRole, text: string): void {
+    if (!this.chat.configured) return this.reply(strings.assistant.chat.notConfigured);
+    const stopTyping = this.startTyping();
     try {
-      recordChatMessage(this.deps.db, role, text);
-    } catch (error) {
-      this.log(`chat history not recorded: ${describe(error)}`);
-    }
-  }
-
-  /** Records the turn for the meter (`chat_turns`). Never throws. */
-  private meter(outcome: ChatOutcome, model: string, startedAt: string): void {
-    try {
-      recordChatTurn(this.deps.db, {
-        engine: "claude",
-        model: outcome.model ?? model,
-        status: outcome.ok ? "done" : "failed",
-        reason: outcome.ok ? null : outcome.reason,
-        usage: outcome.usage ?? ZERO_USAGE,
-        costUsd: outcome.costUsd ?? 0,
-        tools: outcome.tools ?? [],
-        startedAt,
-        endedAt: new Date().toISOString(),
+      // The reply goes out as soon as it is known, the work that follows it (requests, afterReply) does not hold it back.
+      await this.chat.converse(text, "telegram", async (result) => {
+        stopTyping();
+        await this.sendResult(result);
       });
-    } catch (error) {
-      this.log(`chat turn not metered: ${describe(error)}`);
+    } finally {
+      stopTyping();
     }
-  }
-
-  /** The home's post-reply command: its output goes to the log only. */
-  private async afterReply(command: string | null, cwd: string): Promise<void> {
-    if (!command) return;
-    const result = await runShell(command, { cwd, env: this.extEnv, timeoutMs: AFTER_REPLY_TIMEOUT_MS });
-    const output = `${result.stdout}\n${result.stderr}`.trim().slice(0, 1000);
-    const status = result.timedOut ? "timed out" : `exited with ${result.code}`;
-    this.log(`afterReply ${status}${output ? `: ${output}` : ""}`);
   }
 
   // --- Voice notes and files ------------------------------------------------

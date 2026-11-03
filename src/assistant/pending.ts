@@ -46,6 +46,22 @@ export class PendingQuestions {
     return { status: "active", question: this.current.question };
   }
 
+  /**
+   * Like `peek`, but only for actions held for a yes: a question that waits for
+   * a reason (the Reject and Revise buttons) is left alone and reads as none.
+   */
+  peekConfirmation(now = Date.now()): PeekResult {
+    if (this.current && !("actions" in this.current.question)) return { status: "none" };
+    return this.peek(now);
+  }
+
+  /** The held actions, when they wait for a yes and the hour is not over. Does not forget anything. */
+  heldActions(now = Date.now()): ChatAction[] | null {
+    const current = this.current;
+    if (!current || !("actions" in current.question) || now - current.askedAt > this.ttlMs) return null;
+    return current.question.actions;
+  }
+
   clear(): void {
     this.current = null;
   }

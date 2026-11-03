@@ -1,23 +1,60 @@
 import { strings } from "../ui/strings";
+import { publishChat } from "./chat-hub";
 import { now, type Db } from "./db";
 
 /** Who wrote a message of the conversation: the user, the chat, or the bot on its own. */
 export const CHAT_ROLES = ["user", "assistant", "bot"] as const;
 export type ChatRole = (typeof CHAT_ROLES)[number];
 
-/** What the bot sent on its own: an approval alert, an informational item, a run summary. */
-export type BotMessageKind = "alert" | "notification" | "summary";
+/** Where a message was exchanged: the Telegram chat, or the panel of the desk. */
+export const CHAT_CHANNELS = ["telegram", "desk"] as const;
+export type ChatChannel = (typeof CHAT_CHANNELS)[number];
+
+/**
+ * What the bot sent on its own: an approval alert, an informational item, a
+ * run summary, or the confirmation that a task typed on the desk went to an agent.
+ */
+export type BotMessageKind = "alert" | "notification" | "summary" | "dispatch";
+
+/** The agent a message of the user was addressed to (from the desk), instead of the chat. */
+export type ChatTarget = { room: string; agent: string };
 
 export type ChatMessageDto = {
   id: number;
   role: ChatRole;
   /** For a bot message, what it was; null otherwise. */
   kind: string | null;
+  channel: ChatChannel;
+  /** The agent a task was addressed to, null for a message to the chat. */
+  to: ChatTarget | null;
   text: string;
   createdAt: string;
 };
 
-type ChatMessageRow = { id: number; role: ChatRole; kind: string | null; text: string; created_at: string };
+type ChatMessageRow = {
+  id: number;
+  role: ChatRole;
+  kind: string | null;
+  channel: ChatChannel;
+  target: string | null;
+  text: string;
+  created_at: string;
+};
+
+/** Messages returned by GET /api/chat/history when `limit` is not given. */
+export const DEFAULT_HISTORY_LIMIT = 50;
+
+function parseTarget(raw: string | null): ChatTarget | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<ChatTarget>;
+    return typeof value.room === "string" && typeof value.agent === "string"
+      ? { room: value.room, agent: value.agent }
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A stored text is cut beyond this (a message of the bot is at most a few Telegram messages). */
 export const STORED_TEXT_LIMIT = 8_000;
@@ -28,23 +65,44 @@ const toDto = (row: ChatMessageRow): ChatMessageDto => ({
   id: row.id,
   role: row.role,
   kind: row.kind,
+  channel: row.channel,
+  to: parseTarget(row.target),
   text: row.text,
   createdAt: row.created_at,
 });
 
-/** Adds a message to the conversation and forgets the oldest beyond KEPT_MESSAGES. */
-export function recordChatMessage(db: Db, role: ChatRole, text: string, kind: string | null = null): void {
+/**
+ * Adds a message to the conversation and forgets the oldest beyond
+ * KEPT_MESSAGES. Tells the live streams (the `chat` event). Returns the
+ * message as stored, or null when the text is blank.
+ */
+export function recordChatMessage(
+  db: Db,
+  role: ChatRole,
+  text: string,
+  kind: string | null = null,
+  options: { channel?: ChatChannel; to?: ChatTarget | null } = {},
+): ChatMessageDto | null {
   const trimmed = text.trim();
-  if (!trimmed) return;
-  db.prepare("INSERT INTO chat_messages (role, kind, text, created_at) VALUES (?, ?, ?, ?)").run(
-    role,
-    kind,
-    trimmed.slice(0, STORED_TEXT_LIMIT),
-    now(),
+  if (!trimmed) return null;
+  const id = Number(
+    db
+      .prepare("INSERT INTO chat_messages (role, kind, channel, target, text, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(
+        role,
+        kind,
+        options.channel ?? "telegram",
+        options.to ? JSON.stringify({ room: options.to.room, agent: options.to.agent }) : null,
+        trimmed.slice(0, STORED_TEXT_LIMIT),
+        now(),
+      ).lastInsertRowid,
   );
   db.prepare(
     "DELETE FROM chat_messages WHERE id <= (SELECT id FROM chat_messages ORDER BY id DESC LIMIT 1 OFFSET ?)",
   ).run(KEPT_MESSAGES);
+  const message = toDto(db.prepare("SELECT * FROM chat_messages WHERE id = ?").get(id) as ChatMessageRow);
+  publishChat({ type: "message", message });
+  return message;
 }
 
 /**
@@ -63,6 +121,7 @@ export function recordBotMessage(db: Db, text: string, kind: BotMessageKind): vo
 /** `/new`: the conversation starts over. */
 export function clearChatHistory(db: Db): void {
   db.prepare("DELETE FROM chat_messages").run();
+  publishChat({ type: "cleared" });
 }
 
 /** The last `limit` messages, oldest first. */
@@ -73,7 +132,15 @@ export function listChatHistory(db: Db, limit: number): ChatMessageDto[] {
 
 function line(row: ChatMessageRow): string {
   const t = strings.assistant.history;
-  const who = row.role === "user" ? t.user : row.role === "assistant" ? t.assistant : t.bot(row.kind);
+  const to = parseTarget(row.target);
+  const who =
+    row.role === "user"
+      ? to
+        ? t.userTo(`${to.room} / ${to.agent}`)
+        : t.user
+      : row.role === "assistant"
+        ? t.assistant
+        : t.bot(row.kind);
   return `${who} : ${row.text}`;
 }
 

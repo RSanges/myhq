@@ -228,7 +228,7 @@ test("GET /api/chat/history shape: the last messages, oldest first, never more t
       ["user", `m${KEPT_MESSAGES + 4}`],
     ],
   );
-  assert.deepEqual(Object.keys(last[0]!).sort(), ["createdAt", "id", "kind", "role", "text"]);
+  assert.deepEqual(Object.keys(last[0]!).sort(), ["channel", "createdAt", "id", "kind", "role", "text", "to"]);
 });
 
 test("alerts the bot really sent go into the conversation, unsent ones do not", async () => {

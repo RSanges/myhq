@@ -365,6 +365,17 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 `,
   },
+  {
+    version: 8,
+    sql: `
+-- The conversation is shared by every channel (Telegram, the desk's panel):
+-- each message says where it was exchanged, and a message the user addressed
+-- to an agent from the desk keeps its target (JSON {"room","agent"}). The
+-- messages that exist were all exchanged on Telegram.
+ALTER TABLE chat_messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram';
+ALTER TABLE chat_messages ADD COLUMN target TEXT;
+`,
+  },
 ];
 
 function migrate(db: Db): void {

@@ -487,6 +487,36 @@ order:
    holding its tools. The optional `afterReply` command runs after each
    reply, its output logged only.
 
+**One pipeline, two channels.** The chat turn (step 4 above, the actions, the
+requests, the guard, the history, the meter) is one class, `ChatService`
+(`src/assistant/chat-service.ts`), that the Telegram `Assistant` and the HTTP
+route `POST /api/chat` (the conversation panel of the desk and of the floor)
+both call. It is one object per home, kept on `globalThis` like the bridge, so the
+two channels meet in the same place:
+
+- **One turn at a time.** A single queue serializes the turns across channels
+  (a message, a « oui » that executes held actions, a `/new`): a message that
+  comes during a turn waits for it and is answered in order. The state (`running`,
+  `queued`, the held confirmation) is published, and the panel shows « Rom2
+  répond à un autre message » while its own message waits.
+- **Held actions are shared.** The question that waits for a yes lives in the
+  service, so a confirmation asked on Telegram can be answered on the desk and
+  the other way round. Only the desk's panel has no commands: its text goes
+  straight to the held actions' answer, then to the chat. The Telegram-only
+  parts stay in `Assistant`: commands, extensions, voice notes and files, the
+  buttons, the hand-over of an approved item, the typing indicator.
+- **Every message knows its channel** (`chat_messages.channel`: `telegram` or
+  `desk`), and the history is the one conversation, whatever the channel.
+- **Tasks for agents.** `POST /api/chat` with `to` does not ask the chat: it is
+  `startRun` with the text as the task (reason `desk`, the usual lock and cap),
+  recorded in the conversation as a message to that agent and a bot message of
+  kind `dispatch`, so the next chat turn knows about it.
+- **The `chat` event.** `recordChatMessage` and `clearChatHistory` publish on an
+  in-process hub (`src/server/chat-hub.ts`, on `globalThis` like the roadmap's),
+  and `GET /api/events` forwards it as the `chat` event, so that both channels
+  stay in sync without polling. Everything that writes the conversation runs in
+  the app process, which is why no table of changes is needed.
+
 **What goes out without being asked.** Besides the alerts above, two options
 of the home send text on their own, in both modes:
 

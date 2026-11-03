@@ -365,6 +365,9 @@ bot sent on its own: approval alerts, informational items (`notifyTypes`),
 failure alerts and run summaries (`notifyRuns`, a brief or a recap), each
 flagged as such, only once Telegram accepted it. The 500 most recent are kept;
 `/new` empties the table (and the next turn starts without `--continue`).
+Each message also says its channel (`telegram`, or `desk` for the conversation
+panel of the web interface, which talks to the same chat: `POST /api/chat`) and,
+for a task the user gave an agent from the desk, the agent it went to.
 `GET /api/chat/history` returns them (`api.md`).
 
 At the start of a turn the user's message is preceded by a transcript in a

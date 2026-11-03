@@ -21,6 +21,7 @@ Every error has the same shape and an HTTP status:
 | `AGENT_NOT_FOUND` | 404 | The room has no such agent. |
 | `APPROVAL_NOT_FOUND` | 404 | No approval with this id. |
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
+| `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
@@ -81,7 +82,9 @@ are integers.
 characters. `reason` says why the run was started: the `reason` given to
 `POST /api/runs` (for example `mail`), `approval` or `message` for a run MyHQ
 started to wake an agent (`onApproval`, `onMessage`, see `home-layout.md`),
-`null` for a run started from the desk, `/run` or a routine. `inputTokens` excludes the cache: the total input of a run is
+`desk` for a task typed in the conversation panel and addressed to an agent
+(`POST /api/chat` with `to`), `null` for a run started from the desk's button,
+`/run` or a routine. `inputTokens` excludes the cache: the total input of a run is
 `inputTokens + cacheCreationInputTokens + cacheReadInputTokens`. `costUsd` is
 the `total_cost_usd` reported by Claude Code (an estimate on a subscription).
 Tokens and cost are written when the run ends; they are 0 while it runs.
@@ -313,6 +316,7 @@ data: {Run}
 | `event` | Event | the runner stores an event of a run |
 | `message` | Message | an agent sends a message |
 | `approval` | Approval | an agent submits an item, and when the item is decided |
+| `chat` | `{ "type": "message", "message": ChatMessage }`, `{ "type": "cleared" }` or `{ "type": "turn", "turn": TurnState }` | a message is added to the conversation (from any channel: Telegram, the desk's panel, an alert of the bot), the conversation is emptied (`/new`), or a turn starts, queues or ends (see `GET /api/chat/history`) |
 | `roadmap` | `{ "at": string }` | `docs/roadmap.json` of the home was created, edited, replaced or removed (see `GET /api/roadmap`) |
 
 `data` is the entity as it is when the message is sent, so an older change may
@@ -320,6 +324,12 @@ already carry a later state (for example an approval created then approved
 within the same second arrives twice as `approved`). Treat every message as
 "upsert this entity by id". The `id` of a message is the stream cursor, not
 the entity id.
+
+The `chat` message is not a stored change either: no `id`, never replayed on
+reconnect. A client that shows the conversation loads `GET /api/chat/history` when
+the stream opens (the `ready` message, again after each reconnection) and then
+applies the `chat` messages: upsert a `message` by its `id`, empty the list on
+`cleared`, replace the turn state on `turn`.
 
 The `roadmap` message is not a stored change: it carries no `id` (the cursor does
 not move, and it is never replayed on reconnect), and it only goes to the
@@ -449,28 +459,118 @@ of the assistant's chat turns, and the daily cap.
   with the tool calls they made. The chat is not a run: its turns are not in
   `today`, `week`, `days`, the cap nor `budget`.
 
+### Conversation shapes
+
+```json
+{
+  "id": 43,
+  "role": "assistant",
+  "kind": null,
+  "channel": "desk",
+  "to": null,
+  "text": "...",
+  "createdAt": "..."
+}
+```
+
+A ChatMessage. `role` is `user`, `assistant` (the chat's reply) or `bot` (a
+message the bot sent on its own); `kind` says which for a bot message (`alert`,
+`notification`, `summary`, `dispatch`: the confirmation of a task sent to an agent)
+and is `null` otherwise. `channel` is where it was exchanged: `telegram` or
+`desk` (the panel of `/` and `/room`); bot messages are the ones Telegram
+accepted. `to` is `{ "room", "agent" }` for a message the user addressed to an
+agent from the desk, `null` otherwise.
+
+```json
+{ "running": true, "queued": 1, "pendingConfirmation": { "summary": "approuver l'item #14" } }
+```
+
+The TurnState. The chat answers one message at a time, whatever the channel:
+`running` is true while a turn is in progress, `queued` counts the messages
+waiting behind it (their reply comes in order). `pendingConfirmation` is set
+while actions the chat asked for wait for a yes (after a turn that read a mail
+or a web page, see `architecture.md` section 5), `null` otherwise.
+
+### `POST /api/chat`
+
+Says something to the assistant's chat, the same conversation as Telegram's, or
+gives a task to an agent. The body is `{ "text": string, "to"?: { "room", "agent" } }`
+(`text` 1 to 20000 characters, unknown fields refused).
+
+**Without `to`**: the message goes through the pipeline Telegram uses (the
+transcript and the preamble of the home, the model, the actions and requests
+the turn asked for, the guard that holds them for a yes after an untrusted
+read, the history), and the request returns when the reply is known. If
+another turn is in progress, the message waits for it (see TurnState).
+
+```json
+{
+  "ok": true,
+  "reply": "Réponse...",
+  "pendingConfirmation": { "summary": "approuver l'item #14" },
+  "messages": [{ "...": "ChatMessage of the user" }, { "...": "ChatMessage of the reply" }]
+}
+```
+
+- `pendingConfirmation` is only present when the turn holds actions for a yes. The
+  answer goes through this same route: the text « oui » (or ok, vas-y, go,
+  confirme) executes them, « non » (annule, stop) drops them, anything else drops
+  them with a note and goes on as a message. The reply of a « oui » is the result
+  line of each action.
+- `ok` is false when the turn gave no answer (budget, timeout, error): `reply`
+  then says why, `messages` is empty, nothing is added to the conversation. The
+  status is still 200.
+- `messages` are what the request added to the conversation, so that a client
+  can show them without waiting for the `chat` events (which carry the same
+  messages, with the same ids).
+
+**With `to`**: the text becomes the task of that agent and a run starts at once
+(reason `desk`), like `POST /api/runs` with a `task`: same agent lock and daily
+cap. The chat is not asked, so the request does not wait for its turn.
+
+```json
+{
+  "ok": true,
+  "reply": "Tâche transmise à Scout, tour n° 12 lancé",
+  "dispatch": { "run": { "...": "Run shape" } },
+  "messages": [{ "...": "the task, role user, with to" }, { "...": "kind dispatch" }]
+}
+```
+
+Status `202`. Both messages are added to the conversation, so the next chat turn
+knows what was sent to whom. Without `to`, the chat may itself hand work to an
+agent through its request files, as it does on Telegram.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `CHAT_NOT_CONFIGURED` (404, without `to`),
+and with `to`: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
+`DAILY_CAP_REACHED` (429), in which case nothing is added to the conversation.
+
 ### `GET /api/chat/history`
 
 The latest messages of the assistant's conversation as MyHQ keeps it (see
-`home-layout.md`, "The conversation MyHQ keeps"), oldest first. `?limit=` from
-1 to 200 (default 50). Only the texts exchanged on Telegram: no token, no
-configuration.
+`home-layout.md`, "The conversation MyHQ keeps"), oldest first, from every channel,
+and the state of the turns. `?limit=` from 1 to 200 (default 50). Only the texts
+exchanged: no token, no configuration.
 
 ```json
 {
   "messages": [
-    { "id": 41, "role": "bot", "kind": "alert", "text": "MyHQ : un item attend ta validation (#14) ...", "createdAt": "..." },
-    { "id": 42, "role": "user", "kind": null, "text": "oui", "createdAt": "..." },
-    { "id": 43, "role": "assistant", "kind": null, "text": "...", "createdAt": "..." }
-  ]
+    { "id": 41, "role": "bot", "kind": "alert", "channel": "telegram", "to": null, "text": "MyHQ : un item attend ta validation (#14) ...", "createdAt": "..." },
+    { "id": 42, "role": "user", "kind": null, "channel": "telegram", "to": null, "text": "oui", "createdAt": "..." },
+    { "id": 43, "role": "assistant", "kind": null, "channel": "telegram", "to": null, "text": "...", "createdAt": "..." }
+  ],
+  "turn": { "running": false, "queued": 0, "pendingConfirmation": null }
 }
 ```
 
-`role` is `user`, `assistant` (the chat's reply) or `bot` (a message the bot
-sent on its own); `kind` says which for a bot message (`alert`,
-`notification`, `summary`) and is `null` otherwise. `/new` empties the list.
-
 Errors: `INVALID_INPUT` for a bad `limit`.
+
+### `DELETE /api/chat/history`
+
+`/new`: the conversation starts over. The next turn does not resume the CLI's
+conversation, and held actions are dropped. It waits for the turn in progress, if
+any. Response `200`: `{ "cleared": true }`; the streams get a `chat` message
+`{ "type": "cleared" }`.
 
 ### `PATCH /api/rooms/[room]/agents/[agent]`
 
