@@ -23,7 +23,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
-| `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`. |
+| `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
@@ -80,8 +80,9 @@ are integers.
 
 `summary` is the final text of the agent (or the error), at most about 4000
 characters. `reason` says why the run was started: the `reason` given to
-`POST /api/runs` (for example `mail`), `approval` or `message` for a run MyHQ
-started to wake an agent (`onApproval`, `onMessage`, see `home-layout.md`),
+`POST /api/runs` (for example `mail`), `approval`, `message`, `revise` or `chat`
+for a run MyHQ started to wake an agent (`onApproval`, `onMessage`,
+`onRevise`, see `home-layout.md`),
 `desk` for a task typed in the conversation panel and addressed to an agent
 (`POST /api/chat` with `to`), `null` for a run started from the desk's button,
 `/run` or a routine. `inputTokens` excludes the cache: the total input of a run is
@@ -119,7 +120,7 @@ in `<home>/data/runs/<runId>.jsonl`.
 
 Messages are written by agents with `hq_message`. Each one also becomes a task
 for the recipient, handed over at its next run, which starts at once when the
-recipient has `onMessage: "run"` (a run with `reason` `message`).
+recipient has not set `onMessage: "queue"` (a run with `reason` `message`).
 
 ### Approval
 
@@ -136,6 +137,9 @@ recipient has `onMessage: "run"` (a run with `reason` `message`).
   "status": "pending",
   "decisionNote": null,
   "annotations": [],
+  "decisionHistory": [],
+  "actionDone": false,
+  "informational": false,
   "decidedAt": null,
   "createdAt": "2026-11-02T16:18:11.483Z"
 }
@@ -150,6 +154,15 @@ with a `revise` or `rejected` decision, in document order, each
 the offset of the quote in the rendered text of the body, which tells apart two
 passages that read the same); empty for every other item. They are part of the
 history in `GET /api/state`.
+
+`decisionHistory` lists the decisions the item had before its last one, oldest
+first, each `{ "decision": "approved" | "rejected" | "revise", "note": string |
+null, "annotations": [...], "decidedAt": string | null }`: empty until an
+item is sent back for a revision after it was decided (see `PATCH
+/api/approvals/[id]`). `actionDone` is `true` when the item's agent has
+`onApproval: "task"` and the task that executes the approved item is done (the
+action, for example a sent mail, already happened). `informational` is `true`
+for an item of `notifyTypes`, born approved, which is not sent back.
 
 Payloads the interface and the assistant act on:
 
@@ -398,7 +411,7 @@ and every change is announced as a `roadmap` event on `GET /api/events`.
 
 ### `PATCH /api/approvals/[id]`
 
-Decides a pending approval.
+Decides a pending approval, or sends a decided one back for a revision.
 
 Body:
 
@@ -418,7 +431,17 @@ Body:
 `note` is optional for `approved` and required (non-blank, at most 5000
 characters) for `rejected` and `revise`. `revise` sends the item back to its
 agent as a new task carrying the note; the agent sees it at its next run, and
-reads every decision through `hq_read_decisions`.
+reads every decision through `hq_read_decisions`. The agent is woken at once
+(run `reason` `revise`) unless it has `onRevise: "queue"`.
+
+`revise` is also accepted on an item that was already decided: an `approved` or
+`rejected` item becomes `revise`, its previous decision is appended to
+`decisionHistory`, the usual revision task is created and `hq_read_decisions`
+returns the new decision. On an item already in `revise` it is accepted only
+when the note or the annotations differ from the current ones
+(`APPROVAL_ALREADY_DECIDED` otherwise). `approved` and `rejected` on a decided item
+stay `APPROVAL_ALREADY_DECIDED`. The revision does not undo what the approval
+triggered: check `actionDone` before asking for one.
 
 `annotations` (optional, at most 30) attach remarks to passages of the body:
 each has a `quote` (1 to 2000 characters, the passage as rendered), a `comment`

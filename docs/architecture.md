@@ -135,7 +135,26 @@ A submission creates an item in the `pending` state. The user can:
   open its thread, or merge a pull request through `gh`);
 - **reject**: the item becomes `rejected`, with a reason;
 - **revise**: the item goes back to the agent as a new task, with the user's
-  comment (`revise` state).
+  comment (`revise` state), and the agent is woken at once (see "Wake-ups").
+
+A decision can be reconsidered: an `approved` or `rejected` item can still be
+sent back with a revise (`PATCH /api/approvals/[id]` with `revise`), and an item
+already in `revise` accepts another one only if its note or remarks differ.
+The decision the item had goes to `approvals.decision_history` (JSON, oldest
+first, `decisionHistory` in the API), the new revise replaces it, and the
+agent reads it through `hq_read_decisions` like any other (the item is unseen
+again). Approving and rejecting stay final. A revision does not undo the
+approval's effects: when the agent already executed the item (`onApproval:
+"task"`, its task done), the desk says so (`actionDone`) and warns that the
+action, a sent mail for example, cannot be undone.
+
+On the desk, the history items have « Demander une révision », which opens the
+annotation list (the drafts kept for that item) and the general note.
+Approving an item that still has draft remarks asks first (« Tu as N remarques
+en attente. Approuver les ignore. »): « Passer en À retravailler » sends them
+as a revise, « Approuver quand même » approves and drops them, Escape cancels.
+The guard is a small state machine (`src/ui/approve-guard.ts`); it is desk
+only, Telegram has no drafts.
 
 On the desk, a revise (or a reject) can also carry **annotations**: selecting a
 passage of the body offers « Annoter », which opens a comment box under the
@@ -223,35 +242,45 @@ MyHQ never acts on the item itself. When the run fails, the item stays
 
 ### Messages between agents
 
-A message addressed to an agent creates a task for it, handled at its next run,
-or at once when the recipient has `onMessage: "run"` (below). There is no
-real-time dialogue between models: mailboxes, readable and cheap.
+A message addressed to an agent creates a task for it, handled at once (a run
+woken as below) unless the recipient has `onMessage: "queue"`, in which case it
+waits for its next run. There is no real-time dialogue between models:
+mailboxes, readable and cheap.
 
 ### Wake-ups
 
-`wakeAgents` (`src/server/runner.ts`) starts a run, at once, for each agent
-that has a pending task of source `approval` (with `onApproval: "task"`, run
-reason `approval`) or `message` (with `onMessage: "run"`, run reason
-`message`) created since its last run started. The run's task is "Handle the
-pending tasks of your mailbox", and the mailbox lists them. The app process
-calls it after each decision, on each tool result of a run (an `hq_message`
-is written by the HQ MCP server, another process: the tool result is when the
-app notices it) and at the end of each run. Consequences:
+Agents work when they receive work. `wakeAgents` (`src/server/runner.ts`)
+starts a run, at once, for each agent that has a pending task created since its
+last run started, of source:
+
+| Task | Run reason | Wakes the agent |
+|---|---|---|
+| `revise` (a revise decision) | `revise` | unless `onRevise: "queue"` |
+| `message` (`hq_message`) | `message` | unless `onMessage: "queue"` |
+| `approval` (an approved item) | `approval` | when `onApproval: "task"` (with `"queue"` the task waits; without the field there is no task) |
+| `chat` (a request of the chat) | `chat` | always |
+
+A task typed to an agent in the conversation panel (`desk`) starts its run
+directly. The run's task is "Handle the pending tasks of your mailbox", and the
+mailbox lists them. The app process calls `wakeAgents` after each decision, on
+each tool result of a run (an `hq_message` is written by the HQ MCP server,
+another process: the tool result is when the app notices it) and at the end of
+each run. Consequences:
 
 - Same agent lock and daily cap as any run. A busy agent is woken again when
   its run ends (its task is newer than that run); with the cap reached, the
   task waits for the agent's next run.
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.
-- Two agents with `onMessage: "run"` writing to each other keep waking each
-  other until the daily cap.
+- Two agents with the default `onMessage` writing to each other keep waking
+  each other until the daily cap; `"queue"` on one of them breaks the loop.
 
 ### Why a run started
 
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
 `/run` or a routine): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
-own `approval` and `message`. It is in the Run shape (API, live stream, daily
+own `approval`, `message`, `revise` and `chat`. It is in the Run shape (API, live stream, daily
 export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.

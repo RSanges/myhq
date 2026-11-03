@@ -99,8 +99,9 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
 | `agents[].sprite` | no | Character sheet of the room view (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing, the neutral character shipped with MyHQ is drawn, tinted per agent. |
-| `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval. |
-| `agents[].onMessage` | no | `"run"`: an `hq_message` addressed to this agent starts a run at once (reason `message`), instead of waiting for its next routine. Default: the message waits for the agent's next run. |
+| `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval (no task: an approved item is usually the user's to post). |
+| `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
+| `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram) starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
@@ -112,17 +113,24 @@ not fire.
 MyHQ validates the file with zod at startup and refuses to start a room whose
 file is invalid, with an explicit error.
 
-#### Waking an agent: `onApproval` and `onMessage`
+#### Waking an agent: `onApproval`, `onMessage` and `onRevise`
 
-Both start the run through the same agent lock and daily cap as any other run
+An agent that receives work does it: whenever a task is created for it (a
+message, a revision, an approved item of an `onApproval: "task"` agent, a
+request of the chat), MyHQ starts a run at once. `onMessage` and `onRevise`
+wake by default; set them to `"queue"` for an agent meant to batch its work,
+which then only finds the task at its next run (`onApproval` is the other way
+round: it creates tasks only when set, and `"queue"` keeps them from waking).
+
+The run goes through the same agent lock and daily cap as any other run
 (`architecture.md`, "Wake-ups"). When the agent is busy, it is woken again as
 soon as its run ends; when the cap is reached, the task waits in its mailbox
 for its next run. Either way the task is listed in the prompt of the run that
 takes it, under "Pending tasks from your mailbox". A run that fails gives its
 mailbox tasks back, and they wait for the next run rather than waking the
-agent in a loop. Two agents with `onMessage: "run"` that write to each other
-keep waking each other: only the daily cap stops them, so give that option to
-agents that answer, not to agents that converse.
+agent in a loop. Two agents that write to each other with the default
+`onMessage` keep waking each other: only the daily cap stops them, so set
+`"queue"` on an agent that converses rather than answers.
 
 An agent that sends approved mails could be declared like this (the
 `courrier` server and its tools belong to the home):
@@ -141,8 +149,7 @@ An agent that sends approved mails could be declared like this (the
       "env": { "HQ_DB_PATH": "${HQ_DB_PATH}", "MAIL_PASSWORD": "${HQ_EXT_MAIL_PASSWORD}" }
     }
   },
-  "onApproval": "task",
-  "onMessage": "run"
+  "onApproval": "task"
 }
 ```
 
