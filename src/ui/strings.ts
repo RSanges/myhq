@@ -68,6 +68,20 @@ export const strings = {
       revise: "À retravailler",
       pending: "À valider",
     },
+    guard: {
+      pending: (count: number) =>
+        count === 1
+          ? "Tu as 1 remarque en attente. Approuver l'ignore."
+          : `Tu as ${count} remarques en attente. Approuver les ignore.`,
+      toRevise: "Passer en À retravailler",
+      approveAnyway: "Approuver quand même",
+    },
+    requestRevision: "Demander une révision",
+    revisionActionDone: "L'action a déjà eu lieu (par exemple un envoi) : elle ne peut pas être annulée.",
+    revisionLabel: "Commentaire pour l'agent (obligatoire sans remarque)",
+    revisionLabelOptional: "Commentaire général pour l'agent (facultatif)",
+    sendRevision: "Envoyer la demande de révision",
+    previousDecisions: (count: number) => (count === 1 ? "1 décision précédente" : `${count} décisions précédentes`),
     decidedOn: (date: string) => `le ${date}`,
     noteTitle: "Note",
     submittedOn: (date: string) => `Soumis le ${date}`,

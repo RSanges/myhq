@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Annotation } from "@/server/annotations";
 import { AnnotatedBody } from "./annotated-body";
+import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
 import { decideApproval, errorText } from "./api";
 import { HandoverControls } from "./copy-button";
 import { formatDateTime } from "./format";
@@ -69,6 +70,7 @@ function PendingCard({
 }) {
   const [mode, setMode] = useState<NoteMode | null>(null);
   const [note, setNote] = useState("");
+  const [guard, setGuard] = useState<GuardState>("idle");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,12 +80,34 @@ function PendingCard({
     try {
       const decided = await decideApproval(approval.id, decision);
       dispatch({ type: "approval", approval: decided });
+      // The remarks were sent with the decision, or dropped by it: no draft is left.
+      onAnnotations([]);
       if (decided.status === "approved") onApproved(decided);
     } catch (failure) {
       setError(errorText(failure));
       setBusy(false);
     }
   };
+
+  const runGuard = (action: GuardAction) => {
+    const step = stepGuard(guard, action, annotations.length);
+    setGuard(step.state);
+    if (step.effect === "approve") void send({ decision: "approved" });
+    if (step.effect === "revise") void send({ decision: "revise", annotations });
+  };
+
+  // The confirmation is moot once the last draft is removed; Escape cancels it.
+  const draftCount = annotations.length;
+  const settled = stepGuard(guard, "drafts", draftCount).state;
+  if (settled !== guard) setGuard(settled);
+  useEffect(() => {
+    if (guard !== "confirming") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setGuard((state) => stepGuard(state, "escape", draftCount).state);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [guard, draftCount]);
 
   const submitNote = () => {
     if (mode === null) return;
@@ -123,7 +147,7 @@ function PendingCard({
             type="button"
             className={buttonClass("primary")}
             disabled={busy}
-            onClick={() => void send({ decision: "approved" })}
+            onClick={() => runGuard("approve")}
           >
             {busy ? strings.desk.sending : strings.desk.approve}
           </button>
@@ -173,12 +197,123 @@ function PendingCard({
           </div>
         </div>
       )}
+      {mode === null && guard === "confirming" && (
+        <div className="space-y-2 rounded-md border border-warn bg-soft p-3">
+          <p role="alert" className="text-sm">
+            {strings.desk.guard.pending(annotations.length)}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass("primary")}
+              disabled={busy}
+              onClick={() => runGuard("revise")}
+              autoFocus
+            >
+              {strings.desk.guard.toRevise}
+            </button>
+            <button type="button" className={buttonClass()} disabled={busy} onClick={() => runGuard("approveAnyway")}>
+              {strings.desk.guard.approveAnyway}
+            </button>
+          </div>
+        </div>
+      )}
       {error && <ErrorNote>{error}</ErrorNote>}
     </li>
   );
 }
 
-function HistoryCard({ approval }: { approval: Approval }) {
+/** Asks for a revision of an item already decided: remarks on the body, then a general note. */
+function RevisionPanel({
+  approval,
+  dispatch,
+  annotations,
+  onAnnotations,
+  onClose,
+}: {
+  approval: Approval;
+  dispatch: Dispatch;
+  annotations: Annotation[];
+  onAnnotations: (next: Annotation[]) => void;
+  onClose: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const noteOptional = annotations.length > 0;
+  const fieldId = `revision-note-${approval.id}`;
+
+  const submit = async () => {
+    if (note.trim() === "" && !noteOptional) {
+      setError(strings.desk.noteRequired);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const decided = await decideApproval(approval.id, {
+        decision: "revise",
+        ...(note.trim() !== "" ? { note: note.trim() } : {}),
+        ...(noteOptional ? { annotations } : {}),
+      });
+      dispatch({ type: "approval", approval: decided });
+      onAnnotations([]);
+      onClose();
+    } catch (failure) {
+      setError(errorText(failure));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {approval.actionDone && (
+        <p role="note" className="rounded-md border border-warn bg-soft px-3 py-2 text-sm">
+          {strings.desk.revisionActionDone}
+        </p>
+      )}
+      <ApprovalContent approval={approval} showControls={false} annotations={annotations} onAnnotations={onAnnotations} />
+      <div className="space-y-2">
+        <label htmlFor={fieldId} className="block text-sm font-medium">
+          {noteOptional ? strings.desk.revisionLabelOptional : strings.desk.revisionLabel}
+        </label>
+        <textarea
+          id={fieldId}
+          className={fieldClass}
+          rows={3}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          maxLength={5000}
+          required={!noteOptional}
+        />
+        {noteOptional && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={buttonClass("primary")} disabled={busy} onClick={() => void submit()}>
+            {busy ? strings.desk.sending : strings.desk.sendRevision}
+          </button>
+          <button type="button" className={buttonClass()} disabled={busy} onClick={onClose}>
+            {strings.desk.cancel}
+          </button>
+        </div>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </div>
+  );
+}
+
+function HistoryCard({
+  approval,
+  dispatch,
+  annotations,
+  onAnnotations,
+}: {
+  approval: Approval;
+  dispatch: Dispatch;
+  /** The remarks drafted for a revision of this item, kept by the desk until sent. */
+  annotations: Annotation[];
+  onAnnotations: (next: Annotation[]) => void;
+}) {
+  const [revising, setRevising] = useState(false);
   return (
     <li className="space-y-3 rounded-lg border border-line bg-card p-4">
       <ApprovalHeader approval={approval} />
@@ -193,16 +328,49 @@ function HistoryCard({ approval }: { approval: Approval }) {
           {approval.decisionNote}
         </p>
       )}
-      <details>
-        <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
-        <div className="mt-2 space-y-3">
-          <ApprovalContent
-            approval={approval}
-            showControls={approval.status !== "approved"}
-            annotations={approval.annotations}
-          />
-        </div>
-      </details>
+      {approval.decisionHistory.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-sm text-muted">
+            {strings.desk.previousDecisions(approval.decisionHistory.length)}
+          </summary>
+          <ul className="mt-1 space-y-1 text-sm">
+            {approval.decisionHistory.map((record, index) => (
+              <li key={index} className="break-words">
+                <Badge tone={decisionTone[record.decision]}>{strings.desk.decision[record.decision]}</Badge>{" "}
+                {record.decidedAt && <span className="text-muted">{strings.desk.decidedOn(formatDateTime(record.decidedAt))}</span>}
+                {record.note && <span> : {record.note}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {revising ? (
+        <RevisionPanel
+          approval={approval}
+          dispatch={dispatch}
+          annotations={annotations}
+          onAnnotations={onAnnotations}
+          onClose={() => setRevising(false)}
+        />
+      ) : (
+        <>
+          {!approval.informational && (
+            <button type="button" className={buttonClass()} onClick={() => setRevising(true)}>
+              {strings.desk.requestRevision}
+            </button>
+          )}
+          <details>
+            <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
+            <div className="mt-2 space-y-3">
+              <ApprovalContent
+                approval={approval}
+                showControls={approval.status !== "approved"}
+                annotations={approval.annotations}
+              />
+            </div>
+          </details>
+        </>
+      )}
     </li>
   );
 }
@@ -281,7 +449,13 @@ export function Desk({
         ) : (
           <ul className="space-y-3">
             {history.map((approval) => (
-              <HistoryCard key={approval.id} approval={approval} />
+              <HistoryCard
+                key={approval.id}
+                approval={approval}
+                dispatch={dispatch}
+                annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
+                onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
+              />
             ))}
           </ul>
         )}

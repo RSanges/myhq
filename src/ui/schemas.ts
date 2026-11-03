@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { annotationSchema } from "@/server/annotations";
+import { decisionRecordSchema } from "@/server/decision-history";
 
 // Shapes received from the HTTP API (docs/api.md), validated before use.
 
@@ -56,6 +57,9 @@ export const approvalSchema = z.object({
   status: approvalStatusSchema,
   decisionNote: z.string().nullable(),
   annotations: z.array(annotationSchema).default([]),
+  decisionHistory: z.array(decisionRecordSchema).default([]),
+  actionDone: z.boolean().default(false),
+  informational: z.boolean().default(false),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
 });
