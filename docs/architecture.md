@@ -455,7 +455,11 @@ order:
    delimited transcript when the turn does not resume, and as the bot's
    messages since the last exchange when it does; `chat.resume: "history"`
    drops `--continue` altogether, as any non-Claude engine would; see
-   `home-layout.md`), and the
+   `home-layout.md`), the optional preamble (`chat.preamble`: a delimited
+   block of the facts of that instant, the date and time, the pending items
+   and today's runs, then the output of a command of the home, 600 characters
+   at most, the command's part cached a minute and never waited for beyond its
+   timeout) right before the user's words, and the
    same isolation as an agent run (environment cleaned, `--setting-sources
    project,local`, `--strict-mcp-config`, `--tools` limited to the whitelist,
    tool search off, deploy commands denied, `--max-budget-usd` from

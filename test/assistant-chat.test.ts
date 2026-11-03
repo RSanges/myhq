@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { after, test } from "node:test";
 import { Assistant } from "../src/assistant/assistant";
 import type { ChatOutcome, ChatRunner } from "../src/assistant/chat";
-import { EMPTY_ASSISTANT_CONFIG, type ChatConfig } from "../src/assistant/home-config";
+import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type ChatConfig } from "../src/assistant/home-config";
+import { corePreamble, fitPreamble, type PreambleConfig } from "../src/assistant/preamble";
 import { PendingQuestions } from "../src/assistant/pending";
 import { Telegram } from "../src/assistant/telegram";
 import { chatTranscript, KEPT_MESSAGES, listChatHistory, recordBotMessage, recordChatMessage } from "../src/server/chat-history";
@@ -235,4 +239,118 @@ test("alerts the bot really sent go into the conversation, unsent ones do not", 
   assert.equal(alert!.role, "bot");
   assert.equal(alert!.kind, "alert");
   assert.match(alert!.text, /Réponse à la mairie/);
+});
+
+// --- C1: the preamble --------------------------------------------------------------
+
+const PREAMBLE: PreambleConfig = { fields: ["datetime", "pending", "runs"], command: null, file: null, maxChars: 600, timeoutMs: 3000 };
+
+test("the preamble gives the date in HQ_TIMEZONE, the pending items (five, then a count) and today's runs", () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  const lines = () => corePreamble(db, config, PREAMBLE.fields, new Date("2026-11-03T13:05:00Z"));
+  assert.deepEqual(lines(), [
+    "Nous sommes le mardi 3 novembre 2026 à 14:05 (Europe/Paris).",
+    "Rien n'attend de validation.",
+    "Tours d'agents aujourd'hui : 0 sur 12.",
+  ]);
+  const first = addApproval(db, "Réponse à la mairie au sujet du justificatif de domicile demandé vendredi");
+  for (let i = 0; i < 6; i++) addApproval(db, `Item ${i}`, "social_post");
+  const [, title, item, ...rest] = lines();
+  assert.equal(title, "À valider (7) :");
+  assert.equal(item, `- n° ${first}, Scout, mail_reply : Réponse à la mairie au sujet du justificatif de...`);
+  assert.equal(rest.length, 6, "four more items, the count of the rest, the runs");
+  assert.equal(rest[4], "- et 2 autres");
+});
+
+test("the preamble stays under maxChars: the home's output is cut first, the core only when it alone does not fit", () => {
+  const core = ["Nous sommes le mardi 3 novembre 2026 à 14:05 (Europe/Paris).", "Rien n'attend de validation."];
+  const short = fitPreamble(core, "Agenda : dentiste à 14 h.", 600);
+  assert.equal(
+    short,
+    [
+      "[Contexte à cet instant, le plus récent fait foi]",
+      ...core,
+      "Agenda : dentiste à 14 h.",
+      "[Fin du contexte]",
+    ].join("\n"),
+  );
+  const long = fitPreamble(core, "x".repeat(2000), 600);
+  assert.equal(long.length, 600);
+  assert.ok(long.includes(core[1]!), "the core's facts are whole");
+  assert.ok(long.endsWith("...\n[Fin du contexte]"));
+  const tiny = fitPreamble(["y".repeat(500)], "z".repeat(100), 150);
+  assert.ok(tiny.length <= 150);
+  assert.ok(!tiny.includes("z"), "no room for the home's output");
+});
+
+test("each chat message is preceded by the preamble with the home's command output, cached for a minute", async () => {
+  const config = makeHome();
+  const counter = path.join(config.home, "count.txt");
+  const script = path.join(config.home, "preamble.mjs");
+  fs.writeFileSync(
+    script,
+    `import fs from "node:fs"; const f = ${JSON.stringify(counter)}; const n = fs.existsSync(f) ? Number(fs.readFileSync(f, "utf8")) + 1 : 1; fs.writeFileSync(f, String(n)); console.log("Agenda : dentiste à 14 h (appel " + n + ").");`,
+  );
+  const { db, seen, say } = await setup({
+    config,
+    chat: { preamble: { ...PREAMBLE, command: `node preamble.mjs` } },
+  });
+  const id = addApproval(db, "Réponse à la mairie");
+  await say("Qu'est-ce que j'ai aujourd'hui ?");
+  const input = seen[0]!.input;
+  assert.match(input, /^\[Contexte à cet instant, le plus récent fait foi\]\nNous sommes le /);
+  assert.ok(input.includes(`- n° ${id}, Scout, mail_reply : Réponse à la mairie`));
+  assert.ok(input.includes("Agenda : dentiste à 14 h (appel 1)."));
+  assert.ok(input.endsWith("[Fin du contexte]\n\nQu'est-ce que j'ai aujourd'hui ?"));
+  await say("Et demain ?");
+  assert.ok(seen[1]!.input.includes("(appel 1)"), "the command ran once in the minute");
+  assert.equal(fs.readFileSync(counter, "utf8"), "1");
+  // The history keeps the user's own words, never the preamble.
+  assert.equal(listChatHistory(db, 10)[0]!.text, "Qu'est-ce que j'ai aujourd'hui ?");
+});
+
+test("a preamble command that fails or runs too long leaves the core's facts, and the chat does not wait", async () => {
+  const config = makeHome();
+  fs.writeFileSync(path.join(config.home, "slow.mjs"), "setTimeout(() => console.log('late'), 2000);");
+  const { seen, say, logs } = await setup({
+    config,
+    chat: { preamble: { ...PREAMBLE, command: "node slow.mjs", timeoutMs: 300 } },
+  });
+  const started = Date.now();
+  await say("Salut");
+  assert.ok(Date.now() - started < 3000);
+  assert.ok(!seen[0]!.input.includes("late"));
+  assert.match(seen[0]!.input, /Tours d'agents aujourd'hui/);
+  assert.ok(logs.some((l) => /preamble command timed out/.test(l)));
+
+  const failing = await setup({ chat: { preamble: { ...PREAMBLE, fields: ["runs"], command: "node -e process.exit(3)" } } });
+  await failing.say("Salut");
+  assert.equal(
+    failing.seen[0]!.input,
+    "[Contexte à cet instant, le plus récent fait foi]\nTours d'agents aujourd'hui : 0 sur 12.\n[Fin du contexte]\n\nSalut",
+  );
+});
+
+test("assistant.json: chat.preamble is validated, command or file", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-assistant-"));
+  const write = (preamble: unknown) =>
+    fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat", preamble } }));
+  write({ command: "npx tsx assistant/chat/preamble.ts" });
+  assert.deepEqual(loadAssistantConfig(home).chat!.preamble, {
+    fields: ["datetime", "pending", "runs"],
+    command: "npx tsx assistant/chat/preamble.ts",
+    file: null,
+    maxChars: 600,
+    timeoutMs: 3000,
+  });
+  write({ fields: ["datetime"], file: "data/assistant/preamble.txt", maxChars: 400, timeoutSeconds: 1 });
+  assert.equal(loadAssistantConfig(home).chat!.preamble!.file, path.join(home, "data", "assistant", "preamble.txt"));
+  write({ command: "x", file: "y" });
+  assert.throws(() => loadAssistantConfig(home), /command or file/);
+  write({ fields: ["weather"] });
+  assert.throws(() => loadAssistantConfig(home), /chat\.preamble\.fields/);
+  fs.writeFileSync(path.join(home, "assistant.json"), JSON.stringify({ chat: { cwd: "chat" } }));
+  assert.equal(loadAssistantConfig(home).chat!.preamble, null, "no preamble unless asked");
 });

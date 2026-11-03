@@ -491,6 +491,18 @@ export const strings = {
       firing: (p: { at: string; room: string; agent: string; outcome: string; runId: number | null }) =>
         `${p.at} ${p.room} / ${p.agent} : ${p.outcome}${p.runId !== null ? ` (tour #${p.runId})` : ""}`,
     },
+    /** The block of facts that precedes each message given to the chat (chat.preamble). */
+    preamble: {
+      head: "[Contexte à cet instant, le plus récent fait foi]",
+      end: "[Fin du contexte]",
+      datetime: (text: string, timeZone: string) => `Nous sommes le ${text} (${timeZone}).`,
+      pendingNone: "Rien n'attend de validation.",
+      pendingTitle: (count: number) => `À valider (${count}) :`,
+      pendingItem: (p: { id: number; agent: string; type: string; title: string }) =>
+        `- n° ${p.id}, ${p.agent}, ${p.type} : ${p.title}`,
+      pendingMore: (count: number) => (count === 1 ? "- et 1 autre" : `- et ${count} autres`),
+      runs: (count: number, max: number) => `Tours d'agents aujourd'hui : ${count} sur ${max}.`,
+    },
     /** The conversation MyHQ keeps, as given to the chat at the start of a turn. */
     history: {
       head: "[Conversation récente, du plus ancien au plus récent]",

@@ -31,6 +31,7 @@ import {
 import type { AssistantCommand, AssistantContext, LoadedExtension } from "./extension";
 import type { AssistantConfig } from "./home-config";
 import { PendingQuestions, type PendingQuestion } from "./pending";
+import { Preamble } from "./preamble";
 import { processChatRequests } from "./requests";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
@@ -101,6 +102,7 @@ export class Assistant {
   private readonly log: (message: string) => void;
   private readonly questions: PendingQuestions;
   private readonly extEnv: Env;
+  private readonly preamble: Preamble;
   private continueChat = true;
   private queue: Promise<void> = Promise.resolve();
 
@@ -108,6 +110,7 @@ export class Assistant {
     this.log = deps.log ?? ((message) => console.log(`[assistant] ${message}`));
     this.questions = deps.questions ?? new PendingQuestions();
     this.extEnv = extensionEnv(deps.env);
+    this.preamble = new Preamble({ db: deps.db, config: deps.config, env: this.extEnv, log: this.log });
   }
 
   /** Core commands, then the extensions' commands (a core name always wins). */
@@ -508,11 +511,13 @@ export class Assistant {
     const resume = chat.resume === "cli" && this.continueChat;
     const transcript = (since: "all" | "lastExchange") =>
       chatTranscript(this.deps.db, { turns: chat.historyTurns, maxChars: chat.historyMaxChars, since });
-    const freshText = composeChatInput([transcript("all")], text);
-    const outcome = await this.withTyping(() =>
-      askChat({
+    const outcome = await this.withTyping(async () => {
+      // The facts of this instant come last, right before the user's words.
+      const preamble = chat.preamble ? await this.preamble.build(chat.preamble) : null;
+      const freshText = composeChatInput([transcript("all"), preamble], text);
+      return askChat({
         chat,
-        text: resume ? composeChatInput([transcript("lastExchange")], text) : freshText,
+        text: resume ? composeChatInput([transcript("lastExchange"), preamble], text) : freshText,
         freshText,
         continue: resume,
         bin: this.deps.config.claudeBin,
@@ -524,8 +529,8 @@ export class Assistant {
           appEnv: this.deps.env,
         },
         run: this.deps.runChat,
-      }),
-    );
+      });
+    });
     this.meter(outcome, chat.model, startedAt);
     if (outcome.ok) {
       this.continueChat = true;

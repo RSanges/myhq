@@ -315,9 +315,45 @@ assistant runs with its core commands only.
 | `chat.historyTurns` | no | Exchanges of the conversation MyHQ gives back to the chat at the start of a turn (below). Default: 12; 0 gives none. |
 | `chat.historyMaxChars` | no | Characters of that transcript at most, its marks included (200 to 100,000). Default: 8,000. |
 | `chat.resume` | no | `cli` (default): resume the CLI's conversation with `--continue`, an optimization while the engine is Claude. `history`: never `--continue`, every turn is fresh and gets MyHQ's transcript (what any other engine would do). |
+| `chat.preamble` | no | The facts of the moment given before each message (below): `{ "fields"?, "command"?, "file"?, "maxChars"?, "timeoutSeconds"? }`. Without it, no preamble. |
 | `transcribe` | no | Shell command that turns a voice note into text: `{file}` is replaced by the quoted path of the audio file (do not quote it yourself), and the command prints the text on stdout. Without it, voice notes get a "not configured" answer. |
 | `dropDir` | no | Folder where photos and documents sent to the bot are saved, with a free name (never overwritten) and, when the message has a caption, a companion `.md` note. Without it, files get a "not configured" answer. |
 | `extensions` | no | Extension modules, asked in this order (below). |
+
+### The preamble
+
+With `chat.preamble`, each message given to the chat is preceded by a
+delimited block of the facts of that instant, so that the chat answers « what
+do I have today? » or « approve the one for the town hall » without a tool
+call:
+
+```
+[Contexte à cet instant, le plus récent fait foi]
+Nous sommes le mardi 3 novembre 2026 à 14:05 (Europe/Paris).
+À valider (7) :
+- n° 14, Mail, mail_reply : Réponse à la mairie
+- ... (five at most)
+- et 2 autres
+Tours d'agents aujourd'hui : 3 sur 12.
+<the stdout of the home's command>
+[Fin du contexte]
+
+<the user's message>
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `fields` | `["datetime", "pending", "runs"]` | The core's facts, in this order: the date and time in `HQ_TIMEZONE`; the pending items (number, agent, type and a title cut at 50 characters, five at most, then how many others); the runs started today against the daily cap. |
+| `command` | none | Shell command run in the home (same shell and environment as `transcribe`); its trimmed stdout ends the block (for example the day's appointments from a cache of the home). |
+| `file` | none | Instead of `command`: a text file of the home whose content ends the block. |
+| `maxChars` | 600 | Characters of the block at most, marks included (100 to 4000). The home's text is cut first; the core's lines only when they alone do not fit. |
+| `timeoutSeconds` | 3 | A command still running after this is killed and left out. |
+
+The home's part is computed at most once a minute (cached 60 seconds); the
+core's facts are read at each message. A command that fails, prints nothing
+or runs past its timeout leaves the core's facts alone (and a line in the
+log): the chat never waits longer than `timeoutSeconds`. The conversation MyHQ
+keeps (below) stores the user's own words, never the preamble.
 
 ### The conversation MyHQ keeps
 

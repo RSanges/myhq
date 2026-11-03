@@ -212,6 +212,7 @@ test("validates assistant.json and resolves its paths from the home", () => {
     historyTurns: 12,
     historyMaxChars: 8_000,
     resume: "cli",
+    preamble: null,
   });
   assert.equal(config.dropDir, path.resolve(home, "../vault/inbox"));
   assert.deepEqual(config.extensions, ["assistant/commands/echo.ts"]);
@@ -246,6 +247,7 @@ const chat: ChatConfig = {
   historyTurns: 12,
   historyMaxChars: 8_000,
   resume: "cli",
+  preamble: null,
 };
 
 test("builds the exact chat command line", () => {

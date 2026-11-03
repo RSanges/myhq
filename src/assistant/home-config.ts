@@ -2,11 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { MODELS, mcpServersSchema, type McpServerConfig } from "../server/rooms";
+import { PREAMBLE_FIELDS, type PreambleConfig } from "./preamble";
 
 const relativePath = z.string().trim().min(1);
 
 /** Permission modes of `claude -p` the chat may use (never bypassPermissions). */
 export const CHAT_PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "auto"] as const;
+
+/** `chat.preamble`: the facts given before each message. */
+const preambleSchema = z
+  .strictObject({
+    fields: z.array(z.enum(PREAMBLE_FIELDS)).default([...PREAMBLE_FIELDS]),
+    /** Shell command run in the home; its stdout ends the preamble. */
+    command: z.string().trim().min(1).optional(),
+    /** Or a text file of the home (relative path) whose content ends it. */
+    file: relativePath.optional(),
+    maxChars: z.number().int().min(100).max(4_000).default(600),
+    timeoutSeconds: z.number().positive().max(30).default(3),
+  })
+  .refine((p) => !(p.command && p.file), { message: "give command or file, not both", path: ["file"] });
 
 const chatSchema = z.strictObject({
   cwd: relativePath,
@@ -28,6 +42,7 @@ const chatSchema = z.strictObject({
   historyMaxChars: z.number().int().min(200).max(100_000).default(8_000),
   /** "cli": resume with --continue while the engine is Claude; "history": always a fresh turn with MyHQ's transcript. */
   resume: z.enum(["cli", "history"]).default("cli"),
+  preamble: preambleSchema.optional(),
 });
 
 /** `<home>/assistant.json`. Every path is relative to the home (or absolute). */
@@ -60,6 +75,8 @@ export type ChatConfig = {
   historyTurns: number;
   historyMaxChars: number;
   resume: "cli" | "history";
+  /** The facts given before each message, or null (none). */
+  preamble: PreambleConfig | null;
 };
 
 export type AssistantConfig = {
@@ -111,6 +128,15 @@ export function loadAssistantConfig(home: string): AssistantConfig {
           historyTurns: data.chat.historyTurns,
           historyMaxChars: data.chat.historyMaxChars,
           resume: data.chat.resume,
+          preamble: data.chat.preamble
+            ? {
+                fields: data.chat.preamble.fields,
+                command: data.chat.preamble.command ?? null,
+                file: data.chat.preamble.file ? resolve(data.chat.preamble.file) : null,
+                maxChars: data.chat.preamble.maxChars,
+                timeoutMs: data.chat.preamble.timeoutSeconds * 1000,
+              }
+            : null,
         }
       : null,
     transcribe: data.transcribe ?? null,
