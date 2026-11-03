@@ -491,6 +491,16 @@ export const strings = {
       firing: (p: { at: string; room: string; agent: string; outcome: string; runId: number | null }) =>
         `${p.at} ${p.room} / ${p.agent} : ${p.outcome}${p.runId !== null ? ` (tour #${p.runId})` : ""}`,
     },
+    /** The conversation MyHQ keeps, as given to the chat at the start of a turn. */
+    history: {
+      head: "[Conversation récente, du plus ancien au plus récent]",
+      headSince: "[Messages envoyés de ta part depuis notre dernier échange]",
+      end: "[Fin de la conversation récente]",
+      user: "Utilisateur",
+      assistant: "Toi",
+      bot: (kind: string | null) =>
+        `Toi, message automatique${kind ? ` (${({ alert: "alerte", notification: "notification", summary: "compte rendu" } as Record<string, string>)[kind] ?? kind})` : ""}`,
+    },
     chat: {
       notConfigured: "La conversation n'est pas configurée (section chat de assistant.json).",
       timeout: (minutes: number) =>

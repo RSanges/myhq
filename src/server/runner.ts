@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { strings } from "../ui/strings";
+import { recordBotMessage } from "./chat-history";
 import { ClaudeEngine, writeMcpConfig } from "./claude-engine";
 import { getConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
@@ -432,11 +433,16 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   wake(p);
   await notifyPendingApprovals(db, p.send);
+  // What the bot sends on its own goes into the conversation MyHQ keeps, so
+  // that the user's answer to it is understood (chat-history.ts).
   if (status === "failed") {
-    await p.send(strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }));
+    const text = strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary });
+    if (await p.send(text)) recordBotMessage(db, text, "alert");
   }
   // A brief or a recap agent delivers its text this way: its summary is the message.
   if (status === "done" && agent.notifyRuns === "summary") {
-    for (const part of toTelegramMessages(summary)) await p.send(part);
+    let sent = false;
+    for (const part of toTelegramMessages(summary)) sent = (await p.send(part)) || sent;
+    if (sent) recordBotMessage(db, summary, "summary");
   }
 }

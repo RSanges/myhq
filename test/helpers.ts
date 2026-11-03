@@ -63,6 +63,9 @@ export function chatConfig(overrides: Partial<ChatConfig> = {}): ChatConfig {
     permissionMode: "default",
     timeoutMs: 1000,
     afterReply: null,
+    historyTurns: 12,
+    historyMaxChars: 8_000,
+    resume: "cli",
     ...overrides,
   };
 }

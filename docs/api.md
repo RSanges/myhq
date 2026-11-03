@@ -449,6 +449,29 @@ of the assistant's chat turns, and the daily cap.
   with the tool calls they made. The chat is not a run: its turns are not in
   `today`, `week`, `days`, the cap nor `budget`.
 
+### `GET /api/chat/history`
+
+The latest messages of the assistant's conversation as MyHQ keeps it (see
+`home-layout.md`, "The conversation MyHQ keeps"), oldest first. `?limit=` from
+1 to 200 (default 50). Only the texts exchanged on Telegram: no token, no
+configuration.
+
+```json
+{
+  "messages": [
+    { "id": 41, "role": "bot", "kind": "alert", "text": "MyHQ : un item attend ta validation (#14) ...", "createdAt": "..." },
+    { "id": 42, "role": "user", "kind": null, "text": "oui", "createdAt": "..." },
+    { "id": 43, "role": "assistant", "kind": null, "text": "...", "createdAt": "..." }
+  ]
+}
+```
+
+`role` is `user`, `assistant` (the chat's reply) or `bot` (a message the bot
+sent on its own); `kind` says which for a bot message (`alert`,
+`notification`, `summary`) and is `null` otherwise. `/new` empties the list.
+
+Errors: `INVALID_INPUT` for a bad `limit`.
+
 ### `PATCH /api/rooms/[room]/agents/[agent]`
 
 Arms or disarms the routines of an agent. The value is stored in the database

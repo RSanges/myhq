@@ -16,7 +16,8 @@ import { formatCost, formatDateTime } from "../ui/format";
 import { branchHandover, claudeMdHandover, payloadUrl } from "../ui/model";
 import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
-import { askChat, chatEnv, type ChatOutcome, type ChatRunner } from "./chat";
+import { chatTranscript, clearChatHistory, recordChatMessage, type ChatRole } from "../server/chat-history";
+import { askChat, chatEnv, composeChatInput, type ChatOutcome, type ChatRunner } from "./chat";
 import {
   CORE_COMMANDS,
   isCoreCommand,
@@ -241,6 +242,11 @@ export class Assistant {
         return this.reply(t.welcome(this.extensionCommands().map((c) => c.command)));
       case "new":
         this.continueChat = false;
+        try {
+          clearChatHistory(this.deps.db);
+        } catch (error) {
+          this.log(`chat history not cleared: ${describe(error)}`);
+        }
         return this.reply(t.newConversation);
       case "pending":
         return this.reply(this.pendingList());
@@ -497,11 +503,18 @@ export class Assistant {
     const chat = this.deps.assistant.chat;
     if (!chat) return this.reply(strings.assistant.chat.notConfigured);
     const startedAt = new Date().toISOString();
+    // MyHQ keeps the conversation: a fresh turn gets the transcript, a turn
+    // that resumes the CLI's conversation only what the bot sent since.
+    const resume = chat.resume === "cli" && this.continueChat;
+    const transcript = (since: "all" | "lastExchange") =>
+      chatTranscript(this.deps.db, { turns: chat.historyTurns, maxChars: chat.historyMaxChars, since });
+    const freshText = composeChatInput([transcript("all")], text);
     const outcome = await this.withTyping(() =>
       askChat({
         chat,
-        text,
-        continue: this.continueChat,
+        text: resume ? composeChatInput([transcript("lastExchange")], text) : freshText,
+        freshText,
+        continue: resume,
         bin: this.deps.config.claudeBin,
         env: chatEnv(this.deps.env),
         maxBudgetUsd: this.deps.chatMaxBudgetUsd,
@@ -517,7 +530,10 @@ export class Assistant {
     if (outcome.ok) {
       this.continueChat = true;
       this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
-      await this.reply(outcome.text.trim() || strings.assistant.chat.empty);
+      const answer = outcome.text.trim() || strings.assistant.chat.empty;
+      this.remember("user", text);
+      this.remember("assistant", answer);
+      await this.reply(answer);
       if (chat.requestsDir) {
         processChatRequests(chat.requestsDir, {
           config: this.deps.config,
@@ -538,6 +554,15 @@ export class Assistant {
       return this.reply(strings.assistant.chat.timeout(Math.round(chat.timeoutMs / 60_000)));
     }
     return this.reply(strings.assistant.chat.failed(outcome.detail.slice(0, 500)));
+  }
+
+  /** Adds a message to the conversation MyHQ keeps. Never throws. */
+  private remember(role: ChatRole, text: string): void {
+    try {
+      recordChatMessage(this.deps.db, role, text);
+    } catch (error) {
+      this.log(`chat history not recorded: ${describe(error)}`);
+    }
   }
 
   /** Records the turn for the meter (`chat_turns`). Never throws. */

@@ -22,6 +22,12 @@ const chatSchema = z.strictObject({
   permissionMode: z.enum(CHAT_PERMISSION_MODES).default("default"),
   timeoutMinutes: z.number().positive().max(120).default(10),
   afterReply: z.string().trim().min(1).optional(),
+  /** Exchanges of the conversation MyHQ gives back at the start of a turn (0: none). */
+  historyTurns: z.number().int().min(0).max(100).default(12),
+  /** Characters of that transcript, at most. */
+  historyMaxChars: z.number().int().min(200).max(100_000).default(8_000),
+  /** "cli": resume with --continue while the engine is Claude; "history": always a fresh turn with MyHQ's transcript. */
+  resume: z.enum(["cli", "history"]).default("cli"),
 });
 
 /** `<home>/assistant.json`. Every path is relative to the home (or absolute). */
@@ -51,6 +57,9 @@ export type ChatConfig = {
   permissionMode: (typeof CHAT_PERMISSION_MODES)[number];
   timeoutMs: number;
   afterReply: string | null;
+  historyTurns: number;
+  historyMaxChars: number;
+  resume: "cli" | "history";
 };
 
 export type AssistantConfig = {
@@ -99,6 +108,9 @@ export function loadAssistantConfig(home: string): AssistantConfig {
           permissionMode: data.chat.permissionMode,
           timeoutMs: data.chat.timeoutMinutes * 60_000,
           afterReply: data.chat.afterReply ?? null,
+          historyTurns: data.chat.historyTurns,
+          historyMaxChars: data.chat.historyMaxChars,
+          resume: data.chat.resume,
         }
       : null,
     transcribe: data.transcribe ?? null,

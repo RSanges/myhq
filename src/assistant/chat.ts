@@ -181,6 +181,11 @@ export const spawnChat: ChatRunner = (params) =>
     child.stdin.end(params.input, "utf8");
   });
 
+/** The user's message, preceded by the blocks MyHQ adds (transcript, preamble), blank lines between. */
+export function composeChatInput(blocks: (string | null)[], text: string): string {
+  return [...blocks.filter((block): block is string => Boolean(block?.trim())), text].join("\n\n");
+}
+
 /** Where the per-turn MCP file goes, and what its placeholders are expanded from. */
 export type ChatMcp = {
   /** Directory of the per-turn file (the file is deleted when the turn ends). */
@@ -215,6 +220,8 @@ export function writeChatMcpConfig(chat: ChatConfig, mcp: ChatMcp, turnId: strin
 export async function askChat(params: {
   chat: ChatConfig;
   text: string;
+  /** What to send instead of `text` when the turn starts a new conversation after a failed `--continue`. */
+  freshText?: string;
   continue: boolean;
   bin: string;
   env: Env;
@@ -232,18 +239,20 @@ export async function askChat(params: {
       return { ok: false, reason: "error", detail: error instanceof Error ? error.message : String(error) };
     }
   }
-  const attempt = (resume: boolean) =>
+  const attempt = (resume: boolean, input: string) =>
     run({
       bin: params.bin,
       args: buildChatArgs(params.chat, { continue: resume, maxBudgetUsd: params.maxBudgetUsd, mcpConfigPath }),
       cwd: params.chat.cwd,
       env: params.env,
-      input: params.text,
+      input,
       timeoutMs: params.chat.timeoutMs,
     });
   try {
-    const first = await attempt(params.continue);
-    if (params.continue && !first.ok && first.reason === "no_conversation") return await attempt(false);
+    const first = await attempt(params.continue, params.text);
+    if (params.continue && !first.ok && first.reason === "no_conversation") {
+      return await attempt(false, params.freshText ?? params.text);
+    }
     return first;
   } finally {
     // The file holds expanded secrets: it only lives for the turn.

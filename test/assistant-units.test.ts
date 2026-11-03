@@ -209,6 +209,9 @@ test("validates assistant.json and resolves its paths from the home", () => {
     requestsDir: null,
     timeoutMs: 600_000,
     afterReply: null,
+    historyTurns: 12,
+    historyMaxChars: 8_000,
+    resume: "cli",
   });
   assert.equal(config.dropDir, path.resolve(home, "../vault/inbox"));
   assert.deepEqual(config.extensions, ["assistant/commands/echo.ts"]);
@@ -240,6 +243,9 @@ const chat: ChatConfig = {
   requestsDir: null,
   timeoutMs: 600_000,
   afterReply: null,
+  historyTurns: 12,
+  historyMaxChars: 8_000,
+  resume: "cli",
 };
 
 test("builds the exact chat command line", () => {

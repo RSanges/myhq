@@ -1,6 +1,7 @@
 import { approvalKeyboard } from "../assistant/approval-buttons";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { splitMessage } from "../assistant/text";
+import { recordBotMessage } from "./chat-history";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { strings } from "../ui/strings";
 import type { Env } from "./config";
@@ -92,9 +93,13 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert): Pr
     // Marked first so that two concurrent sweeps never send the same item twice.
     if (mark.run(new Date().toISOString(), row.id).changes === 0) continue;
     if (row.status === "pending") {
-      await send(strings.notify.approvalPending(row), { approvalId: row.id });
+      const text = strings.notify.approvalPending(row);
+      if (await send(text, { approvalId: row.id })) recordBotMessage(db, text, "alert");
       continue;
     }
-    for (const part of splitMessage(`${strings.notify.notification(row)}\n\n${row.body}`)) await send(part);
+    const text = `${strings.notify.notification(row)}\n\n${row.body}`;
+    let sent = false;
+    for (const part of splitMessage(text)) sent = (await send(part)) || sent;
+    if (sent) recordBotMessage(db, text, "notification");
   }
 }

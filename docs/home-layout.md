@@ -312,9 +312,38 @@ assistant runs with its core commands only.
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
 | `chat.afterReply` | no | Shell command run in `chat.cwd` after each reply. Its output goes to the log, never to Telegram. |
+| `chat.historyTurns` | no | Exchanges of the conversation MyHQ gives back to the chat at the start of a turn (below). Default: 12; 0 gives none. |
+| `chat.historyMaxChars` | no | Characters of that transcript at most, its marks included (200 to 100,000). Default: 8,000. |
+| `chat.resume` | no | `cli` (default): resume the CLI's conversation with `--continue`, an optimization while the engine is Claude. `history`: never `--continue`, every turn is fresh and gets MyHQ's transcript (what any other engine would do). |
 | `transcribe` | no | Shell command that turns a voice note into text: `{file}` is replaced by the quoted path of the audio file (do not quote it yourself), and the command prints the text on stdout. Without it, voice notes get a "not configured" answer. |
 | `dropDir` | no | Folder where photos and documents sent to the bot are saved, with a free name (never overwritten) and, when the message has a caption, a companion `.md` note. Without it, files get a "not configured" answer. |
 | `extensions` | no | Extension modules, asked in this order (below). |
+
+### The conversation MyHQ keeps
+
+MyHQ, not the CLI, holds the continuity of the conversation, so that it
+survives a change of `chat.cwd` or of engine. The table `chat_messages` keeps
+the user's messages that went to the chat, the chat's replies, and what the
+bot sent on its own: approval alerts, informational items (`notifyTypes`),
+failure alerts and run summaries (`notifyRuns`, a brief or a recap), each
+flagged as such, only once Telegram accepted it. The 500 most recent are kept;
+`/new` empties the table (and the next turn starts without `--continue`).
+`GET /api/chat/history` returns them (`api.md`).
+
+At the start of a turn the user's message is preceded by a transcript in a
+delimited block (« [Conversation récente, du plus ancien au plus récent] »
+... « [Fin de la conversation récente] »), at most `chat.historyTurns`
+exchanges (a user message and the replies that follow it; each message of the
+bot counts as one) and `chat.historyMaxChars` characters, the oldest dropped
+first:
+
+- a turn that does not resume (`chat.resume: "history"`, the first turn after
+  `/new`, or the retry when the CLI has no conversation to continue) gets the
+  whole transcript;
+- a turn that resumes with `--continue` already has the exchanges, so it only
+  gets the messages the bot sent since the last one (« [Messages envoyés de ta
+  part depuis notre dernier échange] »): a « oui » then answers what the bot
+  just sent.
 
 ### Chat MCP servers
 

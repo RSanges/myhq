@@ -428,7 +428,8 @@ order:
    command: it becomes the reason or the comment of the decision. A question
    expires after one hour; the user is told, and the message goes on.
 2. **Core commands**: `/start`, `/new` (the next chat turn starts a new
-   conversation), `/pending` (id, room and agent, title), `/approve <id>`,
+   conversation, and the conversation MyHQ keeps is emptied), `/pending` (id,
+   room and agent, title), `/approve <id>`,
    `/reject <id> <reason>`, `/revise <id> <comment>`, `/run <room>/<agent>
    [task]` (same lock and cap as the API), `/status` (runs and cost today and
    this week, the conversation's messages and cost this week, the share of
@@ -449,7 +450,12 @@ order:
    usage from the stream), the home's system prompt file with
    `--system-prompt-file` when `chat.systemPrompt` is set (it replaces the
    CLI's default prompt; the `CLAUDE.md` of the working directory is no longer
-   the lever), and the
+   the lever), the conversation MyHQ keeps (`chat_messages`: the exchanges and
+   what the bot sent on its own, given back at the start of a turn as a
+   delimited transcript when the turn does not resume, and as the bot's
+   messages since the last exchange when it does; `chat.resume: "history"`
+   drops `--continue` altogether, as any non-Claude engine would; see
+   `home-layout.md`), and the
    same isolation as an agent run (environment cleaned, `--setting-sources
    project,local`, `--strict-mcp-config`, `--tools` limited to the whitelist,
    tool search off, deploy commands denied, `--max-budget-usd` from

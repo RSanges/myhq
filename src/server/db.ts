@@ -350,6 +350,21 @@ CREATE TABLE IF NOT EXISTS chat_turns (
 CREATE INDEX IF NOT EXISTS chat_turns_started ON chat_turns (started_at);
 `,
   },
+  {
+    version: 7,
+    sql: `
+-- The assistant's conversation as MyHQ keeps it (any engine): the user's
+-- messages, the chat's replies, and what the bot sent on its own (alerts,
+-- informational items, run summaries such as a brief). /new empties it.
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'bot')),
+  kind TEXT,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {
