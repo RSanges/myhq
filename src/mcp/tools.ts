@@ -1,6 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import type { Env } from "../server/config";
+import { decisionText, parseAnnotations } from "../server/annotations";
 import { now, type ApprovalRow, type Db } from "../server/db";
 import { NOTIFICATION_NOTE, readNotifyTypes } from "../server/home-settings";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
@@ -177,7 +178,7 @@ export function hqReadDecisions(db: Db, ctx: HqContext) {
         type: row.type,
         title: row.title,
         decision: row.status,
-        note: row.decision_note,
+        note: decisionText(row.decision_note, parseAnnotations(row.annotations)),
         decidedAt: row.decided_at,
         payload: JSON.parse(row.payload) as unknown,
       })),

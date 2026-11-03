@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { strings } from "../ui/strings";
+import { annotationsSchema, decisionText, type Annotation } from "./annotations";
 import { getConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db } from "./db";
 import { HqError } from "./errors";
@@ -12,12 +13,38 @@ export const decisionSchema = z
   .strictObject({
     decision: z.enum(["approved", "rejected", "revise"]),
     note: z.string().trim().max(5_000).optional(),
+    /** Remarks on passages of the body, for `revise` and `rejected` only. */
+    annotations: annotationsSchema.optional(),
   })
-  .refine((d) => d.decision === "approved" || Boolean(d.note), {
-    message: "a note is required to reject or to ask for a revision",
-    path: ["note"],
+  .superRefine((d, ctx) => {
+    const annotated = (d.annotations?.length ?? 0) > 0;
+    if (d.decision === "approved" && annotated) {
+      ctx.addIssue({ code: "custom", message: "annotations only go with a rejection or a revision", path: ["annotations"] });
+    }
+    // A revision may rest on its annotations alone; a rejection always has a reason.
+    const needsNote = d.decision === "rejected" || (d.decision === "revise" && !annotated);
+    if (needsNote && !d.note) {
+      ctx.addIssue({ code: "custom", message: "a note is required to reject or to ask for a revision", path: ["note"] });
+    }
   });
 export type Decision = z.infer<typeof decisionSchema>;
+
+/**
+ * The task sent back to the agent. Without annotations, the user's note alone;
+ * with them, the numbered remarks then the general note (see decisionText).
+ */
+export function revisionTaskText(
+  id: number,
+  title: string,
+  type: string,
+  note: string | null,
+  annotations: readonly Annotation[],
+): string {
+  const head = `Revise your submission #${id} "${title}" (${type}).`;
+  if (annotations.length === 0) return `${head} User's note: ${note}`;
+  return `${head} User's remarks:
+${decisionText(note, annotations)}`;
+}
 
 /** Whether the agent of an item asks for a task when one of its items is approved. */
 function wantsApprovalTask(config: HqConfig, row: ApprovalRow): boolean {
@@ -64,12 +91,10 @@ export function decideApproval(
       }
       const at = now();
       const note = decision.note || null;
-      db.prepare("UPDATE approvals SET status = ?, decision_note = ?, decided_at = ? WHERE id = ?").run(
-        decision.decision,
-        note,
-        at,
-        id,
-      );
+      const annotations = decision.annotations ?? [];
+      db.prepare(
+        "UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ? WHERE id = ?",
+      ).run(decision.decision, note, JSON.stringify(annotations), at, id);
       if (decision.decision === "revise") {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
@@ -78,7 +103,7 @@ export function decideApproval(
           row.room,
           row.agent_id,
           id,
-          `Revise your submission #${id} "${row.title}" (${row.type}). User's note: ${note}`,
+          revisionTaskText(id, row.title, row.type, note, annotations),
           at,
           at,
         );

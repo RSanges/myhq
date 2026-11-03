@@ -137,8 +137,23 @@ A submission creates an item in the `pending` state. The user can:
 - **revise**: the item goes back to the agent as a new task, with the user's
   comment (`revise` state).
 
+On the desk, a revise (or a reject) can also carry **annotations**: selecting a
+passage of the body offers « Annoter », which opens a comment box under the
+passage; the remarks are listed in « Remarques (n) » beside the body (under it
+on a phone) and their passages are highlighted. They live in the page until
+the decision is sent, nothing is stored before. Once sent they are stored with
+the decision (`approvals.annotations`, JSON), shown read-only on the history
+item, and written for the agent, as a numbered list then the general note, in
+the revision task and in the `note` that `hq_read_decisions` returns (see
+`api.md`, `PATCH /api/approvals/[id]`). A passage is identified by its text in
+the *rendered* body and its offset there (`position`), so a sentence that
+occurs twice maps to the right one. With annotations, the general comment of a
+revise is optional.
+
 The same decision can be taken from Telegram, with the same effect as in the
-office.
+office, except that annotations are not available there: a decision taken from
+Telegram carries its note only, and a revise with annotations made on the desk
+changes nothing on Telegram.
 
 #### Acting on an approved item
 

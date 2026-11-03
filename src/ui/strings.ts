@@ -56,6 +56,7 @@ export const strings = {
     revise: "À retravailler",
     rejectLabel: "Motif du refus (obligatoire)",
     reviseLabel: "Commentaire pour l'agent (obligatoire)",
+    reviseLabelOptional: "Commentaire général pour l'agent (facultatif)",
     confirmReject: "Confirmer le refus",
     confirmRevise: "Envoyer à retravailler",
     cancel: "Annuler",
@@ -79,6 +80,24 @@ export const strings = {
     /** Title of the room proposal item: French for a French home, English otherwise. */
     proposalTitle: (language: string, room: string) =>
       language.toLowerCase().split("-")[0] === "fr" ? `Proposition de salle : ${room}` : `Room proposal: ${room}`,
+  },
+  /** Annotations on passages of an item: the text the agent reads, and the desk's controls. */
+  annotations: {
+    about: (quote: string, comment: string) => `À propos de « ${quote} » : ${comment}`,
+    generalNote: (note: string) => `Remarque générale : ${note}`,
+    annotate: "Annoter",
+    listTitle: (count: number) => `Remarques (${count})`,
+    listHint: "Sélectionnez un passage du texte pour l'annoter.",
+    commentLabel: "Votre remarque",
+    commentPlaceholder: "Ce qu'il faut changer dans ce passage",
+    validate: "Valider",
+    remove: "Supprimer",
+    close: "Fermer",
+    edit: "Modifier",
+    jump: "Aller au passage",
+    quoteLabel: "Passage cité",
+    attached: (count: number) => (count === 1 ? "1 remarque jointe" : `${count} remarques jointes`),
+    markTitle: (comment: string) => `Remarque : ${comment}`,
   },
   /** Tasks MyHQ writes in an agent's mailbox. */
   tasks: {

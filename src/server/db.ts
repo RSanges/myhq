@@ -101,6 +101,8 @@ export type ApprovalRow = {
   payload: string;
   status: ApprovalStatus;
   decision_note: string | null;
+  /** JSON array of annotations (see annotations.ts) given with a revise or reject decision. */
+  annotations: string;
   decided_at: string | null;
   seen_by_agent_at: string | null;
   notified_at: string | null;
@@ -374,6 +376,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 -- messages that exist were all exchanged on Telegram.
 ALTER TABLE chat_messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram';
 ALTER TABLE chat_messages ADD COLUMN target TEXT;
+`,
+  },
+  {
+    version: 9,
+    sql: `
+-- A revise or reject decision may carry annotations on passages of the body:
+-- a JSON array of { quote, comment, position? }, next to the free note.
+ALTER TABLE approvals ADD COLUMN annotations TEXT NOT NULL DEFAULT '[]';
 `,
   },
 ];

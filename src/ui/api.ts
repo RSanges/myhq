@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { Annotation } from "@/server/annotations";
 import { roadmapSchema, type Roadmap } from "@/server/roadmap-schema";
 import { strings } from "./strings";
 import {
@@ -104,7 +105,9 @@ export async function clearChat(): Promise<void> {
   await request("/api/chat/history", clearedSchema, { method: "DELETE" });
 }
 
-export type Decision = { decision: "approved" } | { decision: "rejected" | "revise"; note: string };
+export type Decision =
+  | { decision: "approved" }
+  | { decision: "rejected" | "revise"; note?: string; annotations?: Annotation[] };
 
 export async function decideApproval(id: number, decision: Decision): Promise<Approval> {
   return (await request(`/api/approvals/${id}`, approvalResponseSchema, jsonInit("PATCH", decision))).approval;

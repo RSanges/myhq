@@ -135,6 +135,7 @@ recipient has `onMessage: "run"` (a run with `reason` `message`).
   "payload": { "url": "https://example.com/thread/1", "forum": "example", "src": "example-1" },
   "status": "pending",
   "decisionNote": null,
+  "annotations": [],
   "decidedAt": null,
   "createdAt": "2026-11-02T16:18:11.483Z"
 }
@@ -143,7 +144,12 @@ recipient has `onMessage: "run"` (a run with `reason` `message`).
 `type`, `body` (Markdown) and `payload` come from the agent's `hq_submit`. The
 payload is free-form per type; it holds what is needed to act on the item once
 approved (for example the thread URL). `decisionNote` is the user's reason or
-comment.
+general comment. `annotations` are the remarks on passages of the body that came
+with a `revise` or `rejected` decision, in document order, each
+`{ "quote": "...", "comment": "...", "position": 552 }` (`position` is optional:
+the offset of the quote in the rendered text of the body, which tells apart two
+passages that read the same); empty for every other item. They are part of the
+history in `GET /api/state`.
 
 Payloads the interface and the assistant act on:
 
@@ -400,12 +406,39 @@ Body:
 { "decision": "approved" }
 { "decision": "rejected", "note": "Too promotional." }
 { "decision": "revise", "note": "Shorter, and answer the budget question first." }
+{
+  "decision": "revise",
+  "note": "Overall, a more direct tone.",
+  "annotations": [
+    { "quote": "Most organizers underestimate the cost of coordination", "comment": "Too vague: give a figure.", "position": 552 }
+  ]
+}
 ```
 
 `note` is optional for `approved` and required (non-blank, at most 5000
 characters) for `rejected` and `revise`. `revise` sends the item back to its
 agent as a new task carrying the note; the agent sees it at its next run, and
 reads every decision through `hq_read_decisions`.
+
+`annotations` (optional, at most 30) attach remarks to passages of the body:
+each has a `quote` (1 to 2000 characters, the passage as rendered), a `comment`
+(1 to 2000 characters) and an optional `position` (integer, 0 or more). They go
+with `revise` and `rejected` only (`approved` with annotations is
+`INVALID_INPUT`). A `revise` with at least one annotation needs no `note`; a
+`rejected` always needs its reason. They are stored with the decision, and the
+agent reads them in the text of the decision, both in the revision task and in
+the `note` of `hq_read_decisions`, as a numbered list followed by the general
+note:
+
+```
+1. À propos de « <quote, cut at 200 characters> » : <comment>
+2. ...
+
+Remarque générale : <note>
+```
+
+Without annotations the text is the note alone, as before. The desk's controls
+send them; Telegram does not (see `architecture.md`).
 
 Response `200`:
 

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseAnnotations, type Annotation } from "./annotations";
 import type {
   ApprovalRow,
   ApprovalStatus,
@@ -66,6 +67,8 @@ export type ApprovalDto = {
   payload: Record<string, unknown>;
   status: ApprovalStatus;
   decisionNote: string | null;
+  /** Remarks on passages of the body that came with a revise or reject decision. */
+  annotations: Annotation[];
   decidedAt: string | null;
   createdAt: string;
 };
@@ -119,6 +122,7 @@ export const toApproval = (r: ApprovalRow): ApprovalDto => ({
   payload: JSON.parse(r.payload) as Record<string, unknown>,
   status: r.status,
   decisionNote: r.decision_note,
+  annotations: parseAnnotations(r.annotations),
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });
