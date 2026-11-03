@@ -10,6 +10,8 @@ export const CHAT_PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk
 
 const chatSchema = z.strictObject({
   cwd: relativePath,
+  /** System prompt file of the conversation, passed with --system-prompt-file (relative to the home). */
+  systemPrompt: relativePath.optional(),
   model: z.enum(MODELS).default("sonnet"),
   addDirs: z.array(relativePath).default([]),
   allowedTools: z.array(z.string().min(1)).default([]),
@@ -38,6 +40,8 @@ export const assistantFileSchema = z.strictObject({
 export type ChatConfig = {
   /** Absolute paths. */
   cwd: string;
+  /** Absolute path of the system prompt file, or null (the CLI's default prompt). */
+  systemPrompt: string | null;
   addDirs: string[];
   model: (typeof MODELS)[number];
   allowedTools: string[];
@@ -86,6 +90,7 @@ export function loadAssistantConfig(home: string): AssistantConfig {
     chat: data.chat
       ? {
           cwd: resolve(data.chat.cwd),
+          systemPrompt: data.chat.systemPrompt ? resolve(data.chat.systemPrompt) : null,
           addDirs: data.chat.addDirs.map(resolve),
           model: data.chat.model,
           allowedTools: data.chat.allowedTools,

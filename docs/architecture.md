@@ -442,7 +442,12 @@ order:
    `home-layout.md`).
 4. **The chat**: `claude -p` in the configured working directory, the message
    on stdin, `--continue` to resume the conversation (retried without it when
-   the CLI says there is nothing to continue), `--output-format json`, and the
+   the CLI says there is nothing to continue), `--output-format stream-json
+   --verbose` (MyHQ reads the final answer, the tools the turn called and its
+   usage from the stream), the home's system prompt file with
+   `--system-prompt-file` when `chat.systemPrompt` is set (it replaces the
+   CLI's default prompt; the `CLAUDE.md` of the working directory is no longer
+   the lever), and the
    same isolation as an agent run (environment cleaned, `--setting-sources
    project,local`, `--strict-mcp-config`, `--tools` limited to the whitelist,
    tool search off, deploy commands denied, `--max-budget-usd` from

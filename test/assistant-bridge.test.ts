@@ -18,7 +18,7 @@ import { notifyPendingApprovals } from "../src/server/notify";
 import { loadHome, syncHome } from "../src/server/rooms";
 import { startRun, type StartRunRequest } from "../src/server/runner";
 import { startFakeTelegram, type FakeTelegram } from "./fake-telegram";
-import { makeHome, waitForRun } from "./helpers";
+import { chatConfig, makeHome, waitForRun } from "./helpers";
 
 const TOKEN = "test-token";
 const CHAT = "42";
@@ -227,7 +227,7 @@ test("an expired question is dropped and the message goes on to the chat", async
   const chats: string[] = [];
   const { db, fake, assistant } = await setup({
     questions,
-    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: { cwd: process.cwd(), addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null, mcpServers: {}, requestsDir: null } },
+    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: chatConfig() },
     runChat: async (params) => (chats.push(params.input), { ok: true, text: "**Bonjour**", costUsd: 0 }),
   });
   const id = addApproval(db);
@@ -405,7 +405,7 @@ test("a voice note is transcribed by the home's command, deleted, then handled a
     assistant: {
       ...EMPTY_ASSISTANT_CONFIG,
       transcribe: `"${process.execPath}" ${quoted} {file}`,
-      chat: { cwd: config.home, addDirs: [], model: "haiku", allowedTools: [], permissionMode: "default", timeoutMs: 1000, afterReply: null, mcpServers: {}, requestsDir: null },
+      chat: chatConfig({ cwd: config.home }),
     },
     runChat: async (params) => (chats.push(params.input), { ok: true, text: "Compris.", costUsd: 0 }),
   });
@@ -606,17 +606,7 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, ca
 test("a request file written by the chat creates a task and starts a run", async () => {
   const config = makeHome();
   const requestsDir = path.join(config.home, "chat", "requests");
-  const chatConfig = {
-    cwd: config.home,
-    addDirs: [],
-    model: "haiku" as const,
-    allowedTools: [],
-    mcpServers: {},
-    requestsDir,
-    permissionMode: "default" as const,
-    timeoutMs: 1000,
-    afterReply: null,
-  };
+  const chat = chatConfig({ cwd: config.home, requestsDir });
   const inputs: RunInput[] = [];
   const engine: Engine = {
     name: "claude",
@@ -628,7 +618,7 @@ test("a request file written by the chat creates a task and starts a run", async
   const started: RunRow[] = [];
   const { db, assistant, fake, logs } = await setup({
     config,
-    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: chatConfig },
+    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat },
     runChat: async () => {
       fs.mkdirSync(requestsDir, { recursive: true });
       fs.writeFileSync(

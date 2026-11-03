@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { builtInTools, CLAUDE_ENV, DENIED_TOOLS, expandMcpServers } from "../server/claude-engine";
+import { builtInTools, CLAUDE_ENV, DENIED_TOOLS, expandMcpServers, usageFrom } from "../server/claude-engine";
 import type { Env } from "../server/config";
+import type { Usage } from "../server/engine";
 import { agentEnv } from "../server/runner";
 import type { ChatConfig } from "./home-config";
 
@@ -16,7 +17,10 @@ export const CHAT_AGENT = "chat";
  * stdin. Same isolation as agent runs: only the whitelisted built-in tools
  * exist, only the MCP servers of `--mcp-config` (the chat's own, never `hq`;
  * none when the path is left out), no user settings, and the deploy commands
- * are denied.
+ * are denied. The output is the stream-json event stream, so that MyHQ sees
+ * the tools a turn called (the confirmation guard of chat actions) and its
+ * usage (the meter). The home's system prompt file, when there is one,
+ * replaces the CLI's default prompt (`--system-prompt-file`).
  */
 export function buildChatArgs(
   chat: ChatConfig,
@@ -24,7 +28,8 @@ export function buildChatArgs(
 ): string[] {
   const args = ["-p"];
   if (options.continue) args.push("--continue");
-  args.push("--output-format", "json", "--model", chat.model);
+  args.push("--output-format", "stream-json", "--verbose", "--model", chat.model);
+  if (chat.systemPrompt) args.push("--system-prompt-file", chat.systemPrompt);
   for (const dir of chat.addDirs) args.push("--add-dir", dir);
   args.push("--permission-mode", chat.permissionMode, "--setting-sources", "project,local");
   if (options.mcpConfigPath) args.push("--mcp-config", options.mcpConfigPath);
@@ -49,28 +54,79 @@ const resultSchema = z.looseObject({
   result: z.string().optional(),
   errors: z.array(z.string()).optional(),
   total_cost_usd: z.number().optional(),
+  usage: z
+    .looseObject({
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
+      cache_creation_input_tokens: z.number().optional(),
+      cache_read_input_tokens: z.number().optional(),
+    })
+    .optional(),
 });
 
-export type ChatOutcome =
-  | { ok: true; text: string; costUsd: number }
-  | { ok: false; reason: "no_conversation" | "budget" | "timeout" | "error"; detail: string };
+const initSchema = z.looseObject({ type: z.literal("system"), subtype: z.literal("init"), model: z.string().optional() });
 
-/** Reads the output of `claude -p --output-format json`. */
+const assistantSchema = z.looseObject({
+  type: z.literal("assistant"),
+  message: z.looseObject({
+    content: z.array(z.looseObject({ type: z.string(), name: z.string().optional() })),
+  }),
+});
+
+/** What a turn did, for the meter and the confirmation guard. Optional: a runner may not know it. */
+export type ChatTurnInfo = {
+  /** Model reported by the CLI, when it said. */
+  model?: string | null;
+  usage?: Usage;
+  /** Names of the tools the turn called, in order (`Read`, `mcp__mail__mail_search`...). */
+  tools?: string[];
+};
+
+export type ChatOutcome =
+  | ({ ok: true; text: string; costUsd: number } & ChatTurnInfo)
+  | ({ ok: false; reason: "no_conversation" | "budget" | "timeout" | "error"; detail: string; costUsd?: number } & ChatTurnInfo);
+
+/**
+ * Reads the output of a chat turn: the stream-json lines of
+ * `claude -p --output-format stream-json --verbose` (the single result
+ * object of `--output-format json` reads the same way).
+ */
 export function parseChatOutput(code: number | null, stdout: string, stderr: string): ChatOutcome {
-  let message: unknown = null;
-  try {
-    message = JSON.parse(stdout.trim());
-  } catch {
-    // Not JSON: the CLI stopped before answering (bad flag, no conversation...).
-  }
-  const result = resultSchema.safeParse(message);
-  if (result.success) {
-    const r = result.data;
-    if (r.subtype === "error_max_budget_usd") return { ok: false, reason: "budget", detail: r.subtype };
-    if (r.is_error === true || r.subtype !== "success") {
-      return { ok: false, reason: "error", detail: r.result ?? r.errors?.join("; ") ?? r.subtype };
+  let model: string | null = null;
+  const tools: string[] = [];
+  let result: z.infer<typeof resultSchema> | null = null;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let message: unknown;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      // Not JSON: the CLI stopped before answering (bad flag, no conversation...).
+      continue;
     }
-    return { ok: true, text: r.result ?? "", costUsd: r.total_cost_usd ?? 0 };
+    const init = initSchema.safeParse(message);
+    if (init.success) {
+      model = init.data.model ?? null;
+      continue;
+    }
+    const assistant = assistantSchema.safeParse(message);
+    if (assistant.success) {
+      for (const block of assistant.data.message.content) {
+        if (block.type === "tool_use" && block.name) tools.push(block.name);
+      }
+      continue;
+    }
+    const parsed = resultSchema.safeParse(message);
+    if (parsed.success) result = parsed.data;
+  }
+  if (result) {
+    const r = result;
+    const info = { model, usage: usageFrom(r.usage), tools, costUsd: r.total_cost_usd ?? 0 };
+    if (r.subtype === "error_max_budget_usd") return { ok: false, reason: "budget", detail: r.subtype, ...info };
+    if (r.is_error === true || r.subtype !== "success") {
+      return { ok: false, reason: "error", detail: r.result ?? r.errors?.join("; ") ?? r.subtype, ...info };
+    }
+    return { ok: true, text: r.result ?? "", ...info };
   }
   const output = `${stdout}\n${stderr}`.trim();
   if (/no conversation/i.test(output)) return { ok: false, reason: "no_conversation", detail: output };

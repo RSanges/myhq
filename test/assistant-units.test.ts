@@ -200,6 +200,7 @@ test("validates assistant.json and resolves its paths from the home", () => {
   const config = loadAssistantConfig(home);
   assert.deepEqual(config.chat, {
     cwd: path.join(home, "chat"),
+    systemPrompt: null,
     addDirs: [path.resolve(home, "../vault")],
     model: "sonnet",
     allowedTools: ["Read"],
@@ -230,6 +231,7 @@ test("fills the transcription template with a quoted path", () => {
 
 const chat: ChatConfig = {
   cwd: "/h/chat",
+  systemPrompt: null,
   addDirs: ["/h/vault", "/h/notes"],
   model: "sonnet",
   allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
@@ -251,6 +253,29 @@ test("builds the exact chat command line", () => {
   assert.deepEqual(bare.slice(bare.indexOf("--tools"), bare.indexOf("--tools") + 3), ["--tools", "", "--disallowedTools"]);
 });
 
+test("the conversation's system prompt file of the home is passed explicitly", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-assistant-"));
+  fs.writeFileSync(
+    path.join(home, "assistant.json"),
+    JSON.stringify({ chat: { cwd: "assistant/chat", systemPrompt: "assistant/chat/prompt.md" } }),
+  );
+  const config = loadAssistantConfig(home).chat!;
+  assert.equal(config.systemPrompt, path.join(home, "assistant", "chat", "prompt.md"));
+  const args = buildChatArgs({ ...chat, systemPrompt: "/h/chat/prompt.md" }, { continue: true, maxBudgetUsd: 0.5 });
+  assert.deepEqual(args.slice(0, 9), [
+    "-p",
+    "--continue",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--model",
+    "sonnet",
+    "--system-prompt-file",
+    "/h/chat/prompt.md",
+  ]);
+  assert.ok(!buildChatArgs(chat, { continue: false, maxBudgetUsd: 0.5 }).includes("--system-prompt-file"));
+});
+
 test("the chat environment is the agents' one, with tool search off", () => {
   assert.deepEqual(chatEnv({ PATH: "/bin", HQ_TELEGRAM_BOT_TOKEN: "t", HQ_CLAUDE_OAUTH_TOKEN: "c", MYHQ_HOME: "x" }), {
     PATH: "/bin",
@@ -259,14 +284,16 @@ test("the chat environment is the agents' one, with tool search off", () => {
   });
 });
 
+const NO_USAGE = { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+
 test("reads the chat output: answer, budget, error, nothing to continue", () => {
   assert.deepEqual(
     parseChatOutput(0, JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Hi", total_cost_usd: 0.02 }), ""),
-    { ok: true, text: "Hi", costUsd: 0.02 },
+    { ok: true, text: "Hi", costUsd: 0.02, model: null, usage: NO_USAGE, tools: [] },
   );
   assert.deepEqual(
     parseChatOutput(1, JSON.stringify({ type: "result", subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.01)"] }), ""),
-    { ok: false, reason: "budget", detail: "error_max_budget_usd" },
+    { ok: false, reason: "budget", detail: "error_max_budget_usd", costUsd: 0, model: null, usage: NO_USAGE, tools: [] },
   );
   assert.equal(parseChatOutput(1, "", "No conversation found to continue").ok, false);
   assert.equal((parseChatOutput(1, "", "No conversation found to continue") as { reason: string }).reason, "no_conversation");
@@ -363,4 +390,31 @@ test("the chat gets an --mcp-config file with its expanded servers and per-chat 
   // Without servers, no --mcp-config.
   const bare = buildChatArgs(chat, { continue: false, maxBudgetUsd: 0.5 });
   assert.ok(!bare.includes("--mcp-config"));
+});
+
+test("reads a stream-json chat turn: the full answer, the model, the usage and every tool called", () => {
+  const lines = [
+    { type: "system", subtype: "init", model: "claude-haiku-4-5", tools: ["Read"] },
+    { type: "assistant", message: { content: [{ type: "text", text: "Je regarde." }, { type: "tool_use", id: "t1", name: "mcp__mail__mail_search", input: {} }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "3 mails" }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "Read", input: {} }] } },
+    "not json",
+    {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "x".repeat(5000),
+      total_cost_usd: 0.031,
+      usage: { input_tokens: 12, output_tokens: 340, cache_creation_input_tokens: 9000, cache_read_input_tokens: 21000 },
+    },
+  ];
+  const stdout = lines.map((line) => (typeof line === "string" ? line : JSON.stringify(line))).join("\n");
+  assert.deepEqual(parseChatOutput(0, stdout, ""), {
+    ok: true,
+    text: "x".repeat(5000),
+    costUsd: 0.031,
+    model: "claude-haiku-4-5",
+    usage: { inputTokens: 12, outputTokens: 340, cacheCreationInputTokens: 9000, cacheReadInputTokens: 21000 },
+    tools: ["mcp__mail__mail_search", "Read"],
+  });
 });

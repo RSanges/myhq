@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ChatConfig } from "../src/assistant/home-config";
 import type { HqConfig } from "../src/server/config";
 import type { Db, RunRow } from "../src/server/db";
 
@@ -45,6 +46,23 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     weeklyBudgetUsd: null,
     onboardingMaxBudgetUsd: 0.3,
     triggerToken: null,
+    ...overrides,
+  };
+}
+
+/** A chat configuration with the defaults of assistant.json, for tests. */
+export function chatConfig(overrides: Partial<ChatConfig> = {}): ChatConfig {
+  return {
+    cwd: process.cwd(),
+    systemPrompt: null,
+    addDirs: [],
+    model: "haiku",
+    allowedTools: [],
+    mcpServers: {},
+    requestsDir: null,
+    permissionMode: "default",
+    timeoutMs: 1000,
+    afterReply: null,
     ...overrides,
   };
 }

@@ -277,6 +277,7 @@ assistant runs with its core commands only.
 {
   "chat": {
     "cwd": "assistant/chat",
+    "systemPrompt": "assistant/chat/prompt.md",
     "model": "sonnet",
     "addDirs": ["../notes"],
     "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "mcp__mail__*"],
@@ -301,7 +302,8 @@ assistant runs with its core commands only.
 | Field | Required | Meaning |
 |---|---|---|
 | `chat` | no | The conversation. Without it, text that no command claims gets a "not configured" answer. |
-| `chat.cwd` | yes | Working directory of the `claude -p` chat. Its `CLAUDE.md` is the lever on the assistant's behaviour, and `--continue` resumes the latest conversation of this directory. |
+| `chat.cwd` | yes | Working directory of the `claude -p` chat. `--continue` resumes the latest conversation of this directory, so changing it starts a new one. |
+| `chat.systemPrompt` | no | The conversation's system prompt: a Markdown file of the home, passed explicitly with `--system-prompt-file`, which replaces the CLI's default prompt (as a role file does for an agent, but whole). This is the lever on the assistant's behaviour, written for any engine. The CLI still reads the `CLAUDE.md` files of `chat.cwd` and of its parent directories as project memory, so keep them short, or say in the prompt that they do not apply. Without it, the CLI's default prompt and the `CLAUDE.md` of `chat.cwd` are what shape the chat, as before. |
 | `chat.model` | no | `opus`, `sonnet` (default) or `haiku`. |
 | `chat.addDirs` | no | Directories the chat may read and write (`--add-dir`). Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
