@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo } from "react";
+import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { Desk } from "./desk";
 import { Feed } from "./feed";
 import { Meter } from "./meter";
@@ -11,9 +12,12 @@ import { strings } from "./strings";
 import { Team } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
 import { useHq } from "./use-hq";
+import { useMediaQuery } from "./use-media-query";
 
 export function Dashboard() {
-  const { model, dispatch, connection, loadError, usageFailed, retry } = useHq();
+  const { model, dispatch, connection, loadError, usageFailed, retry, subscribeChat } = useHq();
+  const chat = useChatToggle();
+  const wide = useMediaQuery("(min-width: 40rem)");
   const pending = useMemo(() => selectPending(model), [model]);
   const history = useMemo(() => selectHistory(model), [model]);
   const agents = useMemo(() => selectAgents(model), [model]);
@@ -26,6 +30,8 @@ export function Dashboard() {
     connection === "live" ? "bg-ok" : connection === "reconnecting" ? "bg-warn" : "bg-muted";
 
   return (
+    <div className="chat-shell">
+    <div className="chat-main" inert={chat.open && !wide}>
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6">
       <header className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{strings.app.title}</h1>
@@ -46,6 +52,7 @@ export function Dashboard() {
             <span aria-hidden className={`inline-block size-2 rounded-full ${connectionTone}`} />
             {strings.app.connection[connection]}
           </p>
+          <ChatToggle open={chat.open} onClick={chat.toggle} buttonRef={chat.toggleRef} />
         </div>
       </header>
 
@@ -77,6 +84,11 @@ export function Dashboard() {
           </div>
         </div>
       )}
+    </div>
+    </div>
+    {chat.mounted && (
+      <ChatPanel open={chat.open} onClose={chat.close} subscribe={subscribeChat} agents={agents} narrow={!wide} />
+    )}
     </div>
   );
 }

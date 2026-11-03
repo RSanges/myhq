@@ -280,14 +280,15 @@ export class ChatService {
           }
         }
       }
-      const answer = [outcome.text.trim() || t.chat.empty, ...(lines.length ? [lines.join("\n")] : [])].join("\n\n");
+      // The notes (held actions dropped or expired) are part of what the user reads, so they are kept with it.
+      const answer = [...notes, outcome.text.trim() || t.chat.empty, ...(lines.length ? [lines.join("\n")] : [])].join("\n\n");
       const messages = [
         this.remember("user", text, null, { channel }),
         this.remember("assistant", answer, null, { channel }),
       ].filter((message): message is ChatMessageDto => message !== null);
       const result: TurnResult = {
         ok: true,
-        reply: [...notes, answer].join("\n\n"),
+        reply: answer,
         pendingConfirmation: this.state().pendingConfirmation,
         messages,
         approved,
@@ -326,14 +327,14 @@ export class ChatService {
     notes: string[],
   ): Promise<TurnResult> {
     const { lines, approved } = this.executeActions(actions);
-    const reply = lines.join("\n");
+    const reply = [...notes, lines.join("\n")].join("\n\n");
     const messages = [
       this.remember("user", text, null, { channel }),
       this.remember("assistant", reply, null, { channel }),
     ].filter((message): message is ChatMessageDto => message !== null);
     const result: TurnResult = {
       ok: true,
-      reply: [...notes, reply].join("\n\n"),
+      reply,
       pendingConfirmation: this.state().pendingConfirmation,
       messages,
       approved,
@@ -343,14 +344,14 @@ export class ChatService {
   }
 
   private async cancelNow(text: string, channel: ChatChannel, deliver: Deliver | undefined, notes: string[]): Promise<TurnResult> {
-    const reply = strings.assistant.actions.cancelled;
+    const reply = [...notes, strings.assistant.actions.cancelled].join("\n\n");
     const messages = [
       this.remember("user", text, null, { channel }),
       this.remember("assistant", reply, null, { channel }),
     ].filter((message): message is ChatMessageDto => message !== null);
     const result: TurnResult = {
       ok: true,
-      reply: [...notes, reply].join("\n\n"),
+      reply,
       pendingConfirmation: this.state().pendingConfirmation,
       messages,
       approved: [],

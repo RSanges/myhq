@@ -722,6 +722,30 @@ button: `AgentCard` of `team.tsx`) and its recent runs with their journal
 API has no list of old runs. A side panel on a wide screen, the whole screen on
 a phone; Escape closes it and focus returns to what opened it.
 
+**The conversation panel** (`chat-panel.tsx`, `use-chat.ts`; on `/room` and
+on `/`): a button in the header (and the key `c`, when nothing is being typed)
+slides in a panel titled with the assistant's name (`strings.chat`), the same
+conversation as Telegram's (`GET /api/chat/history`, then the `chat` events of
+the stream, loaded again after each reconnection). The user's messages are
+right-aligned, the chat's replies left-aligned, what the bot sent on its own
+(alerts, notifications, run summaries, the confirmation of a task sent to an
+agent) is a muted card labelled with its kind; a message from Telegram says so. The
+row of chips under the log chooses the recipient: the assistant (default), or one
+agent of the room shown (all the agents on `/`), each with its state as a dot and
+in text. Enter sends, Shift+Enter makes a new line. A message to the assistant
+is `POST /api/chat`; to an agent, the same route with `to`, which starts a run at
+once, so that it shows up in the feed and walks the floor. While a turn runs the
+panel says « Rom2 écrit », or « Rom2 répond à un autre message » when this
+message waits behind one (another channel's, or an earlier one); held actions
+show a card with « Oui » and « Non », which send the answer through the same
+route; `/new` calls `DELETE /api/chat/history`. On a wide screen the panel is
+docked at 380 px on the right and the page gives up that width, so the canvas
+re-fits (it already follows the size of its box); under 40 rem it is a sheet over
+the whole screen and the page behind is inert. Colors, fonts and tokens are
+the floor's (`.chat-*` rules of `globals.css`, with the desk's tokens as
+fallbacks on `/`); the panel's entrance and the dots of the typing indicator
+stop under `prefers-reduced-motion`.
+
 **Without a real run.** `scripts/replay-fixture.ts` plays a fixture into a
 throwaway demo home, one event per second, so that the real SSE stream animates
 the room (README, "Trying the room without a real run").

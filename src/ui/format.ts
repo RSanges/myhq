@@ -6,6 +6,7 @@ const dateTime = new Intl.DateTimeFormat(strings.locale, {
   hour: "2-digit",
   minute: "2-digit",
 });
+const clock = new Intl.DateTimeFormat(strings.locale, { hour: "2-digit", minute: "2-digit" });
 const shortDay = new Intl.DateTimeFormat(strings.locale, { day: "numeric", month: "short" });
 const day = new Intl.DateTimeFormat(strings.locale, { day: "numeric", month: "short", year: "numeric" });
 const time = new Intl.DateTimeFormat(strings.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -21,6 +22,12 @@ const usd = new Intl.NumberFormat(strings.locale, {
 function toDate(iso: string): Date | null {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** The time of day, for a message of the conversation. */
+export function formatClock(iso: string): string {
+  const date = toDate(iso);
+  return date ? clock.format(date) : iso;
 }
 
 export function formatDateTime(iso: string): string {

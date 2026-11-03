@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheet } from "./agent-sheet";
+import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { selectAgents, type TeamAgent } from "./model";
 import { RoomCanvas } from "./room-canvas";
 import { buildBoard } from "./room-board";
@@ -12,20 +13,9 @@ import { createRoomStore, type RoomStore } from "./room-store";
 import { strings } from "./strings";
 import { buttonClass, ErrorNote } from "./ui";
 import { useHq } from "./use-hq";
+import { useMediaQuery } from "./use-media-query";
 
 const t = strings.room;
-
-function useMediaQuery(query: string): boolean {
-  return useSyncExternalStore(
-    (notify) => {
-      const list = window.matchMedia(query);
-      list.addEventListener("change", notify);
-      return () => list.removeEventListener("change", notify);
-    },
-    () => window.matchMedia(query).matches,
-    () => false,
-  );
-}
 
 /** The wording of what an agent is doing. */
 export function statusText(status: AgentStatus): string {
@@ -89,7 +79,7 @@ function useRoomSnapshot(store: RoomStore, room: string | null, reduced: boolean
 
 export function RoomPage() {
   const [store] = useState<RoomStore>(createRoomStore);
-  const { model, dispatch, connection, loadError, retry } = useHq((change) => store.ingest(change, Date.now()));
+  const { model, dispatch, connection, loadError, retry, subscribeChat } = useHq((change) => store.ingest(change, Date.now()));
   const agents = useMemo(() => selectAgents(model), [model]);
 
   const roomNames = useMemo(() => model.rooms.map((room) => room.name), [model.rooms]);
@@ -98,6 +88,7 @@ export function RoomPage() {
   const roomAgents = useMemo(() => agents.filter((agent) => agent.room === room), [agents, room]);
 
   const wide = useMediaQuery("(min-width: 40rem)");
+  const chat = useChatToggle();
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [narrowOpen, setNarrowOpen] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
@@ -133,7 +124,8 @@ export function RoomPage() {
   const title = room === null ? t.title : t.floorTitle(room);
 
   return (
-    <div className="wall-page room-page">
+    <div className="chat-shell">
+    <div className="wall-page room-page chat-main" inert={chat.open && !wide}>
       <header className="room-top">
         <Link href="/" className="wall-back">
           <svg viewBox="0 0 20 20" aria-hidden focusable="false">
@@ -155,6 +147,7 @@ export function RoomPage() {
           <span className="wall-live-dot" aria-hidden />
           {strings.app.connection[connection]}
         </p>
+        <ChatToggle open={chat.open} onClick={chat.toggle} buttonRef={chat.toggleRef} />
       </header>
 
       <div className="room-main">
@@ -239,6 +232,10 @@ export function RoomPage() {
       )}
 
       {selected && <AgentSheet key={selected.key} agent={selected} events={model.events} dispatch={dispatch} onClose={closeSheet} />}
+    </div>
+    {chat.mounted && (
+      <ChatPanel open={chat.open} onClose={chat.close} subscribe={subscribeChat} agents={roomAgents} narrow={!wide} />
+    )}
     </div>
   );
 }

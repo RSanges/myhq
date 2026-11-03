@@ -1654,3 +1654,465 @@ body {
     translate: 1.5rem 0;
   }
 }
+
+/* ---- The conversation panel: /room and / --------------------------------------- */
+
+/* The page and the panel side by side: the page gives up the width of the panel, so the floor re-fits. */
+.chat-shell {
+  display: flex;
+  align-items: flex-start;
+  min-height: 100dvh;
+}
+
+.chat-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.1rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.chat-toggle:hover {
+  border-color: var(--muted);
+}
+
+.chat-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.chat-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-toggle svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.chat-toggle kbd {
+  padding: 0 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.6875rem;
+}
+
+@media (max-width: 39.99rem) {
+  .chat-toggle kbd {
+    display: none;
+  }
+}
+
+.chat-panel {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 23.75rem;
+  height: 100dvh;
+  border-left: 1px solid var(--line);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-wall-body), system-ui, sans-serif;
+  font-size: 0.9375rem;
+  animation: chat-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.chat-panel[hidden] {
+  display: none;
+}
+
+/* On a phone the panel is a sheet over the whole screen. */
+@media (max-width: 39.99rem) {
+  .chat-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: auto;
+    border-left: 0;
+  }
+}
+
+.chat-panel :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-panel button,
+.chat-panel textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.chat-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--hero, var(--soft));
+}
+
+.chat-title {
+  margin: 0;
+  margin-right: auto;
+  font-family: var(--font-wall-display), var(--font-wall-body), system-ui, sans-serif;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.chat-link {
+  min-height: 2.25rem;
+  padding: 0 0.4rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-link:hover {
+  color: var(--foreground);
+}
+
+.chat-btn {
+  min-height: 2.25rem;
+  padding: 0.1rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--card);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.chat-btn:hover {
+  border-color: var(--muted);
+}
+
+.chat-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.chat-btn-primary:hover {
+  border-color: var(--accent);
+  opacity: 0.9;
+}
+
+.chat-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-log {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  padding: 0.9rem 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.chat-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 88%;
+}
+
+.chat-msg[data-role="user"] {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chat-msg[data-role="assistant"] {
+  align-self: flex-start;
+}
+
+.chat-msg[data-role="bot"] {
+  align-self: stretch;
+  max-width: none;
+}
+
+.chat-msg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.71875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-msg-who {
+  font-weight: 700;
+}
+
+.chat-msg[data-role="bot"] .chat-msg-who {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-msg-text {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--card);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-msg[data-role="user"] .chat-msg-text {
+  border-color: transparent;
+  border-bottom-right-radius: 0.3rem;
+  background: var(--accent-soft);
+}
+
+.chat-msg[data-role="assistant"] .chat-msg-text {
+  border-bottom-left-radius: 0.3rem;
+}
+
+/* What the bot sent on its own: a muted card, not a turn of the conversation. */
+.chat-msg[data-role="bot"] .chat-msg-text {
+  border-style: dashed;
+  border-radius: 0.6rem;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.chat-typing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.chat-typing-dots {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.chat-typing-dots i {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: chat-dot 1.2s ease-in-out infinite;
+}
+
+.chat-typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.chat-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--warn);
+  border-radius: 0.75rem;
+  background: var(--warn-soft);
+  font-size: 0.875rem;
+}
+
+.chat-confirm p {
+  margin: 0;
+}
+
+.chat-confirm-title {
+  font-weight: 700;
+}
+
+.chat-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chat-error {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--danger);
+  border-radius: 0.5rem;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-composer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--line);
+  background: var(--hero, var(--soft));
+}
+
+.chat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.chat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.1rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.chat-chip:hover {
+  border-color: var(--muted);
+}
+
+.chat-chip[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The state of an agent: a ring when idle, a full dot at work, red after a failure (it is also said in text). */
+.chat-dot {
+  box-sizing: border-box;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.chat-chip[data-state="working"] .chat-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.chat-chip[data-state="failed"] .chat-dot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.chat-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 3.5rem;
+  max-height: 10rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--card);
+  line-height: 1.4;
+  resize: none;
+  field-sizing: content;
+}
+
+.chat-input::placeholder {
+  color: var(--muted);
+}
+
+.chat-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chat-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.71875rem;
+  line-height: 1.3;
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    translate: 1.5rem 0;
+  }
+}
+
+@keyframes chat-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel {
+    animation: none;
+  }
+
+  .chat-typing-dots i {
+    animation: none;
+    opacity: 0.7;
+  }
+}

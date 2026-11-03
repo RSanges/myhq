@@ -221,6 +221,8 @@ test("« non » drops held actions, and any other message drops them with a note
   assert.match(other.reply, /^Je laisse tomber les actions qui attendaient ton accord\.\n\nRéponse 3/);
   assert.equal(seen.length, 3);
   assert.equal((db.prepare("SELECT status FROM approvals WHERE id = ?").get(id) as { status: string }).status, "pending");
+  // The note is part of what the user reads, so the history keeps it with the answer.
+  assert.match(listChatHistory(db, 1)[0]!.text, /^Je laisse tomber les actions/);
 });
 
 // --- One turn at a time, across channels ------------------------------------------

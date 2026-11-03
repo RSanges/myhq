@@ -4,12 +4,16 @@ import { strings } from "./strings";
 import {
   approvalResponseSchema,
   armResponseSchema,
+  chatHistorySchema,
+  chatReplySchema,
+  clearedSchema,
   errorBodySchema,
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
   usageSchema,
   type Approval,
+  type ChatReply,
   type Run,
   type State,
   type Usage,
@@ -87,6 +91,17 @@ export async function startRun(room: string, agent: string, task: string): Promi
 
 export async function startOnboarding(path: string): Promise<Run> {
   return (await request("/api/onboarding", runResponseSchema, jsonInit("POST", { path: path.trim() }))).run;
+}
+
+export const fetchChatHistory = () => request("/api/chat/history?limit=50", chatHistorySchema);
+
+/** Says something to the chat, or, with `to`, gives a task to an agent. */
+export const sendChat = (text: string, to?: { room: string; agent: string }): Promise<ChatReply> =>
+  request("/api/chat", chatReplySchema, jsonInit("POST", { text, ...(to ? { to } : {}) }));
+
+/** `/new`: the conversation starts over. */
+export async function clearChat(): Promise<void> {
+  await request("/api/chat/history", clearedSchema, { method: "DELETE" });
 }
 
 export type Decision = { decision: "approved" } | { decision: "rejected" | "revise"; note: string };

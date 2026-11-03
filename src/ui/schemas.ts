@@ -138,8 +138,48 @@ export const armResponseSchema = z.object({ agent: z.object({ room: z.string(), 
 export const errorBodySchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 export const runResponseSchema = z.object({ run: runSchema });
 export const approvalResponseSchema = z.object({ approval: approvalSchema });
+export const chatMessageSchema = z.object({
+  id: z.number().int(),
+  role: z.enum(["user", "assistant", "bot"]),
+  kind: z.string().nullable(),
+  channel: z.enum(["telegram", "desk"]),
+  to: z.object({ room: z.string(), agent: z.string() }).nullable(),
+  text: z.string(),
+  createdAt: z.string(),
+});
+
+export const chatTurnSchema = z.object({
+  running: z.boolean(),
+  queued: z.number().int(),
+  pendingConfirmation: z.object({ summary: z.string() }).nullable(),
+});
+
+/** The `chat` message of the stream. */
+export const chatEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("message"), message: chatMessageSchema }),
+  z.object({ type: z.literal("cleared") }),
+  z.object({ type: z.literal("turn"), turn: chatTurnSchema }),
+]);
+
+export const chatHistorySchema = z.object({ messages: z.array(chatMessageSchema), turn: chatTurnSchema });
+
+export const chatReplySchema = z.object({
+  ok: z.boolean(),
+  reply: z.string(),
+  pendingConfirmation: z.object({ summary: z.string() }).optional(),
+  messages: z.array(chatMessageSchema),
+  dispatch: z.object({ run: runSchema }).optional(),
+});
+
+export const clearedSchema = z.object({ cleared: z.boolean() });
+
 export const readySchema = z.object({ cursor: z.number().int() });
 
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type ChatTurn = z.infer<typeof chatTurnSchema>;
+export type ChatReply = z.infer<typeof chatReplySchema>;
+/** What the chat listeners of `useHq` receive: an event of the stream, or the stream (re)opening. */
+export type ChatSignal = z.infer<typeof chatEventSchema> | { type: "ready" };
 export type Run = z.infer<typeof runSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type HqEvent = z.infer<typeof eventSchema>;
