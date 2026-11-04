@@ -364,15 +364,16 @@ export class Assistant {
   private pendingList(): string {
     const rows = this.deps.db
       .prepare(
-        `SELECT a.id, a.room, a.title, COALESCE(g.name, a.agent_id) AS agent
+        `SELECT a.id, a.room, a.for_room, a.title, COALESCE(g.name, a.agent_id) AS agent
          FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
          WHERE a.status = 'pending' ORDER BY a.id`,
       )
-      .all() as { id: number; room: string; title: string; agent: string }[];
+      .all() as { id: number; room: string; for_room: string | null; title: string; agent: string }[];
     if (rows.length === 0) return strings.assistant.pendingEmpty;
-    return [strings.assistant.pendingTitle(rows.length), ...rows.map((row) => strings.assistant.pendingLine(row))].join(
-      "\n",
-    );
+    // A delivery of a shared room says where it goes: « creation pour planygo ».
+    const line = (row: (typeof rows)[number]) =>
+      strings.assistant.pendingLine({ ...row, room: row.for_room ? strings.studio.forRoom(row.room, row.for_room) : row.room });
+    return [strings.assistant.pendingTitle(rows.length), ...rows.map(line)].join("\n");
   }
 
   private statusText(): string {

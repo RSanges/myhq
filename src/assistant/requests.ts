@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { HqConfig } from "../server/config";
 import { now, type Db, type RunRow } from "../server/db";
 import { HqError } from "../server/errors";
-import { findAgent, reasonSchema, startRun as defaultStartRun, WAKE_TASK, type StartRunRequest } from "../server/runner";
+import { findAgent, reasonSchema, startRun as defaultStartRun, WAKE_TASK, WAITS, type StartRunRequest } from "../server/runner";
 
 /** Run reason when a request does not give one. */
 export const CHAT_REASON = "chat";
@@ -122,7 +122,7 @@ export function processChatRequests(dir: string, deps: RequestsDeps): number {
       });
       deps.log(`chat request ${name}: task #${taskId} for ${request.room}/${request.agent}, run #${run.id} started`);
     } catch (error) {
-      const waits = error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "DAILY_CAP_REACHED");
+      const waits = error instanceof HqError && WAITS.has(error.code);
       deps.log(
         `chat request ${name}: task #${taskId} for ${request.room}/${request.agent} ${
           waits ? "waits for the agent's next run" : "created, run not started"

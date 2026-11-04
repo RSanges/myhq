@@ -46,11 +46,19 @@ export function readContext(env: Env): HqContext {
   };
 }
 
-/** Input shapes of the seven tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the eight tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
-    to: z.string().min(1).describe("Id of the agent of this room to write to."),
+    to: z.string().min(1).describe("Id of the agent to write to."),
     text: z.string().min(1).max(20_000).describe("The message. It becomes a task for the recipient."),
+    room: z
+      .string()
+      .min(1)
+      .max(63)
+      .optional()
+      .describe(
+        "Room of the recipient, when it is not yours: a shared room (see hq_rooms), or the room of an agent that ordered from your room. Default: your room.",
+      ),
   },
   hq_submit: {
     type: z
@@ -63,6 +71,14 @@ export const inputs = {
       .record(z.string(), z.unknown())
       .optional()
       .describe("Structured data needed to act on the item once approved (url, ids...)."),
+    forRoom: z
+      .string()
+      .min(1)
+      .max(63)
+      .optional()
+      .describe(
+        "Only for an agent of a shared room: the room that ordered the deliverable. The item shows in that room's pile; the decisions still come back to you.",
+      ),
   },
   hq_task_update: {
     status: z.enum(["in_progress", "done", "blocked"]).describe("State of your current task."),
@@ -77,38 +93,102 @@ export const inputs = {
     value: z.string().max(100_000).describe("Value to store (text or JSON)."),
   },
   hq_pending: {},
+  hq_rooms: {},
 } as const;
 
 type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K]>>;
 
 export class ToolError extends Error {}
 
+/**
+ * The rooms of the home as last synced (syncHome writes them all with the
+ * same `synced_at`): a room removed from the home is no longer one of them.
+ */
+const CURRENT_ROOM = "synced_at = (SELECT MAX(synced_at) FROM rooms)";
+
+function roomInfo(db: Db, name: string): { name: string; shared: number } | undefined {
+  return db.prepare(`SELECT name, shared FROM rooms WHERE name = ? AND ${CURRENT_ROOM}`).get(name) as
+    | { name: string; shared: number }
+    | undefined;
+}
+
+/** Whether `agent` of `room` ordered from the room of `ctx`: one of its messages became a task there. */
+function orderedFrom(db: Db, ctx: HqContext, room: string, agent: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM tasks WHERE room = ? AND source = 'message' AND from_room = ? AND from_agent = ? LIMIT 1")
+      .get(ctx.room, room, agent) !== undefined
+  );
+}
+
+/**
+ * Sends a message, which becomes a task of the recipient. Within the room as
+ * always; to another room only when that room is shared (an order to a
+ * studio), or when the recipient is an agent that ordered from this room (a
+ * studio answering its requester). The task keeps the sender's room and agent.
+ */
 export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
   const parsed = z.object(inputs.hq_message).parse(args);
-  const target = db
-    .prepare("SELECT id FROM agents WHERE room = ? AND id = ?")
-    .get(ctx.room, parsed.to);
-  if (!target) throw new ToolError(`Unknown agent "${parsed.to}" in room "${ctx.room}".`);
-  if (parsed.to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
+  const room = parsed.room ?? ctx.room;
+  const elsewhere = room !== ctx.room;
+  if (elsewhere) {
+    const info = roomInfo(db, room);
+    if (!info) throw new ToolError(`Unknown room "${room}".`);
+    if (info.shared !== 1 && !orderedFrom(db, ctx, room, parsed.to)) {
+      throw new ToolError(
+        `Room "${room}" is not shared: you may write to a shared room (see hq_rooms), or answer an agent of a room that ordered from yours.`,
+      );
+    }
+  }
+  const target = db.prepare("SELECT id FROM agents WHERE room = ? AND id = ?").get(room, parsed.to);
+  if (!target) throw new ToolError(`Unknown agent "${parsed.to}" in room "${room}".`);
+  if (!elsewhere && parsed.to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
+  const text = elsewhere
+    ? `Message from ${ctx.agentId} of room "${ctx.room}" (answer with hq_message to "${ctx.agentId}", room "${ctx.room}"): ${parsed.text}`
+    : `Message from ${ctx.agentId}: ${parsed.text}`;
   const at = now();
   return db.transaction(() => {
     const message = db
       .prepare(
-        "INSERT INTO messages (room, from_agent, to_agent, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO messages (room, from_agent, to_agent, to_room, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(ctx.room, ctx.agentId, parsed.to, parsed.text, ctx.runId, at);
+      .run(ctx.room, ctx.agentId, parsed.to, elsewhere ? room : null, parsed.text, ctx.runId, at);
     const messageId = Number(message.lastInsertRowid);
     db.prepare(
-      `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
-       VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?)`,
-    ).run(ctx.room, parsed.to, messageId, `Message from ${ctx.agentId}: ${parsed.text}`, at, at);
+      `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, from_room, from_agent, created_at, updated_at)
+       VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?, ?, ?)`,
+    ).run(room, parsed.to, messageId, text, ctx.room, ctx.agentId, at, at);
     return { messageId };
   })();
+}
+
+/** The shared rooms of the home and their agents: the studios any agent may order from. Read-only. */
+export function hqRooms(db: Db, ctx: HqContext) {
+  const rooms = db.prepare(`SELECT name FROM rooms WHERE shared = 1 AND ${CURRENT_ROOM} ORDER BY name`).all() as {
+    name: string;
+  }[];
+  const agents = db.prepare("SELECT id, name FROM agents WHERE room = ? ORDER BY id");
+  return {
+    rooms: rooms.map((room) => ({
+      room: room.name,
+      yours: room.name === ctx.room,
+      agents: (agents.all(room.name) as { id: string; name: string }[]).map((agent) => ({ id: agent.id, name: agent.name })),
+    })),
+  };
 }
 
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
   const parsed = z.object(inputs.hq_submit).parse(args);
   let { body, payload } = parsed;
+  // A shared room delivers to the room that ordered: the item goes to that room's pile.
+  let forRoom: string | null = null;
+  if (parsed.forRoom !== undefined && parsed.forRoom !== ctx.room) {
+    if (roomInfo(db, ctx.room)?.shared !== 1) {
+      throw new ToolError(`forRoom is only for the agents of a shared room, and room "${ctx.room}" is not shared.`);
+    }
+    if (!roomInfo(db, parsed.forRoom)) throw new ToolError(`forRoom: unknown room "${parsed.forRoom}".`);
+    forRoom = parsed.forRoom;
+  }
   if (parsed.type === ROOM_PROPOSAL) {
     // Checked now, so that the agent can fix its payload within the same run.
     if (!ctx.templatesDir) throw new ToolError("room_proposal: the role templates are not available.");
@@ -129,8 +209,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
   const result = db
     .prepare(
       `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
-         decided_at, seen_by_agent_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         decided_at, seen_by_agent_at, for_room, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       ctx.room,
@@ -144,6 +224,7 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       null,
       null,
       informational ? at : null,
+      forRoom,
       at,
     );
   return {
@@ -194,13 +275,15 @@ export function hqReadDecisions(db: Db, ctx: HqContext) {
  */
 export function hqPending(db: Db) {
   const rows = db
-    .prepare("SELECT id, room, agent_id, type, title, created_at FROM approvals WHERE status = 'pending' ORDER BY id")
-    .all() as Pick<ApprovalRow, "id" | "room" | "agent_id" | "type" | "title" | "created_at">[];
+    .prepare("SELECT id, room, agent_id, type, title, for_room, created_at FROM approvals WHERE status = 'pending' ORDER BY id")
+    .all() as Pick<ApprovalRow, "id" | "room" | "agent_id" | "type" | "title" | "for_room" | "created_at">[];
   return {
     pending: rows.map((row) => ({
       id: row.id,
       room: row.room,
       agent: row.agent_id,
+      /** The room that ordered it from a shared room, null otherwise. */
+      forRoom: row.for_room,
       type: row.type,
       title: row.title,
       submittedAt: row.created_at,

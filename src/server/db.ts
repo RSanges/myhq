@@ -59,6 +59,8 @@ export type RunRow = {
   session_id: string | null;
   /** Why the run was started (`mail`, `approval`, `message`...), null for a run started by hand or a routine. */
   reason: string | null;
+  /** JSON array of the shared resources (agents[].resources) the run holds while it runs. */
+  resources: string;
 };
 
 export type EventRow = {
@@ -76,6 +78,8 @@ export type MessageRow = {
   room: string;
   from_agent: string;
   to_agent: string;
+  /** Room of the recipient when it is not the sender's (a shared room, or the room that ordered), null otherwise. */
+  to_room: string | null;
   text: string;
   run_id: number | null;
   created_at: string;
@@ -91,6 +95,9 @@ export type TaskRow = {
   status: TaskStatus;
   note: string | null;
   run_id: number | null;
+  /** For a message: the room and the agent that sent it (the requester of an order to a shared room). */
+  from_room: string | null;
+  from_agent: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -113,6 +120,8 @@ export type ApprovalRow = {
   decided_at: string | null;
   seen_by_agent_at: string | null;
   notified_at: string | null;
+  /** The room that ordered the item from a shared room: it shows in that room's pile. Null: the agent's own room. */
+  for_room: string | null;
   created_at: string;
 };
 
@@ -439,6 +448,26 @@ CREATE TRIGGER IF NOT EXISTS approvals_changed_insert AFTER INSERT ON approvals
 BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
 CREATE TRIGGER IF NOT EXISTS approvals_changed_update AFTER UPDATE OF status ON approvals
 BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
+`,
+  },
+  {
+    version: 12,
+    sql: `
+-- Shared studio rooms (room.json "shared"): every room may order from them.
+ALTER TABLE rooms ADD COLUMN shared INTEGER NOT NULL DEFAULT 0;
+-- A message may go to an agent of another room (a shared one, or the room
+-- that ordered): its room, NULL when it is the sender's.
+ALTER TABLE messages ADD COLUMN to_room TEXT;
+-- A task given by a message keeps who sent it, so that a studio may answer
+-- the agent that ordered from it.
+ALTER TABLE tasks ADD COLUMN from_room TEXT;
+ALTER TABLE tasks ADD COLUMN from_agent TEXT;
+-- An item a shared room delivers to the room that ordered it (hq_submit
+-- forRoom): it shows in that room's pile, its decisions go back to its agent.
+ALTER TABLE approvals ADD COLUMN for_room TEXT;
+-- The shared resources a run holds (agents[].resources): two runs holding a
+-- common one never run at once.
+ALTER TABLE runs ADD COLUMN resources TEXT NOT NULL DEFAULT '[]';
 `,
   },
 ];

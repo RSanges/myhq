@@ -123,7 +123,17 @@ export function readDeskConfig(home: string): { desk: DeskConfig; error: string 
 
 /** What an item of the core is. */
 export type DeskRef =
-  | { kind: "approval"; id: number; room: string; agentId: string; type: string; status: string }
+  | {
+      kind: "approval";
+      id: number;
+      /** The producing agent's room (its decisions go back to it). */
+      room: string;
+      agentId: string;
+      type: string;
+      status: string;
+      /** The room that ordered it from a shared room, whose pile and colour it takes; null otherwise. */
+      forRoom: string | null;
+    }
   | { kind: "run"; id: number; room: string; agentId: string }
   | { kind: "chat"; id: number; role: string };
 
@@ -157,7 +167,7 @@ export type DeskObjectDto = {
   slots: { start: string; end: string; label: string | null }[] | null;
   /** The command's own note about its data, null otherwise. */
   note: string | null;
-  /** For a source with `approvals`: the room colour of each pending item, oldest first (the spines of the pile). */
+  /** For a source with `approvals`: the room colour of each pending item, oldest first (the spines of the pile; `room` is the one that ordered it for a shared room's delivery). */
   spines: { approvalId: number; room: string; color: string | null }[] | null;
   /** When the data was read (for a command, when it ran). */
   updatedAt: string;
@@ -198,8 +208,16 @@ function approvalItem(row: ApprovalRow, objectId: string, colors: Map<string, st
     allDay: false,
     href: deskHref(objectId, `approval-${row.id}`),
     tone,
-    color: colors.get(row.room) ?? null,
-    ref: { kind: "approval", id: row.id, room: row.room, agentId: row.agent_id, type: row.type, status: row.status },
+    color: colors.get(row.for_room ?? row.room) ?? null,
+    ref: {
+      kind: "approval",
+      id: row.id,
+      room: row.room,
+      agentId: row.agent_id,
+      type: row.type,
+      status: row.status,
+      forRoom: row.for_room,
+    },
   };
 }
 
@@ -337,10 +355,16 @@ function readCore(db: Db, home: Home, source: CoreSource, objectId: string, conf
   };
 }
 
-/** The spines of the pile: the room colour of each pending item, oldest first. */
+/**
+ * The spines of the pile: the room colour of each pending item, oldest first.
+ * An item a shared room delivered takes the colour of the room that ordered it.
+ */
 function spines(db: Db, home: Home): DeskObjectDto["spines"] {
   const colors = roomColors(home);
-  return (db.prepare("SELECT id, room FROM approvals WHERE status = 'pending' ORDER BY created_at, id").all() as { id: number; room: string }[]).map(
+  const rows = db
+    .prepare("SELECT id, COALESCE(for_room, room) AS room FROM approvals WHERE status = 'pending' ORDER BY created_at, id")
+    .all() as { id: number; room: string }[];
+  return rows.map(
     (row) => ({ approvalId: row.id, room: row.room, color: colors.get(row.room) ?? null }),
   );
 }

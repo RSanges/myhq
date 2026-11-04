@@ -11,6 +11,7 @@ import { HqError } from "./errors";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
+import { resourceHolder } from "./resources";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
@@ -102,14 +103,33 @@ export function findAgent(config: HqConfig, roomName: string, agentId: string): 
   return { room, agent };
 }
 
-export function buildPrompt(params: { room: Room; agent: Agent; runId: number; task: string; mailbox: TaskRow[] }) {
+export function buildPrompt(params: {
+  room: Room;
+  agent: Agent;
+  runId: number;
+  task: string;
+  mailbox: TaskRow[];
+  /** The other shared rooms of the home, which this agent may order from. */
+  sharedRooms?: readonly string[];
+}) {
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_task_update for your task, hq_submit for anything to approve. Never publish anything yourself.",
+  ];
+  if (params.room.shared) {
+    lines.push(
+      'Your room is shared: other rooms order from it. Deliver an order with hq_submit and forRoom set to the room that ordered, and ask or answer that room\'s agent with hq_message and its "room".',
+    );
+  }
+  const shared = params.sharedRooms ?? [];
+  if (shared.length > 0) {
+    lines.push(`Shared rooms you may order from with hq_message and "room" (hq_rooms lists their agents): ${shared.join(", ")}.`);
+  }
+  lines.push(
     "",
     "Task:",
     params.task,
-  ];
+  );
   if (params.mailbox.length > 0) {
     lines.push("", "Pending tasks from your mailbox:");
     for (const task of params.mailbox) lines.push(`- [task ${task.id}, ${task.source}] ${task.text}`);
@@ -151,7 +171,9 @@ export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
 export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRow {
   const config = deps.config ?? getConfig();
   const { room, agent } = findAgent(config, request.room, request.agent);
-  syncHome(getDbAt(config.dbPath), loadHome(config.home));
+  const home = loadHome(config.home);
+  syncHome(getDbAt(config.dbPath), home);
+  const sharedRooms = home.rooms.filter((each) => each.shared && each.name !== room.name).map((each) => each.name);
   const task = request.task?.trim() || DEFAULT_TASK;
   return launchRun({
     config,
@@ -160,7 +182,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     agent,
     task,
     reason: request.reason ?? null,
-    prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox }),
+    prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox, sharedRooms }),
   });
 }
 
@@ -220,16 +242,21 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
       started.push(startRun(request, { ...deps, config }));
     } catch (error) {
-      if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "DAILY_CAP_REACHED")) continue;
+      // A busy agent, a busy resource or the cap: the task waits, and the end of the run that holds them wakes it again.
+      if (error instanceof HqError && WAITS.has(error.code)) continue;
       console.error(`[runner] could not wake ${key}`, error);
     }
   }
   return started;
 }
 
+/** Errors that leave a woken task pending, to be taken by a later run. */
+export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"]);
+
 /**
  * Records and starts a run of any agent, room agent or MyHQ's own (onboarding),
- * after the agent lock and the daily cap. `prompt` receives the run id and
+ * after the agent lock, its shared resources (`RESOURCE_BUSY` while another
+ * run holds one of them) and the daily cap. `prompt` receives the run id and
  * the tasks claimed from the agent's mailbox.
  */
 export function launchRun(params: {
@@ -261,6 +288,14 @@ export function launchRun(params: {
           `Agent "${agent.id}" of room "${room.name}" already has a run in progress (#${busy.id}).`,
         );
       }
+      const holder = resourceHolder(db, agent.resources);
+      if (holder) {
+        throw new HqError(
+          "RESOURCE_BUSY",
+          409,
+          `Resource "${holder.resource}" is held by run #${holder.runId} of ${holder.room}/${holder.agentId}: the run of "${agent.id}" starts when it ends.`,
+        );
+      }
       const today = runsToday(db);
       if (today >= config.maxRunsPerDay) {
         throw new HqError(
@@ -273,9 +308,10 @@ export function launchRun(params: {
       const runId = Number(
         db
           .prepare(
-            "INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason) VALUES (?, ?, ?, ?, 'running', ?, ?)",
+            "INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason, resources) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
           )
-          .run(room.name, agent.id, engine.name, task, at, params.reason ?? null).lastInsertRowid,
+          .run(room.name, agent.id, engine.name, task, at, params.reason ?? null, JSON.stringify(agent.resources))
+          .lastInsertRowid,
       );
       db.prepare(
         `INSERT INTO tasks (room, agent_id, source, text, status, run_id, created_at, updated_at)

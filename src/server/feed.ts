@@ -14,6 +14,7 @@ import type {
 } from "./db";
 import { NOTIFICATION_NOTE, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
+import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
@@ -54,6 +55,8 @@ export type MessageDto = {
   room: string;
   from: string;
   to: string;
+  /** Room of the recipient when it is not `room` (an order to a shared room, or its answer), null otherwise. */
+  toRoom: string | null;
   text: string;
   runId: number | null;
   createdAt: string;
@@ -82,6 +85,12 @@ export type ApprovalDto = {
    * born `approved`, with a note, and read the same way.
    */
   informational: boolean;
+  /**
+   * The room that ordered the item from a shared room (hq_submit `forRoom`):
+   * it shows in that room's pile, with that room's colour, while `room` and
+   * `agentId` stay the producing agent's, who gets the decisions. Null: its own room.
+   */
+  forRoom: string | null;
   decidedAt: string | null;
   createdAt: string;
 };
@@ -127,6 +136,7 @@ export const toMessage = (r: MessageRow): MessageDto => ({
   room: r.room,
   from: r.from_agent,
   to: r.to_agent,
+  toRoom: r.to_room ?? null,
   text: r.text,
   runId: r.run_id,
   createdAt: r.created_at,
@@ -150,6 +160,7 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
     r.status === "unseen" ||
     r.status === "seen" ||
     (r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at),
+  forRoom: r.for_room ?? null,
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });
@@ -220,6 +231,10 @@ export type StateDto = {
       armed: boolean;
       routines: { cron: string; task: string | null; nextAt: string | null }[];
       state: AgentState;
+      /** Shared resources its runs hold (room.json `resources`). */
+      resources: string[];
+      /** Its resources held by another agent's run while it has work waiting (« en attente du GPU »), empty otherwise. */
+      waitingFor: string[];
       lastRun: RunDto | null;
     }[];
   }[];
@@ -244,6 +259,22 @@ export type SchedulerInfo = {
   running: boolean;
   timeZone: string;
 };
+
+/**
+ * The resources of an agent that a run of another agent holds while a task
+ * waits in its mailbox: what keeps it from starting (« en attente du GPU »).
+ */
+function waitingFor(db: Db, room: string, agentId: string, resources: readonly string[]): string[] {
+  if (resources.length === 0) return [];
+  const pending = db.prepare("SELECT 1 FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending' LIMIT 1").get(room, agentId);
+  if (!pending) return [];
+  const held = new Set(
+    heldResources(db)
+      .filter((hold) => hold.room !== room || hold.agentId !== agentId)
+      .map((hold) => hold.resource),
+  );
+  return resources.filter((resource) => held.has(resource));
+}
 
 /** Snapshot for the interface: load it once, then follow /api/events from `cursor`. */
 export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date = new Date()): StateDto {
@@ -275,6 +306,8 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
             nextAt: nextRoutineFire(routine, at, scheduler.timeZone)?.toISOString() ?? null,
           })),
           state,
+          resources: agent.resources,
+          waitingFor: state === "working" ? [] : waitingFor(db, room.name, agent.id, agent.resources),
           lastRun: row ? toRun(row) : null,
         };
       }),

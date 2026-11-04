@@ -62,17 +62,18 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Seven tools, all validated with zod:
+room) and writes directly to SQLite. Eight tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
-| `hq_message(to, text)` | Send a message to another agent. |
-| `hq_submit(type, title, body, payload)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). |
+| `hq_message(to, text, room?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). |
+| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). `forRoom`: a shared room's delivery to the room that ordered it. |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
-| `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
+| `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, `forRoom`, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
+| `hq_rooms()` | List the shared rooms and their agents (id and name): the studios an agent may order from. Read-only. |
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
@@ -125,6 +126,8 @@ this minute match" and "when is the next one", not a scheduling library.
 - `addDirs`: directories passed as `--add-dir`. An agent that reads files
   (`Read`, `Glob` or `Grep` in its whitelist) and has no worktree reads the
   target repository by default.
+- `resources`: shared resources its runs hold, such as `gpu` (see "Shared
+  resources" below).
 
 ### The approval cycle
 
@@ -289,6 +292,58 @@ woken as below) unless the recipient has `onMessage: "queue"`, in which case it
 waits for its next run. There is no real-time dialogue between models:
 mailboxes, readable and cheap.
 
+### Shared rooms
+
+A room whose `room.json` sets `shared: true` is a studio every room may order
+from (`home-layout.md`, "Shared rooms"). `syncHome` mirrors the flag into
+`rooms.shared`, so the HQ MCP server, which only reads the database, knows it;
+a room is one of the home when its `synced_at` is the latest one (every room is
+written with the same instant), so a room removed from the home stops being
+reachable.
+
+- **Orders.** `hq_message` with `room` reaches an agent of another room when
+  that room is shared, or when the recipient ordered from the sender's room:
+  a task of the sender's room records who sent it (`tasks.from_room`,
+  `tasks.from_agent`), and any agent of a studio may write back to an agent
+  found there. Anything else is a tool error. The message is stored with the
+  recipient's room (`messages.to_room`, null within a room) and becomes a task
+  of the recipient (source `message`, so `wakeAgents` wakes it per its
+  `onMessage`), whose text says who wrote and how to answer.
+- **Deliveries.** `hq_submit` with `forRoom` (an agent of a shared room only,
+  to a room of the home only) stores `approvals.for_room`. The item keeps its
+  producing room and agent (`room`, `agent_id`): `decideApproval`,
+  `hq_read_decisions`, revisions and `onApproval` work on them as for any item.
+  What shows it by room uses the room that ordered: the spines and the colour
+  of `GET /api/desk`, the desk card (« creation pour planygo »), the Telegram
+  alert and `/pending`; the API gives `forRoom` for any other view that groups
+  by room (`forRoom ?? room`).
+- **Prompts.** Each run's prompt names the other shared rooms the agent may
+  order from, and tells an agent of a shared room to deliver with `forRoom`
+  and to answer with `hq_message` and the room that ordered. `hq_rooms` lists
+  the shared rooms and their agents.
+- The owner's requests (desk, chat, `/run`, `POST /api/runs`) reach any agent
+  of any room, as before.
+
+Migration 12 adds `rooms.shared`, `messages.to_room`, `tasks.from_room`,
+`tasks.from_agent`, `approvals.for_room` and `runs.resources`, all nullable or
+with a default, so the rows that exist read as before.
+
+### Shared resources
+
+An agent's `resources` (for example `["gpu"]`) are stored on each of its runs
+(`runs.resources`, JSON) when the run is recorded. `launchRun` checks, in the
+same immediate transaction as the agent lock and the daily cap, that no run in
+progress holds one of them (`src/server/resources.ts`), and throws
+`RESOURCE_BUSY` (409) otherwise. The waits are the ones of a busy agent:
+`wakeAgents` and the chat requests leave the task pending, and since it is
+newer than the agent's last run, the end of the run that holds the resource
+(which calls `wakeAgents`) starts it; a routine is journaled `skipped_busy`;
+a manual start returns the error. `GET /api/state` gives each agent its
+`resources` and `waitingFor`, the resources another run holds while a task
+waits in its mailbox, which the agent sheet shows (« En attente : gpu
+occupé »). MyHQ only sees its own runs: work started outside MyHQ on the same
+GPU is not part of the lock.
+
 ### Wake-ups
 
 Agents work when they receive work. `wakeAgents` (`src/server/runner.ts`)
@@ -310,8 +365,9 @@ each tool result of a run (an `hq_message` is written by the HQ MCP server,
 another process: the tool result is when the app notices it) and at the end of
 each run. Consequences:
 
-- Same agent lock and daily cap as any run. A busy agent is woken again when
-  its run ends (its task is newer than that run); with the cap reached, the
+- Same agent lock, shared resources and daily cap as any run. A busy agent,
+  or one whose resource another run holds, is woken again when that run ends
+  (its task is newer than the agent's last run); with the cap reached, the
   task waits for the agent's next run.
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.

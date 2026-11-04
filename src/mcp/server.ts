@@ -15,6 +15,7 @@ import {
   hqMessage,
   hqPending,
   hqReadDecisions,
+  hqRooms,
   hqSubmit,
   hqTaskUpdate,
   inputs,
@@ -43,7 +44,7 @@ async function main(): Promise<void> {
     "hq_message",
     {
       description:
-        "Send a message to another agent of your room. It becomes a task handled at its next run (at once when the recipient wakes on messages).",
+        "Send a message to another agent. It becomes a task handled at its next run (at once when the recipient wakes on messages). Without `room` it goes to your room; with `room`, to an agent of a shared room (an order, see hq_rooms) or to an agent of a room that ordered from yours (an answer).",
       inputSchema: inputs.hq_message,
     },
     async (args) => respond(() => hqMessage(db, ctx, args)),
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
     "hq_submit",
     {
       description:
-        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and stays on the desk under « À regarder » until they have seen it: it never waits for a decision, so it comes back with the status unseen and nothing to read back.",
+        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and stays on the desk under « À regarder » until they have seen it: it never waits for a decision, so it comes back with the status unseen and nothing to read back. An agent of a shared room delivers an order with `forRoom`, the room that ordered: the item shows in that room's pile, and the decisions still come back to you.",
       inputSchema: inputs.hq_submit,
     },
     async (args) => respond(() => hqSubmit(db, ctx, args)),
@@ -98,6 +99,15 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_pending,
     },
     async () => respond(() => hqPending(db)),
+  );
+  server.registerTool(
+    "hq_rooms",
+    {
+      description:
+        "List the shared rooms of the office (studios any room may order from with hq_message and `room`) and their agents. Read-only.",
+      inputSchema: inputs.hq_rooms,
+    },
+    async () => respond(() => hqRooms(db, ctx)),
   );
 
   await server.connect(new StdioServerTransport());

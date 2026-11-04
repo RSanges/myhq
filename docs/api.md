@@ -23,6 +23,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
+| `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
@@ -45,7 +46,7 @@ French text per `code`.
 | Approval `status` | `pending`, `approved`, `rejected`, `revise` |
 | Event `type` | `start`, `text`, `tool_call`, `tool_result`, `end` |
 | Agent `state` (in `/api/state`) | `working` (a run is in progress), `failed` (its last run failed), `idle` |
-| Firing `outcome` | `started`, `skipped_busy` (agent lock), `skipped_cap` (daily cap), `skipped_unarmed`, `error` |
+| Firing `outcome` | `started`, `skipped_busy` (agent lock, or a shared resource held by another run), `skipped_cap` (daily cap), `skipped_unarmed`, `error` |
 
 A run is `cancelled` when the app stops during the run, and `failed` when the
 engine reports an error, the budget (`--max-budget-usd`) is exceeded, the run
@@ -115,12 +116,15 @@ in `<home>/data/runs/<runId>.jsonl`.
 ### Message
 
 ```json
-{ "id": 4, "room": "demo", "from": "scout", "to": "writer", "text": "...", "runId": 3, "createdAt": "..." }
+{ "id": 4, "room": "demo", "from": "scout", "to": "writer", "toRoom": null, "text": "...", "runId": 3, "createdAt": "..." }
 ```
 
 Messages are written by agents with `hq_message`. Each one also becomes a task
 for the recipient, handed over at its next run, which starts at once when the
 recipient has not set `onMessage: "queue"` (a run with `reason` `message`).
+`room` is the sender's room; `toRoom` is the recipient's when it is another one
+(an order to a shared room, or a studio's answer to the agent that ordered,
+see `architecture.md`, "Shared rooms"), `null` otherwise.
 
 ### Approval
 
@@ -140,6 +144,7 @@ recipient has not set `onMessage: "queue"` (a run with `reason` `message`).
   "decisionHistory": [],
   "actionDone": false,
   "informational": false,
+  "forRoom": null,
   "decidedAt": null,
   "createdAt": "2026-11-02T16:18:11.483Z"
 }
@@ -166,6 +171,14 @@ for an item of `notifyTypes`, which is not decided nor sent back. `status` is th
 `unseen` (it waits under « À regarder ») or `seen` (it was marked, see `POST
 /api/approvals/[id]/seen`); the items stored before these statuses existed are
 `approved` with the note `notification`, still `informational`.
+
+`forRoom` is the room that ordered the item from a shared room (`hq_submit`
+with `forRoom`), `null` for an item of the agent's own room. Such an item
+belongs to that room's pile: the desk shows it with that room's colour and as
+« <room> pour <forRoom> » (« creation pour planygo »), the spines of
+`GET /api/desk` take that colour, and a view that groups items by room uses
+`forRoom ?? room`. `room` and `agentId` stay the producing agent's: its
+decisions, a revise included, go back to that agent.
 
 Payloads the interface and the assistant act on:
 
@@ -225,6 +238,8 @@ restart.
           "armed": false,
           "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
           "state": "idle",
+          "resources": [],
+          "waitingFor": [],
           "lastRun": null
         }
       ]
@@ -253,6 +268,12 @@ restart.
   top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
   no longer draws it.
 - `lastRun` is a Run or `null`.
+- `resources`: the shared resources the agent's runs hold (`resources` in
+  `room.json`, for example `["gpu"]`), empty for most agents. `waitingFor`:
+  those of them that a run of another agent holds while a task waits in this
+  agent's mailbox (the agent sheet then says « En attente : gpu occupé »); empty
+  otherwise, and always while the agent works. The interface drops an entry as
+  soon as no working agent holds that resource any more.
 - `reception`: the onboarding agent seen from the floors. `room` is the one
   floor that draws it as a receptionist (`reception.room` of `myhq.json` when
   that room exists, else the room `assistant`, else the first room, `null`
@@ -321,8 +342,8 @@ Response `202`:
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `UNAUTHORIZED` (401),
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
-`DAILY_CAP_REACHED` (429). The token, the lock and the cap are checked before
-anything is started.
+`RESOURCE_BUSY` (409), `DAILY_CAP_REACHED` (429). The token, the lock, the
+shared resources and the cap are checked before anything is started.
 
 ### `GET /api/events`
 
@@ -425,7 +446,7 @@ A failing command never fails the route: its object has `status: "error"`.
           "href": "/bureau/signer#approval-12",
           "tone": null,
           "color": "#ff3d7f",
-          "ref": { "kind": "approval", "id": 12, "room": "demo", "agentId": "scout", "type": "community_reply", "status": "pending" }
+          "ref": { "kind": "approval", "id": 12, "room": "demo", "agentId": "scout", "type": "community_reply", "status": "pending", "forRoom": null }
         }
       ],
       "slots": null,
@@ -456,12 +477,16 @@ A failing command never fails the route: its object has `status: "error"`.
   `chat`), several joined by `+` (`watch:brief+summaries`), or `command`.
 - `items[].ref`: what an item of the core is (`approval`, `run` for a run
   summary, `chat` for a message), `null` for an item of a command. `color` is
-  the colour of its room, `null` for a neutral room or a command. `href` opens
+  the colour of its room, `null` for a neutral room or a command. An approval
+  a shared room delivered has `ref.forRoom`, the room that ordered it, and
+  takes that room's colour (`ref.room` and `ref.agentId` stay the producing
+  agent's). `href` opens
   it on the page of the object, `/bureau/<id>`.
 - `slots` and `note`: from a command (a calendar's free stretches, a line about
   its data), `null` otherwise.
 - `spines`: for a source with `approvals`, the room colour of each pending item,
-  oldest first (the pile of the scene); `null` otherwise.
+  oldest first (the pile of the scene); `null` otherwise. For a delivery of a
+  shared room, `room` and `color` are the ones of the room that ordered it.
 - `error.code`: `COMMAND_TIMEOUT`, `COMMAND_FAILED` (exit code, or a `cwd`
   outside the home) or `COMMAND_INVALID_OUTPUT` (not JSON, or not the
   contract). The command's stderr is in the server's log, never here.

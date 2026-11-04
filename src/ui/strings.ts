@@ -491,6 +491,7 @@ export const strings = {
       APPROVAL_NOT_DECIDABLE: "Cet item n'attend aucune décision : marque-le comme vu.",
       APPROVAL_NOT_WATCHABLE: "Cet item n'est pas à regarder : il attend une décision ou a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
+      RESOURCE_BUSY: "Une ressource partagée de cet agent (le GPU par exemple) est prise par un autre tour. Réessayez quand il aura fini.",
       ROADMAP_NOT_FOUND: "Aucune feuille de route valide.",
       TARGET_NOT_FOUND: "Aucun dossier à ce chemin.",
       ROOM_EXISTS: "Une salle de ce nom existe déjà : rien n'a été écrit. Refuse la proposition ou demande un autre nom.",
@@ -820,5 +821,15 @@ export const strings = {
       photoName: (stamp: string) => `Photo ${stamp}.jpg`,
       documentName: (stamp: string) => `Document ${stamp}`,
     },
+  },
+  /** Shared studio rooms and shared resources (room.json `shared`, agents[].`resources`). */
+  studio: {
+    /** Where a delivery of a shared room comes from and goes: « creation pour planygo ». */
+    forRoom: (room: string, forRoom: string) => `${room} pour ${forRoom}`,
+    /** The shared resources an agent's runs hold, on its card. */
+    resources: "Ressources",
+    /** An agent whose work waits for a resource held by another run (« en attente du GPU »). */
+    waitingFor: (resources: readonly string[]) =>
+      `En attente : ${resources.join(", ")} occupé${resources.length > 1 ? "s" : ""}`,
   },
 } as const;

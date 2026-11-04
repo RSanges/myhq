@@ -156,6 +156,8 @@ test("migration 11: an existing database keeps its items, the old informational 
   raw.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     CREATE TABLE runs (id INTEGER PRIMARY KEY);
+    CREATE TABLE rooms (name TEXT PRIMARY KEY);
+    CREATE TABLE messages (id INTEGER PRIMARY KEY);
     CREATE TABLE changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, entity_id INTEGER NOT NULL);
     CREATE TABLE tasks (id INTEGER PRIMARY KEY, source TEXT, ref_id INTEGER, status TEXT);
     CREATE TABLE approvals (

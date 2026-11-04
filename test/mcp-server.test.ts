@@ -61,7 +61,7 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return content.map((part) => part.text).join("");
 }
 
-test("lists the seven hq tools", async () => {
+test("lists the eight hq tools", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "hq_memory_read",
@@ -69,6 +69,7 @@ test("lists the seven hq tools", async () => {
     "hq_message",
     "hq_pending",
     "hq_read_decisions",
+    "hq_rooms",
     "hq_submit",
     "hq_task_update",
   ]);
@@ -113,6 +114,7 @@ test("hq_pending lists the pending items of every room, without their bodies", a
     id: other,
     room: "other",
     agent: "mailer",
+    forRoom: null,
     type: "mail_reply",
     title: "Reply to Alice",
     submittedAt: at,

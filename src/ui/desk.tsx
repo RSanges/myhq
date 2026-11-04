@@ -48,7 +48,12 @@ function useNow(): number {
 function ApprovalHeader({ approval }: { approval: Approval }) {
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-      <span>{strings.desk.submittedBy(approval.agentId, approval.room)}</span>
+      <span>
+        {strings.desk.submittedBy(
+          approval.agentId,
+          approval.forRoom ? strings.studio.forRoom(approval.room, approval.forRoom) : approval.room,
+        )}
+      </span>
       <span>{strings.desk.submittedOn(formatDateTime(approval.createdAt))}</span>
     </p>
   );
@@ -116,7 +121,7 @@ function DeskItem({
         >
           <span
             aria-hidden
-            title={approval.room}
+            title={approval.forRoom ? strings.studio.forRoom(approval.room, approval.forRoom) : approval.room}
             className={`size-2.5 shrink-0 rounded-full ${tint ? "bg-[var(--room-color)]" : "bg-line"}`}
           />
           <span className="max-w-[40%] shrink-0 truncate text-xs text-muted sm:max-w-40">{who.name}</span>
@@ -622,9 +627,12 @@ function useFolds(
   const now = useNow();
   const whoById = useMemo(() => {
     const byAgent = new Map(agents.map((agent) => [`${agent.room}/${agent.id}`, agent]));
+    const roomColor = new Map(agents.map((agent) => [agent.room, agent.color]));
     return (approval: Approval): Who => {
       const agent = byAgent.get(`${approval.room}/${approval.agentId}`);
-      return { name: agent?.name ?? approval.agentId, color: agent?.color ?? null };
+      // A delivery of a shared room takes the colour of the room that ordered it, whose pile it is in.
+      const color = approval.forRoom ? (roomColor.get(approval.forRoom) ?? null) : (agent?.color ?? null);
+      return { name: agent?.name ?? approval.agentId, color };
     };
   }, [agents]);
   const setOpen = (id: number, open: boolean) =>

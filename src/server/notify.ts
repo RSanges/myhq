@@ -85,7 +85,7 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
 export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env: Env = process.env): Promise<void> {
   const rows = db
     .prepare(
-      `SELECT a.id, a.room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
+      `SELECT a.id, a.room, a.for_room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
        FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
        WHERE a.notified_at IS NULL AND (a.status IN ('pending', 'unseen')
          OR (a.status = 'approved' AND a.decision_note = ? AND a.decided_at = a.created_at))
@@ -94,6 +94,7 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env
     .all(NOTIFICATION_NOTE) as {
     id: number;
     room: string;
+    for_room: string | null;
     type: string;
     title: string;
     body: string;
@@ -101,9 +102,11 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env
     agent: string;
   }[];
   const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
-  for (const row of rows) {
+  for (const found of rows) {
     // Marked first so that two concurrent sweeps never send the same item twice.
-    if (mark.run(new Date().toISOString(), row.id).changes === 0) continue;
+    if (mark.run(new Date().toISOString(), found.id).changes === 0) continue;
+    // A delivery of a shared room says where it goes: « creation pour planygo ».
+    const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
     if (row.status === "pending") {
       const text = withLine(strings.notify.approvalPending(row), approvalLinkLine(row.id, env));
       if (await send(text, { approvalId: row.id })) recordBotMessage(db, text, "alert");

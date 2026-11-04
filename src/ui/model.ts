@@ -147,12 +147,25 @@ export function agentState(lastRun: Run | null | undefined): AgentState {
 export type TeamAgent = Agent & { room: string; key: string; state: AgentState; color: string | null };
 
 export function selectAgents(model: Model): TeamAgent[] {
-  return model.rooms.flatMap((room) =>
+  const agents = model.rooms.flatMap((room) =>
     room.agents.map((agent) => {
       const key = agentKey(room.name, agent.id);
       const lastRun = model.latestRuns[key] ?? null;
       return { ...agent, lastRun, room: room.name, key, state: agentState(lastRun), color: room.color };
     }),
+  );
+  return agents.map((agent) => (agent.waitingFor?.length ? { ...agent, waitingFor: resourceWait(agent, agents) } : agent));
+}
+
+/**
+ * The shared resources an agent waits for (« en attente du GPU »): the ones
+ * the state said another run held, as long as an agent holding one of them is
+ * still working. Nothing while the agent works itself.
+ */
+export function resourceWait(agent: TeamAgent, agents: readonly TeamAgent[]): string[] {
+  if (agent.state === "working") return [];
+  return (agent.waitingFor ?? []).filter((resource) =>
+    agents.some((other) => other.key !== agent.key && other.state === "working" && (other.resources ?? []).includes(resource)),
   );
 }
 
@@ -193,7 +206,7 @@ export function buildFeed(events: HqEvent[], messages: Message[], filter: string
     if (
       filter !== null &&
       agentKey(message.room, message.from) !== filter &&
-      agentKey(message.room, message.to) !== filter
+      agentKey(message.toRoom ?? message.room, message.to) !== filter
     ) {
       continue;
     }

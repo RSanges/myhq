@@ -40,6 +40,8 @@ export const messageSchema = z.object({
   room: z.string(),
   from: z.string(),
   to: z.string(),
+  /** Room of the recipient when it is not `room` (an order to a shared room, or its answer). */
+  toRoom: z.string().nullable().optional(),
   text: z.string(),
   runId: z.number().int().nullable(),
   createdAt: z.string(),
@@ -60,6 +62,8 @@ export const approvalSchema = z.object({
   decisionHistory: z.array(decisionRecordSchema).default([]),
   actionDone: z.boolean().default(false),
   informational: z.boolean().default(false),
+  /** The room that ordered it from a shared room: its pile and its colour. `room` stays the producing agent's. */
+  forRoom: z.string().nullable().optional(),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
 });
@@ -84,6 +88,10 @@ export const agentSchema = z.object({
   isoStride: z.number().int().positive().nullable().optional(),
   armed: z.boolean().default(false),
   routines: z.array(routineSchema).default([]),
+  /** Shared resources its runs hold (room.json `resources`). */
+  resources: z.array(z.string()).optional(),
+  /** Its resources another run held while its work waited, when the state was read. */
+  waitingFor: z.array(z.string()).optional(),
   lastRun: runSchema.nullable(),
 });
 
@@ -206,7 +214,15 @@ export const readySchema = z.object({ cursor: z.number().int() });
 /** An object of the desk (GET /api/desk). */
 export const deskObjectKindSchema = z.enum(["pile", "tray", "newspaper", "postits", "calendar", "phone"]);
 const deskRefSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("approval"), id: z.number().int(), room: z.string(), agentId: z.string(), type: z.string(), status: z.string() }),
+  z.object({
+    kind: z.literal("approval"),
+    id: z.number().int(),
+    room: z.string(),
+    agentId: z.string(),
+    type: z.string(),
+    status: z.string(),
+    forRoom: z.string().nullable().optional(),
+  }),
   z.object({ kind: z.literal("run"), id: z.number().int(), room: z.string(), agentId: z.string() }),
   z.object({ kind: z.literal("chat"), id: z.number().int(), role: z.string() }),
 ]);

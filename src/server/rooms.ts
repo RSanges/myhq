@@ -55,6 +55,9 @@ export const mcpServersSchema = z
   .record(z.string().min(1), z.union([stdioServerSchema, remoteServerSchema]))
   .refine((servers) => !("hq" in servers), "the name 'hq' is reserved for the HQ MCP server");
 
+/** A shared resource name: lowercase letters, digits, '-' or '_'. */
+export const resourceSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/, "lowercase letters, digits, '-' or '_' (max 32)");
+
 const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
@@ -90,6 +93,12 @@ const agentSchema = z.strictObject({
   onRevise: z.enum(["run", "queue"]).optional(),
   /** "summary": the final text of each run that ends well is sent to Telegram. */
   notifyRuns: z.enum(["summary"]).optional(),
+  /** Shared resources the agent's runs hold (for example "gpu"): two runs holding a common one never run at once. */
+  resources: z
+    .array(resourceSchema)
+    .max(16)
+    .refine((list) => new Set(list).size === list.length, "a resource is listed twice")
+    .optional(),
 });
 
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
@@ -99,6 +108,8 @@ export const roomFileSchema = z.strictObject({
   name: idSchema,
   /** Colour of the room in the interface (chat chips, floor strip, name plates). Without it the room stays neutral. */
   color: roomColorSchema.optional(),
+  /** A shared studio: every room of the home may order from it (hq_message with `room`), and it delivers with hq_submit `forRoom`. */
+  shared: z.boolean().optional(),
   targetRepo: z.string().min(1),
   agents: z.array(agentSchema).min(1),
 });
@@ -141,6 +152,8 @@ export type Agent = {
   onRevise: "run" | "queue" | null;
   /** "summary": the summary of each run that ends `done` is sent to Telegram. */
   notifyRuns: "summary" | null;
+  /** Shared resources its runs hold (see launchRun); empty for most agents. */
+  resources: string[];
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -152,6 +165,8 @@ export type Room = {
   targetRepo: string;
   /** Hex colour of the room in the interface, or null for the neutral look. */
   color: string | null;
+  /** A shared studio that every room may order from. */
+  shared: boolean;
   agents: Agent[];
 };
 
@@ -259,6 +274,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       onMessage: agent.onMessage ?? null,
       onRevise: agent.onRevise ?? null,
       notifyRuns: agent.notifyRuns ?? null,
+      resources: agent.resources ?? [],
     };
   });
 
@@ -267,6 +283,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     dir: roomDir,
     targetRepo,
     color: room.color ?? null,
+    shared: room.shared ?? false,
     agents,
   };
 }
@@ -303,8 +320,9 @@ export function toPosix(p: string): string {
 export function syncHome(db: Db, home: Home): void {
   const at = now();
   const upsertRoom = db.prepare(
-    `INSERT INTO rooms (name, target_repo, synced_at) VALUES (?, ?, ?)
-     ON CONFLICT (name) DO UPDATE SET target_repo = excluded.target_repo, synced_at = excluded.synced_at`,
+    `INSERT INTO rooms (name, target_repo, shared, synced_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (name) DO UPDATE SET target_repo = excluded.target_repo, shared = excluded.shared,
+       synced_at = excluded.synced_at`,
   );
   const upsertAgent = db.prepare(
     `INSERT INTO agents (room, id, name, model, role_path, synced_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -314,7 +332,7 @@ export function syncHome(db: Db, home: Home): void {
   const removeStaleAgents = db.prepare("DELETE FROM agents WHERE room = ? AND synced_at <> ?");
   db.transaction(() => {
     for (const room of home.rooms) {
-      upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), at);
+      upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), room.shared ? 1 : 0, at);
       for (const agent of room.agents) {
         upsertAgent.run(
           room.name,

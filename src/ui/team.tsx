@@ -135,7 +135,10 @@ export function AgentCard({
           <h3 className="break-words text-base font-semibold">{agent.name}</h3>
           <p className="text-xs text-muted">{agent.room}</p>
         </div>
-        <Badge tone={stateTone[agent.state]}>{strings.team.state[agent.state]}</Badge>
+        <div className="flex flex-wrap justify-end gap-1">
+          <Badge tone={stateTone[agent.state]}>{strings.team.state[agent.state]}</Badge>
+          {(agent.waitingFor?.length ?? 0) > 0 && <Badge tone="warn">{strings.studio.waitingFor(agent.waitingFor ?? [])}</Badge>}
+        </div>
       </div>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted">{strings.team.role}</dt>
@@ -156,6 +159,12 @@ export function AgentCard({
                 ))
               )}
             </dd>
+          </>
+        )}
+        {(agent.resources?.length ?? 0) > 0 && (
+          <>
+            <dt className="text-muted">{strings.studio.resources}</dt>
+            <dd>{agent.resources?.join(", ")}</dd>
           </>
         )}
       </dl>

@@ -87,6 +87,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `name` | yes | Room name, unique in the home. |
 | `targetRepo` | yes | Path of the repository the room works on, relative to the home. |
 | `color` | no | The room's colour in the interface, a CSS hex colour (`#rgb` or `#rrggbb`). The chat chips of the room's agents, the agent strip under the floor and the room's button in the floor header take it as a soft tint (border and dot in the colour, text unchanged), and the name plates on the floor get a thin line in it. Without it the room stays neutral. The assistant's own chip keeps its blue. |
+| `shared` | no | `true` makes the room a shared studio (a room of scripts, videos or visuals, say): every room of the home may order from it, and it delivers to the room that ordered (see "Shared rooms" below). Default `false`. |
 | `agents[].id` | yes | Stable identifier, used in messages and in the database. |
 | `agents[].name` | yes | Display name. |
 | `agents[].role` | yes | Path of the role prompt, relative to the room directory. |
@@ -106,6 +107,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram) starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
+| `agents[].resources` | no | Shared resources the agent's runs hold, for example `["gpu"]` (lowercase letters, digits, `-` or `_`, each listed once). Two runs holding a common resource never run at once, in any room (see "Shared resources" below). Default: none. |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
 `8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
@@ -155,6 +157,59 @@ An agent that sends approved mails could be declared like this (the
   "onApproval": "task"
 }
 ```
+
+#### Shared rooms
+
+A room with `"shared": true` is a studio that the other rooms order from. Its
+agents, and the agents of every room, use the same two HQ tools as always:
+
+- **Ordering.** `hq_message` takes an optional `room`. An agent may write to
+  an agent of another room only when that room is shared, or when the
+  recipient is an agent that ordered from its own room (a studio asking or
+  answering its requester: any agent of the studio may answer the agent whose
+  message became a task of the studio). Any other room is refused with an
+  explicit error, and so is a room that is no longer in the home. The message
+  becomes a task of the recipient that records the sender's room and agent,
+  and wakes it per its `onMessage`, like any message. `hq_rooms` lists the
+  shared rooms and their agents, and the prompt of each run names the shared
+  rooms it may order from (and, for an agent of a shared room, how to deliver).
+- **Delivering.** `hq_submit` takes an optional `forRoom`, for the agents of a
+  shared room only, and only to a room of the home. The item belongs to that
+  room's pile: it carries `forRoom` (`api.md`, Approval), the desk gives it
+  that room's colour, so do the spines of `GET /api/desk`, a view that groups
+  items by room reads `forRoom` before `room`, and the desk and Telegram say
+  where it comes from and goes (« creation pour planygo »). Its decisions still
+  go back to the producing agent: a revise wakes it as usual.
+- The owner's own requests are unchanged: a task given to any agent from the
+  desk, the chat or `/run` starts it whatever its room.
+
+A studio declared like this, with a project room ordering from it:
+
+```json
+{ "name": "studio", "targetRepo": "../studio-assets", "color": "#f5a524", "shared": true, "agents": [ ... ] }
+```
+
+and in the role of a project agent: « Order a video from the room studio with
+`hq_message` (`room: "studio"`, `to: "video"`); the deliverable comes back to
+your room's pile. »
+
+#### Shared resources
+
+`resources` names what a run uses and cannot share, a GPU being the usual one.
+When an agent's run starts, MyHQ records the resources it holds on the run, and
+refuses to start another run that holds one of them while it runs:
+
+- a manual start (the desk, `/run`, `POST /api/runs`) gets `RESOURCE_BUSY`
+  (409), with the resource and the run that holds it;
+- a wake-up (a message, a revision, an approved item, a chat request) leaves
+  its task pending, and the end of the run that holds the resource wakes the
+  agent again, as for a busy agent;
+- a routine that comes due is journaled `skipped_busy`, with the reason.
+
+The agent sheet lists the resources and shows « En attente : gpu occupé »
+while the agent's work waits for one of them. The lock is MyHQ's: a process
+outside MyHQ that uses the same GPU is not seen, so a role can still check the
+card itself before starting heavy work.
 
 #### Character sheets
 
