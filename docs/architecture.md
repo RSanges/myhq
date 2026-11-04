@@ -360,7 +360,11 @@ his phone, not a description of it.
   from integers and the whitelisted extension; the original name, the MIME
   type (from the extension), the size, the sha256 and the caption are in
   `approval_files` (migration 13, no foreign key so that a rebuild of
-  `approvals` never cascades onto it).
+  `approvals` never cascades onto it). Migration 14 creates the same table
+  and index with `IF NOT EXISTS`: the database in service had reached version
+  13 through an abandoned draft of that migration, so the real one never ran
+  there. A new database goes through 13 then 14 (which changes nothing); the
+  one in service gets the table at 14, and both end with the same schema.
 - **Served by id.** `GET /api/approvals/<id>/files/<fileId>` looks the file up
   by both ids and serves the copy with its MIME type and range requests (206),
   which Safari on iOS needs to play and seek in a video. No path from the

@@ -489,6 +489,27 @@ CREATE TABLE approval_files (
 CREATE INDEX approval_files_approval ON approval_files (approval_id);
 `,
   },
+  {
+    version: 14,
+    sql: `
+-- The same table as migration 13, written to be idempotent. The database in
+-- service reached version 13 through an abandoned draft of that migration (it
+-- only widened the tasks.source constraint), so the real migration 13 never ran
+-- there and the table is missing. A new database has it from 13 and this
+-- changes nothing; the one in service gets it here. Nothing else is touched.
+CREATE TABLE IF NOT EXISTS approval_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  approval_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  caption TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS approval_files_approval ON approval_files (approval_id);
+`,
+  },
 ];
 
 function migrate(db: Db): void {
