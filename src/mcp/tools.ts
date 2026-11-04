@@ -2,6 +2,15 @@ import path from "node:path";
 import { z } from "zod";
 import type { Env } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
+import {
+  AttachmentError,
+  attachmentInputSchema,
+  attachmentMaxBytes,
+  MAX_ATTACHMENTS,
+  resolveAttachment,
+  storeAttachments,
+  type ResolvedAttachment,
+} from "../server/attachments";
 import { now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
@@ -14,6 +23,9 @@ export const contextSchema = z.object({
   HQ_RUN_ID: z.coerce.number().int().positive(),
   HQ_AGENT_ID: z.string().min(1),
   HQ_ROOM: z.string().min(1),
+  /** The agent's working directory (its worktree when it has one): where attachments are read from. */
+  HQ_WORK_DIR: z.string().min(1).optional(),
+  HQ_ATTACHMENT_MAX_MB: z.string().optional(),
 });
 
 export type HqContext = {
@@ -25,6 +37,10 @@ export type HqContext = {
   templatesDir?: string;
   /** The home, to read `notifyTypes` from its myhq.json; none when unknown. */
   home?: string;
+  /** Absolute working directory of the agent, which attachments are relative to; none: no attachments. */
+  workDir?: string;
+  /** Cap on one attached file, in bytes. */
+  attachmentMaxBytes?: number;
 };
 
 /** MyHQ keeps its database at `<home>/data/hq.db`: the home is two levels up. */
@@ -45,6 +61,8 @@ export function readContext(env: Env): HqContext {
     agentId: parsed.data.HQ_AGENT_ID,
     room: parsed.data.HQ_ROOM,
     home: homeOf(parsed.data.HQ_DB_PATH),
+    ...(parsed.data.HQ_WORK_DIR ? { workDir: parsed.data.HQ_WORK_DIR } : {}),
+    attachmentMaxBytes: attachmentMaxBytes({ HQ_ATTACHMENT_MAX_MB: parsed.data.HQ_ATTACHMENT_MAX_MB }),
   };
 }
 
@@ -80,6 +98,13 @@ export const inputs = {
       .optional()
       .describe(
         "Only for an agent of a shared room: the room that ordered the deliverable. The item shows in that room's pile; the decisions still come back to you.",
+      ),
+    attachments: z
+      .array(attachmentInputSchema)
+      .max(MAX_ATTACHMENTS)
+      .optional()
+      .describe(
+        "Files to validate with the item (a render: video mp4/webm/mov, image png/jpg/webp/gif, sound wav/mp3/ogg/flac/m4a, 3D 3mf/stl/glb, pdf), each { path, caption? }. path is relative to your working directory and must stay inside it: copy a render made elsewhere (ComfyUI output...) into your directory first. MyHQ keeps a copy, so the owner validates exactly what you sent. An image named like a 3D file or a PDF (piece.png next to piece.3mf) is shown as its preview.",
       ),
   },
   hq_task_update: {
@@ -260,6 +285,19 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       throw new ToolError(`agent_proposal: room "${proposal.room}" already has an agent "${proposal.agent.id}": pick another id.`);
     }
   }
+  // Checked before anything is written, so that the agent can fix its paths within the same run.
+  const files: ResolvedAttachment[] = [];
+  if (parsed.attachments && parsed.attachments.length > 0) {
+    const workDir = ctx.workDir;
+    if (!workDir) throw new ToolError("attachments are not available in this run.");
+    const maxBytes = ctx.attachmentMaxBytes ?? attachmentMaxBytes({});
+    try {
+      for (const input of parsed.attachments) files.push(resolveAttachment(workDir, input, maxBytes));
+    } catch (error) {
+      if (error instanceof AttachmentError) throw new ToolError(error.message);
+      throw error;
+    }
+  }
   // An informational type (notifyTypes in myhq.json) is born 'unseen': the app
   // sends it to Telegram in full and the desk keeps it under « À regarder »
   // until the user marks it seen. It never waits for a decision, never
@@ -271,13 +309,14 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
     ctx.home !== undefined &&
     readNotifyTypes(ctx.home).includes(parsed.type);
   const at = now();
-  const result = db
-    .prepare(
-      `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
+  const insert = db.prepare(
+    `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
          decided_at, seen_by_agent_at, for_room, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  );
+  // The item and the copies of its files are one: a failed copy leaves neither.
+  const approvalId = db.transaction(() => {
+    const result = insert.run(
       ctx.room,
       ctx.agentId,
       ctx.runId,
@@ -292,8 +331,14 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       forRoom,
       at,
     );
+    const id = Number(result.lastInsertRowid);
+    // MyHQ keeps its database in the data directory of the home.
+    storeAttachments(db, path.dirname(path.resolve(ctx.dbPath)), id, files);
+    return id;
+  })();
   return {
-    approvalId: Number(result.lastInsertRowid),
+    approvalId,
+    ...(files.length > 0 ? { files: files.length } : {}),
     status: informational ? ("unseen" as const) : ("pending" as const),
   };
 }

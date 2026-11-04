@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { AnnotatedBody } from "./annotated-body";
 import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
+import { Attachments } from "./attachments";
 import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
 import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
@@ -158,7 +159,11 @@ function DeskItem({
   );
 }
 
-/** The body, with its remarks: editable while the item is pending (`onAnnotations`), read-only after. */
+/**
+ * The files joined to the item, then the body, with its remarks: editable while
+ * the item is pending (`onAnnotations`), read-only after. A remark made on a
+ * video or a sound at a given time joins the remarks of the body.
+ */
 function ApprovalContent({
   approval,
   showControls = true,
@@ -172,6 +177,9 @@ function ApprovalContent({
 }) {
   return (
     <>
+      {approval.files && approval.files.length > 0 && (
+        <Attachments files={approval.files} annotations={annotations} onAnnotations={onAnnotations} />
+      )}
       {approval.body.trim() === "" ? (
         <p className="text-sm text-muted">{strings.desk.emptyBody}</p>
       ) : (

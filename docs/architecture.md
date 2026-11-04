@@ -33,7 +33,8 @@ is built from the room and role definition in the home directory:
 
 The process starts in the agent's own working directory and receives the run
 context through environment variables (`HQ_DB_PATH`, `HQ_RUN_ID`,
-`HQ_AGENT_ID`, `HQ_ROOM`); the app's own variables, Telegram token included,
+`HQ_AGENT_ID`, `HQ_ROOM`, and `HQ_WORK_DIR`, the working directory that
+`hq_submit` reads attachments from); the app's own variables, Telegram token included,
 are never passed on. The one exception is `HQ_CLAUDE_OAUTH_TOKEN`: when set,
 it becomes the process's `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token from
 `claude setup-token`, to run unattended on a subscription). Tool search is
@@ -104,7 +105,7 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). |
-| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). `forRoom`: a shared room's delivery to the room that ordered it. |
+| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -333,6 +334,49 @@ example an MCP server of the home that reads `data/hq.db` (through the
 `${HQ_DB_PATH}` placeholder), checks that the item is approved and sends it.
 MyHQ never acts on the item itself. When the run fails, the item stays
 `approved` and the task goes back to the mailbox for the agent's next run.
+
+#### Files joined to an item
+
+An agent that delivers a render (a video, an image, a sound, a 3D part, a PDF)
+joins it to its item: `hq_submit` takes `attachments: [{ path, caption? }]`
+(at most 10), so that the owner validates the render itself from the desk or
+his phone, not a description of it.
+
+- **Checked before anything is written** (`src/server/attachments.ts`): a path
+  relative to the agent's working directory (`HQ_WORK_DIR`, its worktree when
+  it has one). An absolute path (POSIX, drive letter or UNC), a `..` segment,
+  or a link that leads out once resolved (`realpath` of the file outside the
+  `realpath` of the directory) is refused, as is a missing file, an empty one,
+  an extension outside the list (mp4, webm, mov; png, jpg, jpeg, webp, gif;
+  wav, mp3, ogg, flac, m4a; 3mf, stl, glb; pdf) and a file above the cap
+  (`HQ_ATTACHMENT_MAX_MB`, 200 MB by default). The error tells the agent what
+  to do (copy a render made elsewhere into its directory first), within the
+  same run.
+- **Copied at submission.** Each file is copied to
+  `<home>/data/attachments/<approvalId>/<fileId><ext>` in one pass that also
+  computes its sha256, inside the transaction that inserts the item: a failed
+  copy leaves neither item nor files. What the owner validates no longer
+  changes when the agent touches its file again. The name on disk is built
+  from integers and the whitelisted extension; the original name, the MIME
+  type (from the extension), the size, the sha256 and the caption are in
+  `approval_files` (migration 13, no foreign key so that a rebuild of
+  `approvals` never cascades onto it).
+- **Served by id.** `GET /api/approvals/<id>/files/<fileId>` looks the file up
+  by both ids and serves the copy with its MIME type and range requests (206),
+  which Safari on iOS needs to play and seek in a video. No path from the
+  request reaches the disk. The approval shape lists the files (`files`).
+- **On the desk** (`src/ui/attachments.tsx`, drawn by the item card, so on
+  every pending and history item): above the body, a video player
+  (`controls`, `playsInline`, `preload="metadata"`), an image that opens in
+  full in a dialog, an audio player, and a download link for a 3D part or a
+  PDF, with its preview when the agent joined an image of the same name
+  (`piece.png` for `piece.3mf`; that image is then not shown on its own).
+  Under a video or a sound, « Annoter à cet instant » pauses the player and
+  opens the remark box of the annotations with the quote « <file> à <time> »
+  (« clip-01.mp4 à 0:12 »). The remark joins the others (no `position`, so it
+  comes after the remarks on the text) and a revision sends it to the agent
+  in the numbered list, as any remark.
+- **On Telegram**, see section 5.
 
 ### Messages between agents
 
@@ -879,6 +923,19 @@ item (pending or history; an « À regarder » item sits above the tabs), unfold
 scrolled into view and ringed for a moment;
 a run scrolls the feed to its start. An unknown id is ignored. Unset, nothing
 changes.
+
+**Files on Telegram.** The alert of a pending item with files lists their
+names (« Fichiers joints : clip-01.mp4, cover.png ») and carries the first
+file, in the agent's order, that a bot may upload (`src/server/telegram-media.ts`):
+a video up to 50 MB with `sendVideo`, an image up to 10 MB with `sendPhoto`,
+a sound up to 50 MB with `sendAudio`. The alert text becomes the caption (cut
+at 1024 characters) and keeps its buttons; pressing one edits the caption
+(`editMessageCaption`) instead of the text. A video above 50 MB gets a JPEG
+thumbnail (`sendPhoto`) when `HQ_FFMPEG_BIN` names an ffmpeg binary
+(optional, unset by default for portability; the thumbnail is kept next to
+the copy). Otherwise, or when Telegram refuses the upload, the alert is the
+text as before, with its link to the item when `HQ_PUBLIC_URL` is set. A 3D
+part or a PDF alone stays text. Informational items are sent as before.
 
 Voice notes and audio files are downloaded to `<home>/data/assistant/voice/`,
 transcribed by the home's `transcribe` command, deleted, then handled as text.

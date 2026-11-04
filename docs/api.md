@@ -20,6 +20,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_NOT_FOUND` | 404 | No `rooms/<room>/` in the home. |
 | `AGENT_NOT_FOUND` | 404 | The room has no such agent. |
 | `APPROVAL_NOT_FOUND` | 404 | No approval with this id. |
+| `FILE_NOT_FOUND` | 404 | `GET /api/approvals/<id>/files/<fileId>`: the item has no such file, or its copy is gone. |
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
@@ -151,6 +152,7 @@ see `architecture.md`, "Shared rooms"), `null` otherwise.
   "actionDone": false,
   "informational": false,
   "forRoom": null,
+  "files": [],
   "decidedAt": null,
   "createdAt": "2026-11-02T16:18:11.483Z"
 }
@@ -185,6 +187,18 @@ belongs to that room's pile: the desk shows it with that room's colour and as
 `GET /api/desk` take that colour, and a view that groups items by room uses
 `forRoom ?? room`. `room` and `agentId` stay the producing agent's: its
 decisions, a revise included, go back to that agent.
+
+`files` are the files the agent joined with `hq_submit` `attachments`, in its
+order (empty for an item without any), each:
+
+```json
+{ "id": 4, "name": "clip-01.mp4", "mime": "video/mp4", "kind": "video", "size": 625593,
+  "sha256": "9f2c...", "caption": "Plan d'ouverture", "url": "/api/approvals/1/files/4" }
+```
+
+`kind` is `video`, `image`, `audio`, `model` (3mf, stl, glb) or `pdf`. `size`
+and `sha256` are those of the copy MyHQ made at submission, which `url` serves
+(see `GET /api/approvals/[id]/files/[fileId]`).
 
 Payloads the interface and the assistant act on:
 
@@ -657,6 +671,27 @@ chat did not answer (budget, timeout, error), `ok` is `false`, `reply` says why 
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `APPROVAL_NOT_FOUND` (404),
 `APPROVAL_NOT_WATCHABLE` (409, the item is not `unseen`), `CHAT_NOT_CONFIGURED` (404).
+
+### `GET /api/approvals/[id]/files/[fileId]`
+
+A file joined to an item, served from the copy MyHQ made when the item was
+submitted (`<home>/data/attachments/<id>/`). The file is looked up by both ids
+in the database; nothing of the request is used as a path. `HEAD` works the
+same, without the body.
+
+- `Content-Type`: the MIME type of the file (from its extension, checked at
+  submission), `X-Content-Type-Options: nosniff`.
+- `Content-Disposition`: `inline` with the original name, `attachment` with
+  `?download=1` (the desk uses it for 3D parts).
+- `Accept-Ranges: bytes`. A `Range: bytes=<start>-<end>` (or `<start>-`, or a
+  suffix `-<n>`) gets `206 Partial Content` with `Content-Range`; only the first
+  range of a list is served. A range that starts past the end gets `416` with
+  `Content-Range: bytes */<size>`. A malformed `Range` gets the whole file
+  (`200`). Players need this, Safari on iOS first of all, to play and seek.
+- `ETag`: the sha256 of the copy, which never changes (`304` on
+  `If-None-Match`), and `Cache-Control: private, max-age=31536000, immutable`.
+
+Errors: `INVALID_INPUT` (an id that is not a positive integer), `FILE_NOT_FOUND` (404).
 
 ### `GET /api/usage`
 

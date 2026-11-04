@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { approvalKeyboard, seenKeyboard } from "../assistant/approval-buttons";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { appendLine, approvalLinkLine, withLine } from "./public-url";
+import { telegramMediaFor, type TelegramMedia } from "./telegram-media";
 import { strings } from "../ui/strings";
 import type { Env } from "./config";
 import type { Db } from "./db";
@@ -15,10 +18,43 @@ export type SendOptions = {
   approvalId?: number;
   /** The alert is about this informational item (« À regarder »): it gets the one « Vu » button. */
   seenId?: number;
+  /** A file the alert carries (a video, a photo, a sound), the text becoming its caption. */
+  media?: TelegramMedia;
 };
 
 /** Sends an alert. Resolves to false when nothing was sent; never throws. */
 export type Send = (text: string, options?: SendOptions) => Promise<boolean>;
+
+/** Longest caption of a photo, a video or a sound for the Bot API. */
+const CAPTION_LIMIT = 1024;
+
+/** The form field of each media method. */
+const MEDIA_FIELD = { sendVideo: "video", sendPhoto: "photo", sendAudio: "audio" } as const;
+
+/** Uploads a file with its caption and buttons (multipart). Resolves to whether Telegram took it. */
+async function sendMedia(
+  url: string,
+  chatId: string,
+  text: string,
+  media: TelegramMedia,
+  keyboard: unknown,
+  fetchImpl: Fetch,
+): Promise<boolean> {
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  form.set("caption", text.slice(0, CAPTION_LIMIT));
+  if (keyboard) form.set("reply_markup", JSON.stringify(keyboard));
+  if (media.method === "sendVideo") form.set("supports_streaming", "true");
+  const bytes = fs.readFileSync(media.file);
+  form.set(MEDIA_FIELD[media.method], new Blob([new Uint8Array(bytes)], { type: media.mime }), media.name);
+  const response = await fetchImpl(`${url}/${media.method}`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) console.warn(`[notify] Telegram ${media.method} answered HTTP ${response.status}`);
+  return response.ok;
+}
 
 /**
  * Sends a plain text Telegram message through the Bot API. A pending-approval
@@ -26,6 +62,9 @@ export type Send = (text: string, options?: SendOptions) => Promise<boolean>;
  * single « Vu » button, but only when MyHQ reads the bot's updates
  * (HQ_TELEGRAM_POLLING=true): otherwise nobody would receive the button presses. Does nothing when HQ_TELEGRAM_BOT_TOKEN or
  * HQ_TELEGRAM_CHAT_ID is missing, and never throws. The token is never logged.
+ * With `media`, the file goes with `sendVideo`, `sendPhoto` or `sendAudio`
+ * and the text as its caption (cut at 1024 characters), buttons included; when
+ * Telegram refuses the upload, the text is sent alone as usual.
  */
 export async function notify(
   text: string,
@@ -45,6 +84,13 @@ export async function notify(
         ? seenKeyboard(options.seenId)
         : null;
   try {
+    if (options.media) {
+      try {
+        if (await sendMedia(`${apiBase}/bot${token}`, chatId, text, options.media, keyboard, fetchImpl)) return true;
+      } catch (error) {
+        console.warn(`[notify] Telegram upload failed (${error instanceof Error ? error.name : "unknown error"})`);
+      }
+    }
     const response = await fetchImpl(`${apiBase}/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -80,7 +126,9 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
  * alert line then its body as is, cut in messages of 4000 characters, with a
  * single « Vu » button on the last one when it is still unseen. When
  * HQ_PUBLIC_URL is set (read from `env`), each one ends with the line
- * « Ouvrir : <url>/#approval-<id> ».
+ * « Ouvrir : <url>/#approval-<id> ». A pending item with files lists them, and
+ * its alert carries the first video, image or sound Telegram takes (see
+ * telegram-media.ts); otherwise it stays text, with its link.
  */
 export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env: Env = process.env): Promise<void> {
   const rows = db
@@ -102,14 +150,22 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env
     agent: string;
   }[];
   const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
+  const filesOf = db.prepare("SELECT id, name, mime, size FROM approval_files WHERE approval_id = ? ORDER BY id");
+  // MyHQ keeps the copies of the files in the data directory, next to the database.
+  const dataDir = path.dirname(db.name);
   for (const found of rows) {
     // Marked first so that two concurrent sweeps never send the same item twice.
     if (mark.run(new Date().toISOString(), found.id).changes === 0) continue;
     // A delivery of a shared room says where it goes: « creation pour planygo ».
     const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
     if (row.status === "pending") {
-      const text = withLine(strings.notify.approvalPending(row), approvalLinkLine(row.id, env));
-      if (await send(text, { approvalId: row.id })) recordBotMessage(db, text, "alert");
+      const files = filesOf.all(row.id) as { id: number; name: string; mime: string; size: number }[];
+      const head = strings.notify.approvalPending(row);
+      const listed = files.length > 0 ? `${head}
+${strings.attachments.telegramLine(files.map((file) => file.name))}` : head;
+      const text = withLine(listed, approvalLinkLine(row.id, env));
+      const media = files.length > 0 ? await telegramMediaFor(dataDir, row.id, files, env) : null;
+      if (await send(text, { approvalId: row.id, ...(media ? { media } : {}) })) recordBotMessage(db, text, "alert");
       continue;
     }
     const link = approvalLinkLine(row.id, env);

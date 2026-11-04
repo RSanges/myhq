@@ -30,7 +30,7 @@ export const callbackQuerySchema = z.looseObject({
   id: z.string().min(1),
   from: userSchema,
   message: z
-    .looseObject({ message_id: z.number().int(), chat: chatSchema, text: z.string().optional() })
+    .looseObject({ message_id: z.number().int(), chat: chatSchema, text: z.string().optional(), caption: z.string().optional() })
     .optional(),
   data: z.string().optional(),
 });
@@ -163,6 +163,15 @@ export class Telegram {
     await this.call(
       "editMessageText",
       { chat_id: chatId, message_id: messageId, text, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) },
+      z.unknown(),
+    );
+  }
+
+  /** Replaces the caption of a photo, a video or a sound; without `replyMarkup`, its buttons go away. */
+  async editMessageCaption(chatId: string, messageId: number, caption: string, replyMarkup?: InlineKeyboard): Promise<void> {
+    await this.call(
+      "editMessageCaption",
+      { chat_id: chatId, message_id: messageId, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) },
       z.unknown(),
     );
   }

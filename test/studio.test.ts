@@ -127,6 +127,9 @@ test("migration 12: a database of version 11 keeps its rows and gets the new col
     ALTER TABLE approvals DROP COLUMN for_room;
     ALTER TABLE runs DROP COLUMN resources;
     DELETE FROM schema_migrations WHERE version = 12;
+    -- The later migrations, forgotten too.
+    DROP TABLE approval_files;
+    DELETE FROM schema_migrations WHERE version > 12;
   `);
   db.close();
 

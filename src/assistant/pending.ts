@@ -6,7 +6,7 @@ export type DecisionQuestion = {
   decision: "rejected" | "revise";
   approvalId: number;
   /** The alert whose buttons were pressed, edited once the decision is taken. */
-  alert: { messageId: number; text: string } | null;
+  alert: { messageId: number; text: string; media?: boolean } | null;
 };
 
 /** Actions of a chat turn that read untrusted content, held until the user says yes. */

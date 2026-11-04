@@ -485,7 +485,10 @@ export class Assistant {
   ): Promise<void> {
     if (!alert) return;
     try {
-      await this.deps.telegram.editMessageText(this.deps.chatId, alert.messageId, format(alert.text, label));
+      // An alert that carries a file (a video, a photo, a sound) has a caption, not a text.
+      const text = format(alert.text, label);
+      if (alert.media) await this.deps.telegram.editMessageCaption(this.deps.chatId, alert.messageId, text.slice(0, 1024));
+      else await this.deps.telegram.editMessageText(this.deps.chatId, alert.messageId, text);
     } catch (error) {
       this.log(`alert not updated: ${describe(error)}`);
     }
@@ -505,7 +508,12 @@ export class Assistant {
       await tg.answerCallbackQuery(query.id);
       return;
     }
-    const alert = query.message ? { messageId: query.message.message_id, text: query.message.text ?? "" } : null;
+    const message = query.message;
+    const alert = message
+      ? message.text === undefined && message.caption !== undefined
+        ? { messageId: message.message_id, text: message.caption, media: true }
+        : { messageId: message.message_id, text: message.text ?? "" }
+      : null;
     const row = this.deps.db.prepare("SELECT status FROM approvals WHERE id = ?").get(button.approvalId) as
       | { status: keyof typeof strings.desk.decision }
       | undefined;

@@ -22,6 +22,7 @@ repository of its own.
     work/<room>/<agent>/ default working directory of each agent
     worktrees/<room>/<agent>/  Git worktrees (by convention, see `worktree`)
     runs/                raw output and MCP config of each run
+    attachments/<id>/    copies of the files joined to item <id> (hq_submit attachments)
     scheduler.lock       the process that runs the routines of this home
     assistant/           offset.txt, bridge.lock, voice/ (temporary audio)
 ```
@@ -386,6 +387,28 @@ agent may claim), `{{autonomy}}` (A: inside the repository or the project's
 accounts; B: prepared, then signed and posted by the user; C: the user alone,
 the agent prepares notes) and `{{guardrails}}`. A role written by hand does not
 have to follow them.
+
+A role that delivers renders (video, image, sound, 3D part, PDF) should tell
+the agent to join them to its item with `hq_submit` `attachments`, so that the
+owner sees and plays them on the desk and on Telegram:
+
+```json
+{ "attachments": [
+  { "path": "livraisons/planygo/teaser/clip-01.mp4", "caption": "Plan d'ouverture, 6 s" },
+  { "path": "livraisons/planygo/teaser/piece.3mf" },
+  { "path": "livraisons/planygo/teaser/piece.png", "caption": "Aperçu de la pièce" }
+] }
+```
+
+Paths are relative to the agent's working directory (its worktree when it has
+one) and may not leave it: a render written elsewhere (the output folder of
+ComfyUI, an `addDirs` folder) is copied into the working directory first,
+which needs a copy tool in the agent's whitelist (`Bash(cp *)`, or `Write`).
+Accepted: mp4, webm, mov, png, jpg, jpeg, webp, gif, wav, mp3, ogg, flac, m4a,
+3mf, stl, glb, pdf, each up to `HQ_ATTACHMENT_MAX_MB` (200 MB by default). An
+image with the same name as a 3D part or a PDF is shown as its preview. MyHQ
+keeps its own copy (`data/attachments/`), so the agent may go on working on
+its file. See `architecture.md`, "Files joined to an item".
 
 An approved `agent_proposal` (`architecture.md`, "Proposing a missing agent")
 is the other way MyHQ writes in a room: it adds `roles/<id>.md` (the role

@@ -438,11 +438,15 @@ async function execute(p: ExecuteParams): Promise<void> {
   const logFile = path.join(config.runsDir, `${run.id}.jsonl`);
   const mcpConfigPath = path.join(config.runsDir, `${run.id}.mcp.json`);
   active.mcpConfigPath = mcpConfigPath;
-  const hqEnv = {
+  const attachmentMaxMb = process.env.HQ_ATTACHMENT_MAX_MB?.trim();
+  const hqEnv: Record<string, string> = {
     HQ_DB_PATH: config.dbPath,
     HQ_RUN_ID: String(run.id),
     HQ_AGENT_ID: agent.id,
     HQ_ROOM: room.name,
+    // hq_submit reads the attachments relative to it, and refuses anything outside.
+    HQ_WORK_DIR: agent.workDir,
+    ...(attachmentMaxMb ? { HQ_ATTACHMENT_MAX_MB: attachmentMaxMb } : {}),
   };
 
   let end: Extract<RunEvent, { type: "end" }> | null = null;
