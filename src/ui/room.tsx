@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
+import { neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
 import { selectAgents } from "./model";
 import { RECEPTION_KEY } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
@@ -19,9 +20,6 @@ import { useHq } from "./use-hq";
 import { useMediaQuery } from "./use-media-query";
 
 const t = strings.room;
-
-/** The receptionist's sheet shipped in public/ (a home may replace it: `onboarding.sprite`). */
-const RECEPTIONIST_SHEET = "/sprites/receptionist.png";
 
 /** The wording of what an agent is doing; the receptionist is at its desk, not at a table. */
 export function statusText(status: AgentStatus, receptionist = false): string {
@@ -104,7 +102,6 @@ export function RoomPage() {
   const selected = roomAgents.find((agent) => agent.key === selectedKey) ?? null;
   // The reception desk is drawn on one floor of the home only (reception.room of myhq.json).
   const receptionHere = model.reception.room !== null && model.reception.room === room;
-  const receptionSprite = model.reception.sprite ?? RECEPTIONIST_SHEET;
   const roomColor = chipStyle(room === null ? null : roomColors.get(room))?.["--room-color"] ?? null;
   const closeSheet = useCallback(() => setSelectedKey(null), []);
 
@@ -124,10 +121,11 @@ export function RoomPage() {
   const boardForCanvas = useMemo(() => ({ title: t.board.title, rows: board }), [board]);
   const sprites = useMemo(
     () => ({
-      ...Object.fromEntries(roomAgents.map((agent) => [agent.key, agent.sprite])),
-      ...(receptionHere ? { [RECEPTION_KEY]: receptionSprite } : {}),
+      // An agent's own iso sheet (`isoSprite`), or a neutral person picked from its key.
+      ...Object.fromEntries(roomAgents.map((agent) => [agent.key, agent.isoSprite ?? neutralPersonFor(agent.key)])),
+      ...(receptionHere ? { [RECEPTION_KEY]: RECEPTIONIST_SHEET } : {}),
     }),
-    [roomAgents, receptionHere, receptionSprite],
+    [roomAgents, receptionHere],
   );
   const statusOf = useMemo(
     () => new Map(snapshot?.view.agents.map((agent) => [agent.key, agent]) ?? []),
@@ -221,7 +219,7 @@ export function RoomPage() {
                     store={store}
                     room={room}
                     board={boardForCanvas}
-                    labels={{ userDesk: t.userDesk, tray: t.tray }}
+                    labels={{ userDesk: t.userDesk, trayCount: t.trayCount }}
                     sprites={sprites}
                     color={roomColor}
                     selected={selectedKey}

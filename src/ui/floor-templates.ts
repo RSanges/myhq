@@ -1,307 +1,288 @@
-// The floor plans: a few hand-designed templates by size, as plain data. Each
-// one is a small agency's floor with every room placed and sized by hand (one
-// agent per desk, offices sized to their desk, a corridor that loops, a meeting
-// room, an open kitchen, a lounge, a lobby with the "to approve" tray, the
-// user's own office). room-layout.ts turns a template into the layout the
-// room view draws and the agents walk in; this file can be refined without
-// touching the renderer or the model.
+// The floor plans: a few hand-designed templates by size, as plain data, in
+// floor cells of the isometric floor set (public/iso/floor, see
+// scripts/iso/README.md). Each one is a small agency's floor made of cutaway
+// rooms (back walls at full height, a low rim in front): a lobby with the
+// user's own desk, the "to approve" tray and the reception counter, one or two
+// offices of agents, a meeting room with its whiteboard and a kitchen. A wooden
+// hall joins the rooms; agents walk along its lanes and the aisles of the rooms
+// (axis-aligned lines through cell centres). room-layout.ts turns a template
+// into the layout the floor draws and the agents walk in.
 //
-// World units: one unit is one pixel at a scale of 1. Rows of offices are 72
-// deep, corridors 34 wide, a desk is 38 by 15 (the character sits behind it).
-// A door is a gap in a wall, given by the wall it is in and its coordinate
-// along that wall. Agents fill the desks in order, room after room.
+// Cells: x towards the lower right of the screen, y towards the lower left. A
+// back wall stands along the -x and -y edges of a room and hides about four
+// cells behind it, so a room sits either beside another one (to its +x and
+// entirely behind it on y, a step of the staircase) or four cells away from
+// its back walls: no room ever hides another, and no lane runs behind a wall
+// (checked by the tests). Agents fill the desks in order, room after room.
 
-export type Point = { x: number; y: number };
-export type Rect = { x: number; y: number; w: number; h: number };
-export type Side = "top" | "bottom" | "left" | "right";
+export type Cell = [number, number];
+export type CellRect = { x: number; y: number; w: number; d: number };
+export type WallKind = "plain" | "window" | "door";
+export type TileKind = "carpet-room" | "tiles-room";
+export type Direction = "NE" | "SE" | "SW" | "NW";
+export type RoomKind = "lobby" | "office" | "meeting" | "kitchen";
 
-export type ItemTone = "wood" | "dark" | "soft" | "paper" | "chair" | "green" | "leaf";
+/** A piece of furniture of the floor set (`furniture` of floor.json), its turn and its first cell in the room. */
+export type PieceSpec = { name: string; turn: 0 | 1 | 2 | 3; at: Cell };
 
-export type Item =
-  | { t: "box"; x: number; y: number; w: number; h: number; tone: ItemTone; r?: number }
-  | { t: "disc"; x: number; y: number; r: number; tone: ItemTone };
-
-export type RoomKind = "office" | "meeting" | "kitchen" | "lounge" | "closet" | "user";
+/** A desk of an agent: a workstation, its chair (from floor.json) and the aisle cell next to the chair. */
+export type DeskSpec = { turn: 0 | 1; at: Cell; stand: Cell };
 
 export type RoomSpec = {
   kind: RoomKind;
-  rect: Rect;
-  door: { wall: Side; at: number; w?: number };
-  /** Walls left out: the room is open on that side (a kitchen onto the corridor). */
-  open?: Side[];
-  /** Desks of agents: how many (placed along the wall opposite the door), or hand-placed rectangles. */
-  desks?: number | Rect[];
-  items?: Item[];
-  /** The whiteboard of a meeting room. */
-  board?: Rect;
-  /** The coffee machine of a kitchen. */
-  machine?: Rect;
-  /** The user's desk, chair and monitor (the user's office only). */
-  userDesk?: { desk: Rect; chair: Point; monitor: Rect };
+  /** Position and size in cells. */
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  /** Carpet or tiles, tinted with the colour of the room. */
+  floor: TileKind;
+  /** The back walls, one kind per cell: along -y (w cells, left to right on x) and along -x (d cells). */
+  back: { y: WallKind[]; x: WallKind[] };
+  /** Openings in the front rim: cells along +y (by x) and along +x (by y) where the rim is left out. */
+  open: { y?: number[]; x?: number[] };
+  pieces: PieceSpec[];
+  desks?: DeskSpec[];
+  /** Walkable lines inside the room, in room cells, one of them leaving through an opening onto a hall lane. */
+  aisles?: Cell[][];
+  /** The lobby: the user's desk, the tray where agents drop folders, the reception counter. */
+  lobby?: {
+    user: DeskSpec;
+    /** The filing cabinet that holds the "to approve" tray, and where an agent stands to drop a folder. */
+    tray: { at: Cell; stand: Cell };
+    /** The reception counter (drawn on one floor of the home), where the receptionist stands behind it, and the aisle cell it leaves by. */
+    reception: { at: Cell; staff: Cell; stand: Cell };
+    /** What stands where the counter is, on the floors that do not have one. */
+    instead: PieceSpec[];
+  };
 };
-
-/**
- * The reception desk of the lobby: the counter (visitors on its south side),
- * where the receptionist's feet are when seated behind it (inside the counter's
- * rectangle, like an office desk), and the point of a corridor in front of it
- * where the receptionist joins the corridors.
- */
-export type ReceptionSpec = { counter: Rect; seat: Point; outside: Point };
 
 export type FloorTemplate = {
   id: "small" | "medium" | "large";
-  width: number;
-  height: number;
-  /** The envelope of the building. */
-  outline: Point[];
   rooms: RoomSpec[];
-  /** Center lines of the corridors: every door joins the nearest one, agents walk along them. */
-  corridors: Point[][];
-  /** Window bands along the outer walls. */
-  windows: [Point, Point][];
-  /**
-   * The lobby next to the user's office: the console with the "to approve"
-   * tray, where an agent stands to drop a folder, and the reception desk (drawn
-   * on the one floor of the home that has the receptionist, see reception.ts).
-   */
-  lobby: { tray: Rect; console: Rect; stand: Point; items: Item[]; reception: ReceptionSpec };
+  /** The wooden hall around the rooms, in cells. */
+  hall: CellRect[];
+  /** Lanes of the hall, absolute cells: every opening's aisle ends on one. */
+  lanes: Cell[][];
 };
 
-// ---- Small builders for furniture --------------------------------------------------------
+// ---- Rooms -----------------------------------------------------------------------------------
 
-const box = (x: number, y: number, w: number, h: number, tone: ItemTone, r = 2): Item => ({ t: "box", x, y, w, h, tone, r });
-const disc = (x: number, y: number, r: number, tone: ItemTone): Item => ({ t: "disc", x, y, r, tone });
-const plant = (x: number, y: number): Item[] => [disc(x, y, 6, "green"), disc(x + 2, y - 2, 3.4, "leaf")];
-const shelf = (x: number, y: number, w = 26): Item => box(x, y, w, 7, "wood", 1);
-const sofa = (x: number, y: number, w = 40): Item => box(x, y, w, 15, "soft", 4);
-const table = (x: number, y: number, r = 12): Item[] => [disc(x, y, r, "wood"), disc(x - r - 6, y, 4.5, "chair"), disc(x + r + 6, y, 4.5, "chair")];
+const piece = (name: string, turn: 0 | 1, at: Cell): PieceSpec => ({ name, turn, at });
 
-type Decor = { plant?: "left" | "right"; shelf?: "left" | "right"; sofa?: boolean };
-
-/** An office on a corridor: the desks go on the wall opposite its door, the rest of the room is decorated. */
-function office(rect: Rect, wall: "top" | "bottom", at: number, desks: number, decor: Decor = {}): RoomSpec {
-  // The door side is the one the decoration leans on; the desks are on the other.
-  const edge = wall === "bottom" ? rect.y + rect.h - 9 : rect.y + 3;
-  const corner = wall === "bottom" ? rect.y + rect.h - 12 : rect.y + 12;
-  const items: Item[] = [];
-  if (decor.plant) items.push(...plant(decor.plant === "left" ? rect.x + 10 : rect.x + rect.w - 10, corner));
-  if (decor.shelf) items.push(shelf(decor.shelf === "left" ? rect.x + 5 : rect.x + rect.w - 31, edge));
-  if (decor.sofa) items.push(sofa(rect.x + rect.w - 48, wall === "bottom" ? rect.y + 8 : rect.y + rect.h - 23, 40));
-  return { kind: "office", rect, door: { wall, at }, desks, items };
+/** The lobby: the user's desk at the back, a bookshelf, the tray, a sofa; the counter in the middle. 7 by 6. */
+function lobby(x: number, y: number): RoomSpec {
+  return {
+    kind: "lobby",
+    x,
+    y,
+    w: 7,
+    d: 6,
+    floor: "tiles-room",
+    back: { y: ["window", "plain", "plain", "window", "plain", "window", "door"], x: ["plain", "window", "plain", "plain", "window", "plain"] },
+    open: { y: [2] },
+    pieces: [
+      piece("bookshelf", 0, [2, 0]),
+      piece("plant-small", 0, [4, 0]),
+      piece("sofa", 1, [0, 3]),
+      piece("water-cooler", 0, [0, 5]),
+      piece("plant-tall", 0, [6, 5]),
+    ],
+    aisles: [
+      [
+        [1, 1],
+        [5, 1],
+      ],
+      [
+        [2, 1],
+        [2, 6],
+      ],
+    ],
+    lobby: {
+      user: { turn: 0, at: [0, 0], stand: [1, 1] },
+      tray: { at: [5, 0], stand: [5, 1] },
+      reception: { at: [3, 3], staff: [4, 2], stand: [4, 1] },
+      instead: [piece("printer", 0, [4, 3]), piece("plant-small", 0, [5, 3])],
+    },
+  };
 }
 
-const lobbyItems = (x0: number, y0: number, x1: number, y1: number): Item[] => [
-  sofa(x0 + 14, y1 - 44, 62),
-  sofa(x1 - 86, y1 - 44, 62),
-  ...plant(x1 - 18, y0 + 30),
-  ...plant(x0 + 14, y1 - 14),
-  ...plant(x1 - 18, y1 - 14),
-  ...table((x0 + x1) / 2 + 6, y1 - 78, 11),
-];
+/** An office of six desks: three along the back wall, two along the side wall, one island. 8 by 7. */
+function office6(x: number, y: number): RoomSpec {
+  return {
+    kind: "office",
+    x,
+    y,
+    w: 8,
+    d: 7,
+    floor: "carpet-room",
+    back: {
+      y: ["plain", "window", "plain", "plain", "window", "plain", "plain", "window"],
+      x: ["plain", "window", "plain", "plain", "window", "plain", "plain"],
+    },
+    open: { y: [6] },
+    pieces: [piece("bookshelf", 0, [6, 0]), piece("plant-tall", 0, [7, 3]), piece("plant-small", 0, [7, 6]), piece("rug", 0, [3, 5])],
+    desks: [
+      { turn: 0, at: [0, 0], stand: [0, 2] },
+      { turn: 0, at: [2, 0], stand: [2, 2] },
+      { turn: 0, at: [4, 0], stand: [4, 2] },
+      { turn: 1, at: [0, 3], stand: [2, 4] },
+      { turn: 0, at: [4, 3], stand: [4, 5] },
+      { turn: 1, at: [0, 5], stand: [2, 6] },
+    ],
+    aisles: [
+      [
+        [0, 2],
+        [6, 2],
+      ],
+      [
+        [2, 2],
+        [2, 6],
+      ],
+      [
+        [2, 5],
+        [6, 5],
+      ],
+      [
+        [6, 2],
+        [6, 7],
+      ],
+    ],
+  };
+}
 
-const kitchen = (x: number, y: number, w: number, h: number): RoomSpec => ({
-  kind: "kitchen",
-  rect: { x, y, w, h },
-  door: { wall: "top", at: x + w / 2, w: w - 20 },
-  open: ["top"],
-  machine: { x: x + 14, y: y + h - 22, w: 20, h: 12 },
-  items: [
-    box(x + 6, y + h - 12, w - 12, 8, "wood", 1),
-    ...table(x + w / 2 + 12, y + h - 50, 12),
-    ...plant(x + w - 12, y + 18),
-  ],
-});
+/** An office of three desks along the back wall, a bookshelf and a rug. 6 by 5. */
+function office3(x: number, y: number): RoomSpec {
+  return {
+    kind: "office",
+    x,
+    y,
+    w: 6,
+    d: 5,
+    floor: "carpet-room",
+    back: { y: ["plain", "window", "plain", "window", "plain", "window"], x: ["plain", "window", "plain", "plain", "plain"] },
+    open: { y: [4] },
+    pieces: [piece("bookshelf", 1, [0, 3]), piece("plant-small", 0, [5, 2]), piece("plant-tall", 0, [5, 4]), piece("rug", 0, [1, 3])],
+    desks: [
+      { turn: 0, at: [0, 0], stand: [0, 2] },
+      { turn: 0, at: [2, 0], stand: [2, 2] },
+      { turn: 0, at: [4, 0], stand: [4, 2] },
+    ],
+    aisles: [
+      [
+        [0, 2],
+        [4, 2],
+      ],
+      [
+        [4, 2],
+        [4, 5],
+      ],
+    ],
+  };
+}
 
-const meeting = (rect: Rect, at: number, board: Rect, tableRect: Rect): RoomSpec => {
-  const chairs: Item[] = [];
-  const count = Math.max(3, Math.floor(tableRect.w / 22));
-  for (let i = 0; i < count; i += 1) {
-    const x = tableRect.x + (tableRect.w * (i + 0.5)) / count;
-    chairs.push(disc(x, tableRect.y - 6, 4.5, "chair"), disc(x, tableRect.y + tableRect.h + 6, 4.5, "chair"));
-  }
+/** The meeting room: the whiteboard, the table and its chairs; with `coffee`, a coffee corner too (the small floor has no kitchen). 7 by 5. */
+function meeting(x: number, y: number, coffee = false): RoomSpec {
   return {
     kind: "meeting",
-    rect,
-    door: { wall: "top", at },
-    board,
-    items: [box(tableRect.x, tableRect.y, tableRect.w, tableRect.h, "wood", 8), ...chairs, ...plant(rect.x + rect.w - 12, rect.y + rect.h - 12)],
+    x,
+    y,
+    w: 7,
+    d: 5,
+    floor: "carpet-room",
+    back: { y: ["plain", "plain", "window", "plain", "plain", "window", "plain"], x: ["plain", "window", "plain", "window", "plain"] },
+    open: { y: [1] },
+    pieces: [
+      piece("whiteboard", 0, [0, 0]),
+      ...(coffee ? [piece("coffee-corner", 0, [3, 0])] : [piece("plant-small", 0, [3, 0])]),
+      piece("water-cooler", 0, [6, 0]),
+      piece("meeting-table", 0, [2, 2]),
+      piece("plant-tall", 0, [6, 4]),
+    ],
   };
-};
+}
 
-const lounge = (rect: Rect, wall: "top" | "bottom", at: number): RoomSpec => ({
-  kind: "lounge",
-  rect,
-  door: { wall, at },
-  items: [sofa(rect.x + 8, wall === "top" ? rect.y + rect.h - 22 : rect.y + 8, 52), ...table(rect.x + rect.w - 38, rect.y + rect.h / 2, 10), ...plant(rect.x + 12, wall === "top" ? rect.y + 14 : rect.y + rect.h - 14)],
-});
-
-const closet = (rect: Rect, wall: "top" | "bottom", at: number): RoomSpec => ({
-  kind: "closet",
-  rect,
-  door: { wall, at },
-  items: [shelf(rect.x + 4, wall === "top" ? rect.y + rect.h - 11 : rect.y + 4, rect.w - 8), box(rect.x + 8, rect.y + rect.h / 2 - 6, rect.w - 16, 10, "paper", 1)],
-});
-
-const userOffice = (rect: Rect, at: number): RoomSpec => {
-  const cx = rect.x + rect.w / 2 - 18;
+/** The kitchen and lounge: the coffee corner, two sofas around a rug. 6 by 5. */
+function kitchen(x: number, y: number): RoomSpec {
   return {
-    kind: "user",
-    rect,
-    door: { wall: "bottom", at },
-    userDesk: {
-      desk: { x: cx - 24, y: rect.y + 26, w: 56, h: 17 },
-      chair: { x: cx + 4, y: rect.y + 20 },
-      monitor: { x: cx + 8, y: rect.y + 30, w: 20, h: 11 },
-    },
-    items: [shelf(rect.x + 6, rect.y + 6, 34), ...plant(rect.x + 14, rect.y + rect.h - 14), ...plant(rect.x + rect.w - 12, rect.y + 14), sofa(rect.x + rect.w - 56, rect.y + rect.h - 24, 44)],
+    kind: "kitchen",
+    x,
+    y,
+    w: 6,
+    d: 5,
+    floor: "tiles-room",
+    back: { y: ["plain", "plain", "window", "plain", "window", "plain"], x: ["plain", "window", "plain", "plain", "door"] },
+    open: { y: [4] },
+    pieces: [
+      piece("coffee-corner", 0, [0, 0]),
+      piece("plant-small", 0, [2, 0]),
+      piece("sofa", 0, [3, 0]),
+      piece("plant-tall", 0, [5, 0]),
+      piece("sofa", 1, [0, 2]),
+      piece("rug", 0, [1, 2]),
+    ],
   };
-};
+}
 
-const rect = (x: number, y: number, w: number, h: number): Rect => ({ x, y, w, h });
-const outlineOf = (x0: number, y0: number, x1: number, y1: number): Point[] => [
-  { x: x0, y: y0 },
-  { x: x1, y: y0 },
-  { x: x1, y: y1 },
-  { x: x0, y: y1 },
-];
-const p = (x: number, y: number): Point => ({ x, y });
+// ---- Templates ------------------------------------------------------------------------------------
+// The back row climbs like a staircase (an office to the +x of the lobby and
+// entirely behind it), so it reads as a row across the screen; a second
+// office follows on the same line, four cells away (that gap is behind its
+// wall). The lanes run along the front of the back row; the front row stands
+// four cells away from them, so its back walls hide no lane.
 
-// ---- Large: 7 to 12 agents ----------------------------------------------------------------
-// Three bands: offices (and the user's office), a corridor, offices, a corridor,
-// then the meeting room, the open kitchen and storage; a lobby on the right
-// joins the two corridors.
+const rect = (x: number, y: number, w: number, d: number): CellRect => ({ x, y, w, d });
 
+/** Large: 7 to 12 agents. Lobby, two offices of six, a meeting room with a coffee corner. */
 const large: FloorTemplate = {
   id: "large",
-  width: 800,
-  height: 352,
-  outline: outlineOf(10, 10, 790, 342),
-  rooms: [
-    office(rect(10, 10, 140, 72), "bottom", 80, 2, { plant: "left", shelf: "right" }),
-    office(rect(150, 10, 76, 72), "bottom", 170, 1, { plant: "right" }),
-    office(rect(226, 10, 140, 72), "bottom", 296, 2, { plant: "left", shelf: "right" }),
-    office(rect(366, 10, 78, 72), "bottom", 386, 1, { shelf: "right" }),
-    office(rect(444, 10, 146, 72), "bottom", 468, 1, { plant: "left", sofa: true }),
-    userOffice(rect(590, 10, 200, 72), 740),
-    office(rect(10, 116, 76, 72), "top", 30, 1, { plant: "right" }),
-    office(rect(86, 116, 140, 72), "top", 156, 2, { plant: "left", shelf: "right" }),
-    office(rect(226, 116, 76, 72), "top", 246, 1, { shelf: "right" }),
-    office(rect(302, 116, 78, 72), "top", 322, 1, { plant: "right" }),
-    lounge(rect(380, 116, 140, 72), "top", 450),
-    closet(rect(520, 116, 70, 72), "top", 540),
-    meeting(rect(10, 222, 280, 120), 262, rect(18, 232, 138, 100), rect(176, 262, 104, 30)),
-    kitchen(290, 222, 150, 120),
-    closet(rect(440, 222, 70, 120), "top", 460),
-    lounge(rect(510, 222, 80, 120), "top", 530),
+  rooms: [lobby(0, 0), office6(9, -7), office6(21, -7), meeting(13, 6, true)],
+  hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 21, 2), rect(9, 2, 11, 4)],
+  lanes: [
+    [
+      [2, 6],
+      [8, 6],
+      [8, 0],
+      [27, 0],
+    ],
   ],
-  corridors: [
-    [p(14, 99), p(612, 99), p(748, 99)],
-    [p(612, 99), p(612, 205), p(612, 330)],
-    [p(14, 205), p(612, 205)],
-  ],
-  windows: [
-    [p(24, 10), p(136, 10)],
-    [p(160, 10), p(216, 10)],
-    [p(240, 10), p(352, 10)],
-    [p(376, 10), p(434, 10)],
-    [p(458, 10), p(580, 10)],
-    [p(604, 10), p(780, 10)],
-    [p(790, 20), p(790, 72)],
-    [p(790, 110), p(790, 330)],
-    [p(606, 342), p(780, 342)],
-  ],
-  lobby: {
-    console: rect(642, 84, 60, 10),
-    tray: rect(648, 85, 36, 9),
-    stand: p(664, 109),
-    items: lobbyItems(590, 82, 790, 342),
-    reception: { counter: rect(700, 130, 56, 13), seat: p(728, 136), outside: p(728, 99) },
-  },
 };
 
-// ---- Medium: 4 to 7 agents ------------------------------------------------------------------
-
+/** Medium: 4 to 6 agents. Lobby, an office of six, meeting room, kitchen. */
 const medium: FloorTemplate = {
   id: "medium",
-  width: 620,
-  height: 352,
-  outline: outlineOf(10, 10, 610, 342),
-  rooms: [
-    office(rect(10, 10, 140, 72), "bottom", 80, 2, { plant: "left", shelf: "right" }),
-    office(rect(150, 10, 76, 72), "bottom", 170, 1, { plant: "right" }),
-    office(rect(226, 10, 124, 72), "bottom", 250, 1, { plant: "left", sofa: true }),
-    lounge(rect(350, 10, 90, 72), "bottom", 370),
-    userOffice(rect(440, 10, 170, 72), 560),
-    office(rect(10, 116, 76, 72), "top", 30, 1, { plant: "right" }),
-    office(rect(86, 116, 140, 72), "top", 156, 2, { plant: "left", shelf: "right" }),
-    lounge(rect(226, 116, 120, 72), "top", 260),
-    closet(rect(346, 116, 94, 72), "top", 366),
-    meeting(rect(10, 222, 250, 120), 236, rect(18, 232, 126, 100), rect(160, 262, 92, 30)),
-    kitchen(260, 222, 130, 120),
-    closet(rect(390, 222, 50, 120), "top", 410),
+  rooms: [lobby(0, 0), office6(9, -7), meeting(13, 6), kitchen(21, -1)],
+  hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 12, 2), rect(9, 2, 12, 4), rect(17, -1, 4, 1)],
+  lanes: [
+    [
+      [2, 6],
+      [8, 6],
+      [8, 0],
+      [15, 0],
+    ],
   ],
-  corridors: [
-    [p(14, 99), p(452, 99), p(568, 99)],
-    [p(452, 99), p(452, 205), p(452, 330)],
-    [p(14, 205), p(452, 205)],
-  ],
-  windows: [
-    [p(24, 10), p(136, 10)],
-    [p(160, 10), p(216, 10)],
-    [p(240, 10), p(340, 10)],
-    [p(364, 10), p(430, 10)],
-    [p(454, 10), p(600, 10)],
-    [p(610, 20), p(610, 72)],
-    [p(610, 110), p(610, 330)],
-    [p(466, 342), p(600, 342)],
-  ],
-  lobby: {
-    console: rect(472, 84, 60, 10),
-    tray: rect(478, 85, 36, 9),
-    stand: p(494, 109),
-    items: lobbyItems(440, 82, 610, 342),
-    reception: { counter: rect(520, 130, 56, 13), seat: p(548, 136), outside: p(548, 99) },
-  },
 };
 
-// ---- Small: 1 to 3 agents ----------------------------------------------------------------------
-
+/** Small: 1 to 3 agents. Lobby, an office of three, a meeting room with a coffee corner. */
 const small: FloorTemplate = {
   id: "small",
-  width: 460,
-  height: 240,
-  outline: outlineOf(10, 10, 450, 230),
-  rooms: [
-    office(rect(10, 10, 140, 72), "bottom", 80, 2, { plant: "left", shelf: "right" }),
-    office(rect(150, 10, 120, 72), "bottom", 174, 1, { plant: "right", sofa: true }),
-    closet(rect(270, 10, 60, 72), "bottom", 290),
-    userOffice(rect(330, 10, 120, 72), 400),
-    meeting(rect(10, 116, 200, 114), 190, rect(16, 124, 116, 98), rect(142, 150, 62, 28)),
-    kitchen(210, 116, 120, 114),
+  rooms: [lobby(0, 0), office3(9, -5), meeting(13, 6, true)],
+  hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 6, 2), rect(9, 2, 5, 4)],
+  lanes: [
+    [
+      [2, 6],
+      [8, 6],
+      [8, 0],
+      [13, 0],
+    ],
   ],
-  corridors: [[p(14, 99), p(340, 99), p(408, 99)]],
-  windows: [
-    [p(24, 10), p(136, 10)],
-    [p(160, 10), p(260, 10)],
-    [p(344, 10), p(440, 10)],
-    [p(450, 20), p(450, 72)],
-    [p(450, 110), p(450, 220)],
-    [p(346, 230), p(440, 230)],
-  ],
-  lobby: {
-    console: rect(346, 84, 52, 10),
-    tray: rect(351, 85, 32, 9),
-    stand: p(367, 109),
-    items: [sofa(344, 196, 54), sofa(400, 196, 40), ...plant(440, 140), ...plant(352, 150)],
-    reception: { counter: rect(366, 130, 52, 13), seat: p(392, 136), outside: p(392, 99) },
-  },
 };
 
 export const FLOOR_TEMPLATES: Record<FloorTemplate["id"], FloorTemplate> = { small, medium, large };
 
 /** How many agents the template seats: one per desk of its offices. */
 export function capacityOf(template: FloorTemplate): number {
-  return template.rooms.reduce((total, room) => total + (typeof room.desks === "number" ? room.desks : (room.desks?.length ?? 0)), 0);
+  return template.rooms.reduce((total, room) => total + (room.desks?.length ?? 0), 0);
 }
 
 /** The smallest template that seats `count` agents (the largest when none does). */

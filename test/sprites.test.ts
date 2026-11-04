@@ -137,3 +137,38 @@ test("/api/state exposes the sprite URL only for a declared sheet that exists", 
   fs.rmSync(path.join(config.home, "rooms/demo/sprites/scout.png"));
   assert.equal(getState(db, loadHome(config.home), scheduler).rooms[0]!.agents[0]!.sprite, null);
 });
+
+test("the iso sheet (isoSprite) is served with ?sheet=iso and exposed in /api/state, next to the old one", async () => {
+  const ISO = Buffer.concat([PNG, Buffer.from("iso")]);
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "x",
+      agents: [
+        { ...agent, sprite: "rooms/demo/sprites/scout.png", isoSprite: "rooms/demo/sprites/iso-scout.png" },
+        { ...agent, id: "writer", name: "Writer", isoSprite: "rooms/demo/sprites/iso-writer.png" },
+      ],
+    },
+  );
+  fs.mkdirSync(path.join(config.home, "rooms/demo/sprites"), { recursive: true });
+  fs.writeFileSync(path.join(config.home, "rooms/demo/sprites/scout.png"), PNG);
+  fs.writeFileSync(path.join(config.home, "rooms/demo/sprites/iso-scout.png"), ISO);
+  const iso = (agentId: string) =>
+    spriteResponse(new Request(`http://localhost/api/sprites/demo/${agentId}?sheet=iso`), config, "demo", agentId, "iso");
+  assert.deepEqual(Buffer.from(await iso("scout").arrayBuffer()), ISO);
+  assert.deepEqual(Buffer.from(await get(config, "demo", "scout").arrayBuffer()), PNG, "the old sheet is still served");
+  assert.equal(code(() => iso("writer")), "SPRITE_NOT_FOUND", "declared but missing");
+
+  const db = getDbAt(config.dbPath);
+  const scheduler = { enabled: false, running: false, timeZone: "Europe/Paris" };
+  const [scout, writer] = getState(db, loadHome(config.home), scheduler).rooms[0]!.agents;
+  assert.equal(scout!.isoSprite, "/api/sprites/demo/scout?sheet=iso");
+  assert.equal(writer!.isoSprite, null);
+});
+
+test("an isoSprite path that leaves the home makes the room invalid", () => {
+  const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [{ ...agent, isoSprite: "../outside.png" }] });
+  assert.equal(loadHome(config.home).rooms.length, 0);
+  assert.match(loadHome(config.home).invalid[0]!.error, /isoSprite/);
+});

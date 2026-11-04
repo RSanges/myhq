@@ -236,6 +236,7 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
     disallowedTools: [],
     maxBudgetUsd: config.onboardingMaxBudgetUsd,
     sprite: null,
+    isoSprite: null,
     onApproval: null,
     onMessage: null,
     onRevise: null,

@@ -2,12 +2,14 @@ import { agentKey, viewEvent } from "./model";
 import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run } from "./schemas";
 import {
+  directionOf,
   layoutRoom,
   officeOf,
   pointOnRoute,
   routeLength,
   routeToOffice,
   routeToUser,
+  type Direction,
   type Office,
   type Point,
   type RoomLayout,
@@ -18,8 +20,9 @@ import {
 // real clock. Time is a number of milliseconds (epoch) that the caller passes
 // in, both when an entity arrives (`applyInput`) and when the room is read
 // (`snapshotRoom`), so a replay in a test runs on a fake clock. Positions are
-// straight lines with a soft ease, there is no path finding. Nothing here is
-// worded for the user: the interface turns `AgentStatus` into French.
+// in voxels of the floor (room-layout.ts), along the axis-aligned routes of
+// the layout, with a soft ease. Nothing here is worded for the user: the
+// interface turns `AgentStatus` into French.
 
 // ---- Durations and speeds (all named, all in milliseconds unless said) ----------
 
@@ -35,8 +38,10 @@ export const DROP_STAY_MS = 2_200;
 export const FOLDER_DROP_MS = 700;
 /** No run for this long: the agent falls asleep. */
 export const ASLEEP_AFTER_MS = 60_000;
-/** Walking speed, in world units per second. */
-export const WALK_SPEED = 110;
+/** Walking speed, in voxels per second (a cell is 16 voxels). */
+export const WALK_SPEED = 48;
+/** Voxels walked per frame of the walk animation (iso-characters.json `walk.voxelsPerFrame`). */
+export const VOXELS_PER_STEP = 3;
 /** The shortest walk leg, so that a neighbour is not reached in a blink. */
 export const MIN_LEG_MS = 500;
 /** With reduced motion, a move is a fade out then a fade in of this length. */
@@ -50,30 +55,40 @@ export const HQ_MESSAGE_TOOL = "mcp__hq__hq_message";
 export const HQ_SUBMIT_TOOL = "mcp__hq__hq_submit";
 export const HQ_TASK_UPDATE_TOOL = "mcp__hq__hq_task_update";
 
-// ---- Poses and sheet rows -------------------------------------------------------
+// ---- Poses and sheet animations ---------------------------------------------------
 
 export type Pose = "sit" | "type" | "walk" | "stand" | "think" | "sleep";
 
+/** Animations of an iso character sheet (docs/home-layout.md): a row per direction and animation. */
+export type Animation = "idle" | "walk" | "type";
+
 /**
- * Rows of the character sheet (docs/home-layout.md): sit and type (2 frames),
- * walk (4), think (2), sleep (2). `ms` is the time of one frame, 0 for a pose
- * held on its first frame (sitting is the first frame of the typing row, and
- * standing the first frame of the walking row).
+ * What each pose draws of the sheet: `type` is seated with the hands on the
+ * keyboard (4 frames), `idle` stands (2 frames), `walk` has 8 frames picked by
+ * the distance walked. `ms` is the time of one frame, 0 for a pose held on its
+ * first frame: sitting, thinking and sleeping are the typing pose held (the
+ * bubble over the head says the rest). A spot without a chair (the
+ * receptionist behind the counter) stands instead of sitting.
  */
-export const POSES: Record<Pose, { row: number; frames: number; ms: number }> = {
-  sit: { row: 0, frames: 1, ms: 0 },
-  type: { row: 0, frames: 2, ms: 260 },
-  walk: { row: 1, frames: 4, ms: 150 },
-  stand: { row: 1, frames: 1, ms: 0 },
-  think: { row: 2, frames: 2, ms: 700 },
-  sleep: { row: 3, frames: 2, ms: 1_100 },
+export const POSES: Record<Pose, { animation: Animation; frames: number; ms: number }> = {
+  sit: { animation: "type", frames: 1, ms: 0 },
+  type: { animation: "type", frames: 4, ms: 150 },
+  walk: { animation: "walk", frames: 8, ms: 0 },
+  stand: { animation: "idle", frames: 2, ms: 600 },
+  think: { animation: "type", frames: 1, ms: 0 },
+  sleep: { animation: "type", frames: 1, ms: 0 },
 };
 
-/** Frame index of a pose at `at`; held on the first frame with reduced motion. */
+/** Frame index of a pose at `at`; held on the first frame with reduced motion. A walk is framed by distance (`walkFrame`). */
 export function poseFrame(pose: Pose, at: number, phase: number, reduced: boolean): number {
   const { frames, ms } = POSES[pose];
   if (reduced || ms === 0 || frames === 1) return 0;
   return Math.floor((at + phase) / ms) % frames;
+}
+
+/** Frame of the walk after `walked` voxels: one frame per step, so the feet stay put on the floor. */
+export function walkFrame(walked: number): number {
+  return Math.floor(walked / VOXELS_PER_STEP) % POSES.walk.frames;
 }
 
 // ---- What the model is fed with ---------------------------------------------------
@@ -103,10 +118,10 @@ type Trip = {
   start: number;
   legMs: number;
   stayMs: number;
-  /** From the seat to where the character stands: through the door, along the corridor, through the other door. */
+  /** From the seat to where the character stands: out of the room by its opening, along the hall, into the other room. */
   path: Point[];
   /** Direction the character faces while it stays. */
-  faceStay: 1 | -1;
+  faceStay: Direction;
   /** The approval this trip carries, once the `approval` event arrived. */
   approvalId: number | null;
 };
@@ -148,8 +163,6 @@ function owns(model: RoomModel, room: string): boolean {
 const tripEnd = (trip: Trip): number => trip.start + trip.legMs * 2 + trip.stayMs;
 /** The moment the folder of a `submit` trip is in the tray. */
 const tripDropAt = (trip: Trip): number => trip.start + trip.legMs + FOLDER_DROP_MS;
-
-const sign = (value: number, fallback: 1 | -1): 1 | -1 => (value > 0.5 ? 1 : value < -0.5 ? -1 : fallback);
 
 function parseTime(iso: string | null): number {
   if (iso === null) return Number.NEGATIVE_INFINITY;
@@ -208,7 +221,7 @@ function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at:
       legMs: walkLeg(path),
       stayMs: VISIT_STAY_MS,
       path,
-      faceStay: sign(target.seat.x - to.x, 1),
+      faceStay: directionOf(target.seat.x - to.x, target.seat.y - to.y),
       approvalId: null,
     },
     at,
@@ -219,8 +232,6 @@ function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRu
   const self = officeOf(model.layout, agent.key);
   if (!self) return agent;
   const path = routeToUser(model.layout, self);
-  const to = path[path.length - 1]!;
-  const desk = model.layout.user.desk;
   return withTrip(
     agent,
     {
@@ -229,7 +240,7 @@ function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRu
       legMs: walkLeg(path),
       stayMs: DROP_STAY_MS,
       path,
-      faceStay: sign(desk.x + desk.w / 2 - to.x, 1),
+      faceStay: model.layout.user.faces,
       approvalId: null,
     },
     at,
@@ -409,18 +420,19 @@ export type AgentView = {
   key: string;
   id: string;
   name: string;
-  /** Position in the room: the order of the desks, which also picks the tint. */
+  /** Position in the room: the order of the desks. */
   index: number;
+  /** Where the feet are, in voxels of the floor. */
   x: number;
   y: number;
-  facing: 1 | -1;
+  direction: Direction;
   /** 1 normally, less during the fade of a reduced-motion move. */
   alpha: number;
   pose: Pose;
-  /** Row of the character sheet, and frame in it. */
-  row: number;
+  /** Animation of the character sheet, and frame in it. */
+  animation: Animation;
   frame: number;
-  /** At its desk (drawn behind the desk) rather than walking around (drawn on top). */
+  /** At its desk (drawn in its chair, or at its spot behind the counter) rather than walking around. */
   seated: boolean;
   carrying: boolean;
   bubble: Bubble | null;
@@ -447,7 +459,9 @@ const ease = (value: number): number => {
 type TripPose = {
   x: number;
   y: number;
-  facing: 1 | -1;
+  direction: Direction;
+  /** Voxels walked on the current leg (0 while staying). */
+  walked: number;
   alpha: number;
   stage: "out" | "stay" | "back";
   carrying: boolean;
@@ -460,8 +474,8 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
   const back = trip.path.slice().reverse();
   const leg = (progress: number, route: Point[]) => {
     if (!reduced) {
-      const { point, facing } = pointOnRoute(route, ease(progress));
-      return { x: point.x, y: point.y, facing, alpha: 1 };
+      const { point, direction, walked } = pointOnRoute(route, ease(progress));
+      return { x: point.x, y: point.y, direction, walked, alpha: 1 };
     }
     // Reduced motion: the character fades out where it is and fades in where it goes.
     const half = FADE_MS / 2;
@@ -469,7 +483,7 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
     const middle = trip.legMs / 2;
     const alpha = Math.min(1, Math.abs(elapsed - middle) / half);
     const point = elapsed < middle ? route[0]! : route[route.length - 1]!;
-    return { x: point.x, y: point.y, facing: pointOnRoute(route, 0).facing, alpha };
+    return { x: point.x, y: point.y, direction: pointOnRoute(route, 0).direction, walked: 0, alpha };
   };
   const dropped = at >= tripDropAt(trip);
   if (t < trip.legMs) {
@@ -479,7 +493,8 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
     return {
       x: last.x,
       y: last.y,
-      facing: trip.faceStay,
+      direction: trip.faceStay,
+      walked: 0,
       alpha: 1,
       stage: "stay",
       carrying: trip.kind === "submit" && !dropped,
@@ -499,23 +514,28 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
     status: AgentStatus,
     coarse: Coarse,
     bubble: Bubble | null,
-    where: { x: number; y: number; facing?: 1 | -1; alpha?: number } = spot.seat,
+    where: { x: number; y: number; direction?: Direction; walked?: number; alpha?: number } = spot.seat,
     extra: { seated?: boolean; carrying?: boolean } = {},
-  ): AgentView => ({
-    ...base,
-    x: where.x,
-    y: where.y,
-    facing: where.facing ?? 1,
-    alpha: where.alpha ?? 1,
-    pose,
-    row: POSES[pose].row,
-    frame: poseFrame(pose, at, phase, reduced),
-    seated: extra.seated ?? true,
-    carrying: extra.carrying ?? false,
-    bubble,
-    status,
-    coarse,
-  });
+  ): AgentView => {
+    const seated = extra.seated ?? true;
+    // A spot without a chair (the receptionist) stands where the others sit.
+    const drawn: Pose = seated && spot.chair === null ? "stand" : pose;
+    return {
+      ...base,
+      x: where.x,
+      y: where.y,
+      direction: where.direction ?? spot.faces,
+      alpha: where.alpha ?? 1,
+      pose,
+      animation: POSES[drawn].animation,
+      frame: drawn === "walk" ? (reduced ? 0 : walkFrame(where.walked ?? 0)) : poseFrame(drawn, at, phase, reduced),
+      seated,
+      carrying: extra.carrying ?? false,
+      bubble,
+      status,
+      coarse,
+    };
+  };
 
   if (trip) {
     const at2 = tripPose(trip, at, reduced);

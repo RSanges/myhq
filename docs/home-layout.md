@@ -53,7 +53,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
       "cron": "0 7 * * 1-5",
       "armed": true,
       "maxBudgetUsd": 2,
-      "sprite": "rooms/example/sprites/scout.png"
+      "isoSprite": "rooms/example/sprites/iso-scout.png"
     },
     {
       "id": "analyst",
@@ -100,7 +100,8 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. |
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
-| `agents[].sprite` | no | Character sheet of the room view (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing, the neutral character shipped with MyHQ is drawn, tinted per agent. |
+| `agents[].isoSprite` | no | Isometric character sheet of the floor (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing or is not a sheet of the right size, the agent is drawn as one of the neutral people shipped with MyHQ, always the same one for the same agent. |
+| `agents[].sprite` | no | The old top-down sheet of the floor (4 by 4 square cells), relative to the home, inside it. Still accepted and served by `GET /api/sprites/<room>/<agent>`, but **no longer drawn**: the floor is isometric and only draws `isoSprite`. |
 | `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval (no task: an approved item is usually the user's to post). |
 | `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram) starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
@@ -157,25 +158,40 @@ An agent that sends approved mails could be declared like this (the
 
 #### Character sheets
 
-The room view draws each agent as a small character. MyHQ ships one neutral
-silhouette (`public/sprites/neutral.png`, tinted per agent from a fixed
-palette); a home can give an agent its own with `sprite`. The sheet is served
-by `GET /api/sprites/<room>/<agent>`, from the path in the validated
-`room.json` only.
+The floor (`/room`) is isometric pixel art and draws each agent as a
+character of the same set. MyHQ ships four neutral people
+(`public/sprites/iso-person-blue.png`, `-green`, `-mustard`, `-grey`, one
+picked per agent from its key) and the receptionist
+(`public/sprites/iso-receptionist.png`); a home can give an agent its own
+with `isoSprite`. The sheet is served by
+`GET /api/sprites/<room>/<agent>?sheet=iso`, from the path in the validated
+`room.json` only. The format is the one of `scripts/iso/README.md`
+(section "Characters"), which also builds the shipped sheets and can draw a
+home's own mascot with the same rig:
 
-- A transparent PNG (or WebP) of **4 columns by 4 rows of square cells**. The
-  cell size is the width divided by 4, for example 128 px cells (512 by 512
-  image) displayed at 64 px, which stays sharp on dense screens. The height
-  must equal the width.
-- Rows, top to bottom: **sit and type** (2 frames), **walk** (4 frames),
-  **think** (2 frames), **sleep** (2 frames). Unused cells stay empty.
-- The character **faces right** (walking left is drawn by mirroring). The feet
-  are at the **horizontal center of the bottom of the cell**; a seated
-  character is drawn as if the desk hid its legs.
-- Row 1, first frame, doubles as the standing pose (talking to a colleague,
-  dropping a folder).
-- A custom sheet is drawn as is. Only the neutral sheet is tinted.
-- The file must stay under 2 MiB. Textures are drawn without smoothing.
+- A transparent PNG (or WebP) of **8 columns by 12 rows of 96 by 136 px
+  frames** (768 by 1632 px). Any other size is ignored and the neutral person
+  is drawn instead.
+- **Anchor**: pixel (48, 120) of a frame is the point on the ground under the
+  feet (for the seated frames: under the centre of the seat).
+- **Rows**: direction times animation, `row = direction * 3 + animation`, the
+  directions in the order `NE`, `SE`, `SW`, `NW` (`SE` walks towards the
+  lower right of the screen, `NE` turns its back to the viewer), the
+  animations `idle` (2 frames, standing), `walk` (8 frames) and `type`
+  (4 frames, seated, hands on a keyboard at desk height). Unused cells stay
+  empty. Directions are drawn, never mirrored.
+- The floor picks the walk frame from the distance walked, 3 voxels per frame
+  (one floor cell is 16 voxels), so the feet do not slide. Sitting, thinking
+  and sleeping hold the first typing frame (a bubble over the head says the
+  rest); talking to a colleague and dropping a folder stand (`idle`).
+- The name over the head sits just above the highest opaque pixel of the
+  frame, so a small mascot gets its name close to its head.
+- The file must stay under 2 MiB. The art is drawn at a whole number of
+  device pixels per pixel, without smoothing.
+
+The old top-down `sprite` (a 4 by 4 grid of square cells: sit and type,
+walk, think, sleep, facing right) is still accepted and served, but no longer
+drawn.
 
 #### Environment placeholders in `mcpServers`
 
@@ -577,7 +593,7 @@ without a section, the feature is off. Other keys are ignored.
 | `export.dir` | yes (with `export`) | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
 | `reception.room` | no | The floor (`/room`) that draws the reception desk and the receptionist, the onboarding agent (see `architecture.md`, section 7). Only that floor has the counter in its lobby, the receptionist's chip in the strip under the floor and its sheet (with the « Ajouter une salle » form and the recent onboarding runs); the others keep a plain lobby. Default: the room called `assistant` when the home has one, otherwise the first room. A name that is not a room of the home falls back to the default. |
-| `onboarding.sprite` | no | Character sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`: a 4 by 4 PNG or WebP grid, inside the home). Default: the sheet shipped with MyHQ, `public/sprites/receptionist.png` (violet outfit, headset and lanyard). |
+| `onboarding.sprite` | no | Old top-down sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`). Still accepted and served, but **no longer drawn**: the isometric floor always draws the receptionist shipped with MyHQ, `public/sprites/iso-receptionist.png` (headset). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 
 | `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone. |

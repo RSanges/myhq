@@ -22,13 +22,13 @@ export type LabelSpec = {
   /** Which point of the label sits at (x, y): 0 left or top, 0.5 center, 1 right or bottom. Default: centered. */
   ax?: number;
   ay?: number;
-  /** A box around the text, drawn in CSS: a name plate, a bubble, a round badge. */
-  box?: "plate" | "bubble" | "badge";
-  /** A colour (normalized hex) for the box: a thin line under a name plate. Null or left out: none. */
+  /** A box around the text, drawn in CSS: a name plate, a name tag over a head, a bubble, a round badge. */
+  box?: "plate" | "tag" | "bubble" | "badge";
+  /** A colour (normalized hex) for the box: a thin line under a name plate or tag. Null or left out: none. */
   color?: string | null;
   /** Wrap at this width (world units), for a bubble. */
   maxWidth?: number;
-  /** Keep the label inside the plan horizontally. */
+  /** Keep the label inside the canvas horizontally. */
   clamp?: boolean;
   opacity?: number;
   /** Extra scale, for a figure that just changed. */
@@ -48,8 +48,8 @@ type Entry = {
 };
 
 export type LabelLayer = {
-  /** The plan's place on screen: CSS pixels per world unit, offset of the plan, world width. */
-  setView(scale: number, offsetX: number, offsetY: number, worldWidth: number): void;
+  /** The plan's place on screen: CSS pixels per world unit, where the world's origin is, the width of the canvas (CSS pixels). */
+  setView(scale: number, offsetX: number, offsetY: number, viewWidth: number): void;
   place(key: string, spec: LabelSpec): void;
   /** Hides the labels that were not placed since the last call. */
   end(): void;
@@ -60,7 +60,7 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
   const entries = new Map<string, Entry>();
   let scale = 1;
   let offset = { x: 0, y: 0 };
-  let worldWidth = 1;
+  let viewWidth = 1;
 
   const entryFor = (key: string): Entry => {
     let entry = entries.get(key);
@@ -75,10 +75,10 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
   };
 
   return {
-    setView(nextScale, offsetX, offsetY, nextWorldWidth) {
+    setView(nextScale, offsetX, offsetY, nextViewWidth) {
       scale = nextScale;
       offset = { x: offsetX, y: offsetY };
-      worldWidth = nextWorldWidth;
+      viewWidth = nextViewWidth;
       // Sizes and widths change with the scale: measure again on the next placement.
       for (const entry of entries.values()) {
         entry.fontSize = 0;
@@ -132,13 +132,13 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
       let x = offset.x + spec.x * scale;
       if (spec.clamp) {
         const left = x - entry.width * ax;
-        const min = offset.x + 4;
-        const max = offset.x + worldWidth * scale - entry.width - 4;
-        x += Math.min(max, Math.max(min, left)) - left;
+        const max = viewWidth - entry.width - 4;
+        x += Math.min(max, Math.max(4, left)) - left;
       }
       const y = offset.y + spec.y * scale;
       const pop = spec.pop && spec.pop !== 1 ? ` scale(${spec.pop})` : "";
-      const transform = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) translate(${-ax * 100}%, ${-ay * 100}%)${pop}`;
+      // Whole CSS pixels: the text stays sharp.
+      const transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(${-ax * 100}%, ${-ay * 100}%)${pop}`;
       if (entry.transform !== transform) {
         entry.transform = transform;
         element.style.transform = transform;

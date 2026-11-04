@@ -12,9 +12,9 @@ approval buttons, conversation, voice notes, files, extensions from the home),
 and the third slice on the MyHQ side: routines with an armed state and a
 journal, generic role templates, `npm run init`, onboarding a project through
 the approval queue, and a daily export. The fourth slice adds the animated
-floor (`/room`): the plan of a small agency, with its offices, corridors and meeting
-room, where agents type,
-think, walk to a colleague's office or to yours as their runs happen.
+floor (`/room`): a small agency in isometric pixel art, with its lobby, offices,
+meeting room and kitchen, where agents type,
+think, walk to a colleague's desk or to your tray as their runs happen.
 
 ## Concepts
 

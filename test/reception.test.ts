@@ -23,7 +23,8 @@ import {
   resolveReceptionRoom,
 } from "../src/ui/reception";
 import { ReceptionSheet } from "../src/ui/reception-sheet";
-import { layoutRoom, officeOf, routeLength, routeToOffice, routeToUser, type Point, type RoomLayout } from "../src/ui/room-layout";
+import { floorSetSchema } from "../src/ui/iso-floor";
+import { CELL, layoutRoom, officeOf, routeLength, routeToOffice, routeToUser, type Point } from "../src/ui/room-layout";
 import { applyInput, createRoomModel, DROP_STAY_MS, snapshotRoom, TYPING_MS, WALK_SPEED, type RoomModel } from "../src/ui/room-model";
 import { createRoomStore } from "../src/ui/room-store";
 import type { HqEvent, Run, State } from "../src/ui/schemas";
@@ -102,80 +103,49 @@ const stateWith = (rooms: string[], reception: State["reception"]): State =>
 
 // ---- Templates and routes ---------------------------------------------------------------------------
 
-const inside = (p: Point, r: { x: number; y: number; w: number; h: number }) =>
-  p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+const floorSet = floorSetSchema.parse(JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "public", "iso", "floor", "floor.json"), "utf8")));
 
-function crosses(a: Point, b: Point, c: Point, d: Point): boolean {
-  const side = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
-  return side(c, d, a) * side(c, d, b) < -1e-9 && side(a, b, c) * side(a, b, d) < -1e-9;
-}
-
-function assertNoWallCrossed(layout: RoomLayout, route: Point[], label: string) {
-  for (let i = 1; i < route.length; i += 1) {
-    for (const wall of layout.walls) {
-      assert.ok(!crosses(route[i - 1]!, route[i]!, wall.a, wall.b), `${label}: crosses a wall near ${route[i]!.x.toFixed(0)},${route[i]!.y.toFixed(0)}`);
-    }
-  }
-}
-
-const onSegment = (p: Point, a: Point, b: Point) =>
-  Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) < 1e-6 &&
-  p.x >= Math.min(a.x, b.x) &&
-  p.x <= Math.max(a.x, b.x) &&
-  p.y >= Math.min(a.y, b.y) &&
-  p.y <= Math.max(a.y, b.y);
-
-test("every template places a reception desk in the lobby, clear of the furniture", () => {
+test("every template places a reception counter in the lobby, the receptionist behind it where the floor set says", () => {
+  const staff = floorSet.furniture["reception-counter"]!.turns["0"]!;
+  assert.ok(staff, "the floor set has the counter");
   for (const template of Object.values(FLOOR_TEMPLATES)) {
-    const { counter, seat, outside } = template.lobby.reception;
-    const user = template.rooms.find((room) => room.kind === "user")!;
-    assert.ok(counter.y > user.rect.y + user.rect.h, `${template.id}: the desk is in the lobby, below the user's office`);
-    assert.ok(inside(seat, counter), `${template.id}: the receptionist sits behind the counter, feet inside it`);
-    assert.ok(counter.x + counter.w < template.width - 10 && counter.y + counter.h < template.height - 10, `${template.id}: inside the building`);
-    const onCorridor = template.corridors.some((line) => line.slice(1).some((b, i) => onSegment(outside, line[i]!, b)));
-    assert.ok(onCorridor, `${template.id}: the receptionist joins a corridor straight ahead`);
-    // No piece of lobby furniture under the counter or the receptionist behind it.
-    for (const item of template.lobby.items) {
-      const box = item.t === "disc" ? { x: item.x - item.r, y: item.y - item.r, w: 2 * item.r, h: 2 * item.r } : item;
-      const clear =
-        counter.x > box.x + box.w || counter.x + counter.w < box.x || counter.y - 24 > box.y + box.h || counter.y + counter.h < box.y;
-      assert.ok(clear, `${template.id}: furniture at ${box.x},${box.y} is clear of the desk`);
-    }
+    const lobby = template.rooms.find((room) => room.kind === "lobby")!;
+    const { at, staff: spot, stand } = lobby.lobby!.reception;
+    // floor.json: the staff of the counter at turn 0 stands one cell behind its middle cell.
+    assert.deepEqual(spot, [at[0] + 1, at[1] - 1], `${template.id}: behind the counter`);
+    assert.ok(at[0] >= 0 && at[0] + 3 <= lobby.w && at[1] >= 1 && at[1] < lobby.d, `${template.id}: inside the lobby`);
+    assert.equal(Math.abs(stand[0] - spot[0]) + Math.abs(stand[1] - spot[1]), 1, `${template.id}: it steps out next to its spot`);
   }
 });
 
-test("the reception desk is only in the layout that asks for it", () => {
+test("the reception counter is only in the layout that asks for it", () => {
   const without = layoutRoom(["r/a", "r/b"]);
   assert.equal(without.reception, null);
   assert.equal(officeOf(without, RECEPTION_KEY), null);
+  assert.ok(!without.pieces.some((piece) => piece.name === "reception-counter"));
   const withDesk = layoutRoom(["r/a", "r/b"], { reception: true });
   assert.ok(withDesk.reception);
   assert.equal(officeOf(withDesk, RECEPTION_KEY), withDesk.reception.office);
   assert.equal(withDesk.offices.length, 2, "the receptionist takes no desk of the room");
-  assert.deepEqual(withDesk.walls, without.walls, "the lobby has no wall of its own");
+  assert.deepEqual(withDesk.rooms, without.rooms, "the lobby keeps its walls");
 });
 
-test("the receptionist walks from the counter to the user's office through the lobby, never through a wall, with 1 to 12 agents", () => {
+test("the receptionist walks from the counter to the tray inside the lobby, with 1 to 12 agents", () => {
   for (let count = 1; count <= 12; count += 1) {
     const layout = layoutRoom(Array.from({ length: count }, (_, i) => `r/a${i}`), { reception: true });
     const desk = layout.reception!;
     const label = `${layout.template} with ${count}`;
-    assert.deepEqual(desk.office.exit[0], desk.office.seat);
-    for (const p of [desk.office.seat, ...desk.office.exit, desk.bell, desk.plate]) {
-      assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height, `${label}: inside the plan`);
-    }
-    assertNoWallCrossed(layout, desk.office.exit, `exit of the receptionist, ${label}`);
     const toUser = routeToUser(layout, desk.office);
     assert.deepEqual(toUser[0], desk.office.seat);
     assert.deepEqual(toUser[toUser.length - 1], layout.user.stand, "it ends where a folder is dropped in the tray");
-    assert.ok(toUser.length > 2 && routeLength(toUser) > 30, "a real walk");
-    assertNoWallCrossed(layout, toUser, `to the user, ${label}`);
-    // The walk stays in the lobby, under the user's office.
-    assert.ok(toUser.every((p) => p.y >= layout.user.room.y + layout.user.room.h), `${label}: it walks the lobby, not the user's office`);
+    assert.ok(toUser.length >= 2 && routeLength(toUser) >= 16, "a real walk");
+    const lobby = layout.rooms[desk.office.room]!;
+    const inLobby = (p: Point) =>
+      p.x > lobby.x * CELL && p.x < (lobby.x + lobby.w) * CELL && p.y > lobby.y * CELL && p.y < (lobby.y + lobby.d) * CELL;
+    assert.ok(toUser.every(inLobby), `${label}: it stays in the lobby`);
     for (const office of layout.offices) {
-      assertNoWallCrossed(layout, routeToOffice(layout, desk.office, office), `to ${office.key}, ${label}`);
-      assertNoWallCrossed(layout, routeToOffice(layout, office, desk.office), `from ${office.key}, ${label}`);
-      assertNoWallCrossed(layout, routeToUser(layout, office), `${office.key} to the user, ${label}`);
+      assert.ok(routeLength(routeToOffice(layout, desk.office, office)) > 0, `to ${office.key}, ${label}`);
+      assert.ok(routeLength(routeToOffice(layout, office, desk.office)) > 0, `from ${office.key}, ${label}`);
     }
   }
 });

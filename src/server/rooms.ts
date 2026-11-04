@@ -74,8 +74,10 @@ const agentSchema = z.strictObject({
   /** Extra directories the agent may read (`--add-dir`), relative to the home. */
   addDirs: z.array(z.string().min(1)).optional(),
   maxBudgetUsd: z.number().positive().optional(),
-  /** Character sheet of the room view, relative to the home (the neutral one when left out). */
+  /** Old top-down character sheet (4 by 4 cells), relative to the home: still accepted, no longer drawn. */
   sprite: spriteSchema.optional(),
+  /** Isometric character sheet of the floor, relative to the home (a neutral person when left out). */
+  isoSprite: spriteSchema.optional(),
   /**
    * "task": approving one of its items gives the agent a task to execute it, and wakes it
    * (the default: left out, an approval gives it no task). "queue": the task is created
@@ -127,8 +129,10 @@ export type Agent = {
   /** Built-in tools that exist for the agent when they differ from its whitelist (MyHQ's own agents only). */
   tools?: string[];
   maxBudgetUsd: number | null;
-  /** Absolute path of the agent's character sheet, always inside the home, or null for the neutral one. */
+  /** Absolute path of the agent's old top-down sheet, always inside the home, or null. No longer drawn. */
   sprite: string | null;
+  /** Absolute path of the agent's iso character sheet, always inside the home, or null for a neutral person. */
+  isoSprite: string | null;
   /** "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; null: no task (see wakeAgents). */
   onApproval: "task" | "queue" | null;
   /** A message addressed to the agent wakes it, unless "queue" (null is the default: wake, see wakeAgents). */
@@ -225,6 +229,10 @@ export function loadRoom(home: string, roomDir: string): Room {
     if (sprite && !isInside(home, sprite)) {
       throw new Error(`${file}: sprite of "${agent.id}" must stay inside the home`);
     }
+    const isoSprite = agent.isoSprite ? path.resolve(home, agent.isoSprite) : null;
+    if (isoSprite && !isInside(home, isoSprite)) {
+      throw new Error(`${file}: isoSprite of "${agent.id}" must stay inside the home`);
+    }
 
     return {
       id: agent.id,
@@ -246,6 +254,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
       sprite,
+      isoSprite,
       onApproval: agent.onApproval ?? null,
       onMessage: agent.onMessage ?? null,
       onRevise: agent.onRevise ?? null,

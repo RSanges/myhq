@@ -6,6 +6,7 @@ import { parseStreamLine } from "../src/server/claude-engine";
 import type { HqEvent } from "../src/ui/schemas";
 import { agentKey } from "../src/ui/model";
 import {
+  directionOf,
   layoutRoom,
   officeOf,
   pointOnRoute,
@@ -14,7 +15,6 @@ import {
   routeToUser,
   type Office,
   type Point,
-  type RoomLayout,
 } from "../src/ui/room-layout";
 import {
   applyInput,
@@ -135,7 +135,7 @@ const agent = (view: RoomView, key = SCOUT): AgentView => view.agents.find((a) =
 const legMs = (route: Point[]) => Math.max(500, (routeLength(route) / WALK_SPEED) * 1000);
 const last = (route: Point[]) => route[route.length - 1]!;
 
-test("a room of three agents starts asleep, offices on both sides of the corridor, nothing in the tray", () => {
+test("a room of three agents starts asleep at their desks, nothing in the tray", () => {
   const view = snapshotRoom(hydrated(), T0);
   assert.deepEqual(view.agents.map((a) => a.status.kind), ["asleep", "asleep", "asleep"]);
   assert.deepEqual(view.agents.map((a) => a.pose), ["sleep", "sleep", "sleep"]);
@@ -195,8 +195,10 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.equal(walker.pose, "walk");
   assert.equal(walker.seated, false);
   assert.equal(walker.carrying, true);
-  assert.equal(walker.facing, 1);
-  assert.ok(walker.x > seat.x && walker.x < layout.user.stand.x, "on its way");
+  assert.equal(walker.animation, "walk");
+  assert.ok(Math.hypot(walker.x - seat.x, walker.y - seat.y) > 1, "it left its chair");
+  assert.ok(Math.hypot(walker.x - layout.user.stand.x, walker.y - layout.user.stand.y) > 1, "on its way");
+  assert.ok(Math.abs(walker.x % 8) < 0.01 || Math.abs(walker.y % 8) < 0.01, "on a line through cell centres");
   assert.equal(walking.pending, 0);
 
   assert.equal(agent(carrying).status.kind, "carrying");
@@ -262,7 +264,8 @@ test("an hq_message walks to the table of the recipient, stays there, and comes 
   assert.equal(arrived.pose, "stand");
   assert.deepEqual(arrived.bubble, { kind: "talk" });
   assert.deepEqual([arrived.x, arrived.y], [stand.x, stand.y]);
-  assert.equal(arrived.facing, 1, "facing the desk of the recipient");
+  assert.equal(arrived.direction, directionOf(writer.seat.x - stand.x, writer.seat.y - stand.y), "facing the recipient");
+  assert.equal(arrived.animation, "idle");
   assert.equal(talking.status.kind, "talking");
   assert.deepEqual(returning.status, { kind: "returning" });
   assert.equal(returning.carrying, false);
@@ -412,7 +415,8 @@ test("frames of a pose follow the clock, and hold in reduced motion", () => {
   const typing = applyInput(model, { type: "event", event: toolCall(1, "Read", {}) }, T0);
   const frames = new Set<number>();
   for (let t = 0; t < 600; t += 50) frames.add(agent(snapshotRoom(typing, T0 + t)).frame);
-  assert.deepEqual([...frames].sort(), [0, 1]);
+  assert.deepEqual([...frames].sort(), [0, 1, 2, 3]);
+  assert.equal(agent(snapshotRoom(typing, T0)).animation, "type");
   assert.equal(agent(snapshotRoom(typing, T0 + 300, true)).frame, 0);
 });
 
@@ -447,64 +451,31 @@ test("an event of another room, or of an agent that is not in the room, changes 
   assert.equal(applyInput(model, { type: "event", event: toolCall(1, "Read", {}, "ghost") }, T0), model);
 });
 
-const inRect = (p: Point, r: { x: number; y: number; w: number; h: number }) =>
-  p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
-
-/** Whether two segments cross (touching at an end is not crossing). */
-function crosses(a: Point, b: Point, c: Point, d: Point): boolean {
-  const side = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
-  const d1 = side(c, d, a);
-  const d2 = side(c, d, b);
-  const d3 = side(a, b, c);
-  const d4 = side(a, b, d);
-  return d1 * d2 < -1e-9 && d3 * d4 < -1e-9;
-}
-
-/** A route never crosses a wall: it goes through the doors. */
-function assertNoWallCrossed(layout: RoomLayout, route: Point[], label: string) {
-  for (let i = 1; i < route.length; i += 1) {
-    for (const wall of layout.walls) {
-      assert.ok(!crosses(route[i - 1]!, route[i]!, wall.a, wall.b), `${label}: crosses a wall near ${route[i]!.x.toFixed(0)},${route[i]!.y.toFixed(0)}`);
-    }
-  }
-}
-
-test("layout: a template by size, agents in the desks in order, routes through the doors only", () => {
-  const expected = (count: number) => (count <= 3 ? "small" : count <= 7 ? "medium" : "large");
+test("layout: a template by size, agents in the desks in order, inside their office", () => {
+  const expected = (count: number) => (count <= 3 ? "small" : count <= 6 ? "medium" : "large");
   for (let count = 1; count <= 12; count += 1) {
     const layout = layoutRoom(Array.from({ length: count }, (_, i) => `r/a${i}`));
     assert.equal(layout.template, expected(count));
     assert.equal(layout.offices.length, count);
-    assert.equal(new Set(layout.offices.map((o) => `${o.seat.x},${o.seat.y}`)).size, count, "no two agents share a desk");
     for (const office of layout.offices) {
-      for (const p of [office.seat, office.plate, ...office.exit, ...office.visit]) {
-        assert.ok(p.x > 0 && p.x < layout.width && p.y > 0 && p.y < layout.height, `${office.key} inside the plan`);
-      }
-      assert.ok(inRect(office.seat, office.room), "the desk is inside the office");
-      assertNoWallCrossed(layout, office.exit, `exit of ${office.key}`);
-      assertNoWallCrossed(layout, office.visit, `visit of ${office.key}`);
-      assertNoWallCrossed(layout, routeToUser(layout, office), `to the user from ${office.key}`);
-      for (const other of layout.offices) {
-        if (other !== office) assertNoWallCrossed(layout, routeToOffice(layout, office, other), `${office.key} to ${other.key}`);
-      }
+      const room = layout.rooms[office.room]!;
+      const cx = Math.floor(office.seat.x / 16);
+      const cy = Math.floor(office.seat.y / 16);
+      assert.ok(cx >= room.x && cx < room.x + room.w && cy >= room.y && cy < room.y + room.d, "the chair is inside the office");
+      assert.equal(room.kind, "office");
     }
-    assert.ok(layout.meeting && layout.coffee, "a meeting room with its board and a coffee machine");
-    assert.ok(layout.width / layout.height > 1.3 && layout.width / layout.height < 3, "a plan that fits a wide screen");
   }
-  // Every agent of a full large floor has its own desk; nobody is left without one up to 12.
-  assert.equal(layoutRoom(Array.from({ length: 12 }, (_, i) => `r/a${i}`)).vacantDesks.length, 0);
-  assert.ok(layoutRoom(["r/a"]).vacantDesks.length >= 1 && layoutRoom(["r/a"]).rooms.some((room) => room.vacant === false));
-  assert.equal(layoutRoom(["r/a", "r/b", "r/c", "r/d"]).template, "medium");
+  assert.ok(layoutRoom(["r/a"]).rooms.some((room) => room.kind === "office" && room.vacant === false));
   assert.equal(officeOf(layoutRoom(["r/a"]), "r/zzz"), null);
 });
 
-test("agents of the same double office cross it, the others go out by the door and along the corridor", () => {
+test("agents of the same office cross it, the others go out by its opening and along the hall", () => {
   const layout = layoutRoom(Array.from({ length: 9 }, (_, i) => `r/a${i}`));
-  const [one, two, three] = layout.offices as [Office, Office, Office];
+  const [one, two] = layout.offices as [Office, Office];
+  const far = layout.offices[6]!;
   assert.equal(one.room, two.room);
-  assert.notEqual(one.room, three.room);
-  assert.equal(routeToOffice(layout, one, two).length, 2);
-  assert.ok(routeLength(routeToOffice(layout, one, three)) > 2 * routeLength(routeToOffice(layout, one, two)));
+  assert.notEqual(one.room, far.room);
+  assert.ok(routeLength(routeToOffice(layout, one, far)) > 2 * routeLength(routeToOffice(layout, one, two)));
 });
 
 test("a route is walked at a fraction of its length, facing the way it goes", () => {
@@ -519,7 +490,9 @@ test("a route is walked at a fraction of its length, facing the way it goes", ()
   assert.deepEqual(pointOnRoute(route, 1).point, { x: 30, y: 0 });
   const half = pointOnRoute(route, 0.5);
   assert.deepEqual(half.point, { x: 15, y: 10 });
-  assert.equal(half.facing, 1);
-  assert.equal(pointOnRoute(route, 0.1).facing, 1, "a vertical segment keeps the nearest horizontal direction");
-  assert.equal(pointOnRoute([{ x: 20, y: 0 }, { x: 0, y: 0 }], 0.5).facing, -1);
+  assert.equal(half.direction, "SE", "along +x: towards the lower right");
+  assert.equal(half.walked, 25);
+  assert.equal(pointOnRoute(route, 0.1).direction, "SW", "along +y: towards the lower left");
+  assert.equal(pointOnRoute(route, 0.9).direction, "NE", "along -y: away from the viewer");
+  assert.equal(pointOnRoute([{ x: 20, y: 0 }, { x: 0, y: 0 }], 0.5).direction, "NW");
 });

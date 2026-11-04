@@ -437,6 +437,13 @@ export const strings = {
       events: (count: number) => (count === 1 ? "1 événement" : `${count} événements`),
     },
   },
+  /** The isometric floor of /room: its zoom buttons. */
+  roomView: {
+    zoomLabel: "Zoom de l'étage",
+    zoomIn: "Rapprocher",
+    zoomOut: "Éloigner",
+    fit: "Vue d'ensemble",
+  },
   /** `npx tsx scripts/replay-fixture.ts` (scripts/replay-fixture.ts), in the terminal. */
   replay: {
     usage: [

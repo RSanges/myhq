@@ -1,21 +1,24 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { SPRITE_SIZE } from "./room-layout";
-import { snapshotRoom, type AgentView, type RoomView } from "./room-model";
+import { useEffect, useRef, useState } from "react";
+import { snapshotRoom, type RoomView } from "./room-model";
+import type { BoardRow } from "./room-board";
 import type { RoomRenderer, RoomScene } from "./room-renderer";
 import type { RoomStore } from "./room-store";
 import { createLabelLayer } from "./room-labels";
 import { readRoomTheme } from "./room-theme";
+import { strings } from "./strings";
+
+const t = strings.roomView;
 
 export type RoomCanvasProps = {
   store: RoomStore;
   room: string;
-  board: RoomScene["board"];
+  board: { title: string; rows: BoardRow[] };
   labels: RoomScene["labels"];
-  /** Character sheet URL per agent key (null: the neutral character). */
-  sprites: Record<string, string | null>;
-  /** Colour of the room (a normalized hex), worn by the name plates; null for the neutral look. */
+  /** Character sheet URL per agent key (an iso sheet; a neutral person when it fails to load). */
+  sprites: Record<string, string>;
+  /** Colour of the room (a normalized hex) for carpets, tiles and name tags; null for the neutral look. */
   color: string | null;
   selected: string | null;
   reduced: boolean;
@@ -23,36 +26,62 @@ export type RoomCanvasProps = {
   onFailure: () => void;
 };
 
-/** The neutral sheet shipped in public/. */
-const NEUTRAL_SHEET = "/sprites/neutral.png";
+/** Where floor.json and floor.png are served (public/iso/floor). */
+const FLOOR_URL = "/iso/floor";
+/** A pointer that moves less than this (CSS pixels) between down and up is a click, not a drag. */
+const DRAG_SLOP = 5;
 
-/** The character under a point of the room, in world units. */
-function agentAt(view: RoomView, x: number, y: number): AgentView | null {
-  let found: AgentView | null = null;
-  for (const agent of view.agents) {
-    if (Math.abs(x - agent.x) > 14 || y < agent.y - SPRITE_SIZE - 2 || y > agent.y + 6) continue;
-    if (!found || agent.y > found.y) found = agent;
-  }
-  return found;
+/**
+ * The whiteboard of the floor: the figures of the day, each one flashing when
+ * it changes. Decorative like the canvas (the narrow band and the strip under
+ * the floor say the same to a screen reader).
+ */
+function BoardCard({ title, rows }: { title: string; rows: BoardRow[] }) {
+  // The figures as they were first shown: one that differs has changed since, and flashes when it does.
+  const [initial] = useState(() => new Map(rows.map((row) => [row.key, row.value])));
+  return (
+    <div className="room-board" aria-hidden="true">
+      <p className="room-board-title">{title}</p>
+      <dl>
+        {rows.map((row) => (
+          <div key={row.key}>
+            <dt>{row.label}</dt>
+            <dd key={row.value} data-flash={initial.get(row.key) === row.value ? undefined : ""}>
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 /**
  * The room, drawn on a canvas by PixiJS (loaded here, on the client, when the
  * component mounts). It decorates the page: the canvas is hidden from
  * assistive technology, and the list of agents under it says everything it
- * shows. The loop draws only while the tab is visible and the room is on
- * screen; with reduced motion it draws when something changes.
+ * shows. The floor pans with a drag (or the wheel), zooms with the buttons, a
+ * pinch or ctrl and the wheel, by whole steps so the pixel art stays sharp.
+ * The loop draws only while the tab is visible and the room is on screen;
+ * with reduced motion it draws when something changes.
  */
 export function RoomCanvas(props: RoomCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<RoomRenderer | null>(null);
   const latest = useRef(props);
   const kickRef = useRef<() => void>(() => undefined);
+  const [zoomable, setZoomable] = useState({ in: false, out: false });
 
   useEffect(() => {
     latest.current = props;
     kickRef.current();
   });
+
+  const refreshZoom = () => {
+    const renderer = rendererRef.current;
+    setZoomable({ in: renderer?.canZoom(1) ?? false, out: renderer?.canZoom(-1) ?? false });
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -66,11 +95,12 @@ export function RoomCanvas(props: RoomCanvasProps) {
     let visible = document.visibilityState === "visible";
     let onScreen = true;
     let lastView: RoomView | null = null;
-    let sizedFor = { width: 0, height: 0, world: "" };
+    let sizedFor = { width: 0, height: 0 };
 
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
     canvas.style.display = "block";
+    canvas.style.touchAction = "none";
     host.insertBefore(canvas, labelHost);
 
     const stop = () => {
@@ -83,25 +113,25 @@ export function RoomCanvas(props: RoomCanvasProps) {
     const frame = () => {
       raf = 0;
       if (!renderer || cancelled || !visible || !onScreen) return;
-      const props = latest.current;
+      const current = latest.current;
       const now = Date.now();
-      const view = snapshotRoom(props.store.get(props.room), now, props.reduced);
+      const view = snapshotRoom(current.store.get(current.room), now, current.reduced);
       lastView = view;
 
       const { clientWidth: width, clientHeight: height } = host;
-      const world = `${view.layout.width}x${view.layout.height}`;
-      if (width > 0 && height > 0 && (width !== sizedFor.width || height !== sizedFor.height || world !== sizedFor.world)) {
-        sizedFor = { width, height, world };
-        renderer.resize(width, height, view.layout);
+      if (width > 0 && height > 0 && (width !== sizedFor.width || height !== sizedFor.height)) {
+        sizedFor = { width, height };
+        renderer.resize(width, height);
+        refreshZoom();
       }
-      renderer.setSprites(props.sprites);
+      renderer.setSprites(current.sprites);
       renderer.draw(
-        { view, board: props.board, labels: props.labels, color: props.color, selected: props.selected, reduced: props.reduced },
+        { view, labels: current.labels, color: current.color, selected: current.selected, reduced: current.reduced },
         now,
       );
       canvas.dataset.frames = String(renderer.frames);
 
-      const fps = renderer.busy(now, props.reduced) ? 60 : view.fps;
+      const fps = renderer.busy(now, current.reduced) ? 60 : view.fps;
       if (fps > 0) schedule(fps >= 30 ? 0 : 1000 / fps);
       else if (Number.isFinite(view.nextChangeAt)) timer = setTimeout(kick, Math.max(0, view.nextChangeAt - now) + 5);
     };
@@ -139,7 +169,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     observer.observe(host);
 
     const resizer = new ResizeObserver(() => {
-      sizedFor = { width: 0, height: 0, world: "" };
+      sizedFor = { width: 0, height: 0 };
       kick();
     });
     resizer.observe(host);
@@ -153,6 +183,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
     function onDensity() {
       renderer?.setResolution(window.devicePixelRatio || 1);
+      refreshZoom();
       watchDensity();
       kick();
     }
@@ -165,36 +196,101 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
     colorScheme.addEventListener("change", onScheme);
 
-    const pointerWorld = (event: PointerEvent | MouseEvent) => {
+    // Pointers: a drag pans, two fingers pinch to zoom, a click without a drag picks a character.
+    const pointers = new Map<number, { x: number; y: number }>();
+    let start = { x: 0, y: 0 };
+    let dragged = false;
+    let pinch = 0;
+    const local = (event: PointerEvent | WheelEvent) => {
       const rect = canvas.getBoundingClientRect();
-      return renderer?.toWorld(event.clientX - rect.left, event.clientY - rect.top) ?? { x: -1, y: -1 };
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+    const spread = () => {
+      const [a, b] = [...pointers.values()];
+      return a && b ? { distance: Math.hypot(a.x - b.x, a.y - b.y), middle: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } } : null;
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // A pointer that is already gone: the drag still works while it stays over the canvas.
+      }
+      pointers.set(event.pointerId, local(event));
+      if (pointers.size === 1) {
+        start = local(event);
+        dragged = false;
+      } else {
+        dragged = true;
+        pinch = spread()?.distance ?? 0;
+      }
     };
     const onMove = (event: PointerEvent) => {
-      const point = pointerWorld(event);
-      canvas.style.cursor = lastView && agentAt(lastView, point.x, point.y) ? "pointer" : "default";
+      const point = local(event);
+      const before = pointers.get(event.pointerId);
+      if (!before) {
+        canvas.style.cursor = lastView && renderer?.agentAt(lastView, point.x, point.y) ? "pointer" : "grab";
+        return;
+      }
+      pointers.set(event.pointerId, point);
+      if (!renderer) return;
+      if (pointers.size === 1) {
+        if (!dragged && Math.hypot(point.x - start.x, point.y - start.y) > DRAG_SLOP) dragged = true;
+        if (dragged) {
+          canvas.style.cursor = "grabbing";
+          renderer.panBy(point.x - before.x, point.y - before.y);
+          kick();
+        }
+        return;
+      }
+      const now = spread();
+      if (!now || pinch <= 0) return;
+      const ratio = now.distance / pinch;
+      if (ratio > 1.4 || ratio < 0.7) {
+        renderer.zoomBy(ratio > 1 ? 1 : -1, now.middle);
+        pinch = now.distance;
+        refreshZoom();
+        kick();
+      }
     };
-    const onClick = (event: MouseEvent) => {
-      const point = pointerWorld(event);
-      const hit = lastView ? agentAt(lastView, point.x, point.y) : null;
+    const onUp = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      if (pointers.size > 0) return;
+      canvas.style.cursor = "grab";
+      if (dragged || event.type === "pointercancel") return;
+      const point = local(event);
+      const hit = lastView && renderer ? renderer.agentAt(lastView, point.x, point.y) : null;
       if (hit) latest.current.onSelect(hit.key);
     };
+    const onWheel = (event: WheelEvent) => {
+      if (!renderer) return;
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        if (Math.abs(event.deltaY) < 1) return;
+        renderer.zoomBy(event.deltaY < 0 ? 1 : -1, local(event));
+        refreshZoom();
+      } else {
+        renderer.panBy(-event.deltaX, -event.deltaY);
+      }
+      kick();
+    };
+    canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
-    canvas.addEventListener("click", onClick);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
 
     void (async () => {
       try {
         const { createRoomRenderer } = await import("./room-renderer");
-        const created = await createRoomRenderer({
-          canvas,
-          neutralSheetUrl: NEUTRAL_SHEET,
-          labels: labelLayer,
-          theme: readRoomTheme(host),
-        });
+        const created = await createRoomRenderer({ canvas, floorUrl: FLOOR_URL, labels: labelLayer, theme: readRoomTheme(host), onLoad: () => kick() });
         if (cancelled) {
           created.destroy();
           return;
         }
         renderer = created;
+        rendererRef.current = created;
         kick();
       } catch {
         if (!cancelled) latest.current.onFailure();
@@ -205,14 +301,18 @@ export function RoomCanvas(props: RoomCanvasProps) {
       cancelled = true;
       stop();
       kickRef.current = () => undefined;
+      rendererRef.current = null;
       unsubscribe();
       document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
       resizer.disconnect();
       colorScheme.removeEventListener("change", onScheme);
       densityQuery?.removeEventListener("change", onDensity);
+      canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
-      canvas.removeEventListener("click", onClick);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+      canvas.removeEventListener("wheel", onWheel);
       renderer?.destroy();
       renderer = null;
       labelLayer.destroy();
@@ -220,9 +320,40 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
   }, []);
 
+  const zoom = (step: number) => {
+    rendererRef.current?.zoomBy(step);
+    refreshZoom();
+    kickRef.current();
+  };
+  const fit = () => {
+    rendererRef.current?.fit();
+    refreshZoom();
+    kickRef.current();
+  };
+
   return (
-    <div ref={hostRef} className="room-canvas" aria-hidden="true">
-      <div ref={labelsRef} className="room-labels" />
+    <div className="room-canvas-frame">
+      <div ref={hostRef} className="room-canvas" aria-hidden="true">
+        <div ref={labelsRef} className="room-labels" />
+      </div>
+      <BoardCard title={props.board.title} rows={props.board.rows} />
+      <div className="room-zoom" role="group" aria-label={t.zoomLabel}>
+        <button type="button" onClick={() => zoom(1)} disabled={!zoomable.in} aria-label={t.zoomIn} title={t.zoomIn}>
+          <svg viewBox="0 0 20 20" aria-hidden focusable="false">
+            <path d="M10 4v12M4 10h12" />
+          </svg>
+        </button>
+        <button type="button" onClick={() => zoom(-1)} disabled={!zoomable.out} aria-label={t.zoomOut} title={t.zoomOut}>
+          <svg viewBox="0 0 20 20" aria-hidden focusable="false">
+            <path d="M4 10h12" />
+          </svg>
+        </button>
+        <button type="button" onClick={fit} aria-label={t.fit} title={t.fit}>
+          <svg viewBox="0 0 20 20" aria-hidden focusable="false">
+            <path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

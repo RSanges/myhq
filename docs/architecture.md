@@ -382,10 +382,11 @@ through the approval queue.
   instruction (`manual`), a message, a revision or an approved item
   (`approval`).
 - **Real time**: Server-Sent Events from the app to the browser.
-- **The room view** (slice 4): a 2D canvas (PixiJS, the one runtime dependency
-  added for it, pinned to an exact version and loaded only on `/room`) with
-  sprite sheets and a few animations per character (typing, walking, thinking,
-  sleeping), driven by the real events of the stream-json output. See section 7.
+- **The room view** (slice 4): an isometric pixel art floor on a canvas
+  (PixiJS, the one runtime dependency added for it, pinned to an exact version
+  and loaded only on `/room`) with character sheets in four directions
+  (standing, walking, typing), driven by the real events of the stream-json
+  output. See section 7.
 - **Rooms and roles**: `room.json` and `roles/*.md` in the home directory,
   loaded and validated at startup (see `home-layout.md`).
 - **The assistant on Telegram**: the Bot API through `fetch`, with the token and
@@ -758,39 +759,60 @@ mcp add --help`):
 ## 7. The room view
 
 `/room` (linked from the header of `/`, with a link back) is the floor of a
-project, drawn as the plan of a small agency: offices of different sizes (a
-cell for one agent, a double office for two who talk often, a corner office),
-closed by walls with a door gap onto corridors that loop around a lobby, a
-meeting room with a long table and the whiteboard (runs of the day against the
-cap, cost, share of the weekly budget, routines armed, next fire and last
-firing: the numbers of `/api/usage` and `/api/routines`), an open kitchen with
-the coffee machine, a lounge, storage, windows along the outer walls, and the
-user's own office next to a lobby whose console holds the "to approve" tray and
-its count. Each office is sized to its desk and furnished (desk, chair, shelf,
-plant, sofa), the name of its agent is on a plate beside its door. The canvas
-takes the whole width and the height that is left under the header and above the
-strip of agents, so the floor fits on one screen with no scrolling; the plan is
-scaled uniformly and centered, characters are about 60 px on a 1080p screen. It
-is a separate page because the canvas weighs something and must be able to
-stop; `/` stays the desk that works everywhere. When the home has several
-rooms, buttons choose the floor shown.
+project, drawn in isometric pixel art as a small agency: cutaway rooms (back
+walls at full height with windows and a door, a low rim in front) on a wooden
+hall. The lobby holds the user's own desk, a filing cabinet with the "to
+approve" tray (its paper pile and its count) and, on one floor, the reception
+counter; offices hold the agents' workstations (desk, screen, chair), a
+bookshelf, plants and a rug; the meeting room has its table, its whiteboard and
+a coffee corner, the kitchen a coffee corner and sofas. The carpets and tiles
+of the rooms, the rug borders, the sofa pillows and the band of the counter
+take the room's colour (`room.json` `color`, a pastel of it for the floors),
+or a neutral look without one. The figures of the whiteboard (runs of the day
+against the cap, cost, share of the weekly budget, routines armed, next fire
+and last firing: the numbers of `/api/usage` and `/api/routines`) are a card
+in a corner of the canvas, each one flashing when it changes. The canvas takes
+the whole width and the height that is left under the header and above the
+strip of agents. It is a separate page because the canvas weighs something and
+must be able to stop; `/` stays the desk that works everywhere. When the home
+has several rooms, buttons choose the floor shown.
 
-**Templates.** The plan is not computed from a grid: it is one of three
-hand-designed templates by number of agents, data in
-`src/ui/floor-templates.ts` (small for 1 to 3 agents, medium for 4 to 7, large
-for 8 to 12). A template lists its rooms with their position, size, door,
-desks and furniture, the center lines of its corridors, its windows and its
-lobby; agents fill the desks in order, and the desks left empty are drawn
-vacant. `layoutRoom` (`room-layout.ts`) turns the template into walls,
-furniture, offices and a graph of the corridors. A template can be refined, or
-a fourth one added, without touching the renderer or the model. More than 12
-agents are listed under the floor but have no office on it.
+**Pixel art, zoom and pan.** The art (`public/iso/`, built by
+`scripts/iso/`, formats in `scripts/iso/README.md`) is only ever drawn at a
+whole number of device pixels per art pixel, with nearest sampling and whole
+pixel positions (`roundPixels`), so it stays sharp. On load, or with the
+"Vue d'ensemble" button, the floor takes the largest such zoom that fits the
+canvas, centered; when even one device pixel per pixel is too big (a phone, a
+small window), it shows the offices at that zoom and the rest is a drag away.
+The floor pans with a drag (or the wheel), zooms with the + and - buttons, a
+pinch, or ctrl and the wheel, one whole step at a time.
+
+**Templates.** The floor is not computed: it is one of three hand-designed
+templates by number of agents, data in floor cells in
+`src/ui/floor-templates.ts` (small for 1 to 3 agents: the lobby, an office of
+three, a meeting room with a coffee corner; medium for 4 to 6: an office of six
+and a kitchen; large for 7 to 12: two offices of six). A room lists its
+position and size, its floor, the kind of each back wall cell (plain, window,
+door), the openings of its front rim, its furniture and desks (a workstation
+and the chair the floor set gives it), and its aisles; the hall lists its
+cells and its lanes. Agents fill the desks in order; the chairs left empty stay
+empty. A back wall hides about four cells behind it, so the rooms are laid out
+so that none hides another: the back row climbs like a staircase (an office to
+the +x of the lobby and entirely behind it, which reads as a row across the
+screen), a second office follows four cells away on the same line, and the
+front row stands four cells away from the lanes. `layoutRoom`
+(`room-layout.ts`) turns the template into pieces, offices (chair, seat, the
+way the agent faces, the aisle cell next to it) and a graph of the aisles and
+lanes. Tests check that no cell of a room and no point of a route is behind
+another room's wall, that no route goes through a wall or a piece of
+furniture, and that pieces never share a cell. More than 12 agents are listed
+under the floor but have no office on it.
 
 **The reception.** Onboarding is an agent too (section 3), and it is
 the one agent that no room owns: its runs belong to the reserved room `_hq`. So
-that it is visible, every template has a reception desk in its lobby, next to
-the user's office (a counter with a bell and a small screen, the receptionist
-seated behind it, `lobby.reception` in `floor-templates.ts`), but the desk is
+that it is visible, every template has a reception counter in its lobby (the
+receptionist stands behind it, where the floor set's `staff` cell is,
+`lobby.reception` in `floor-templates.ts`), but the counter is
 drawn on **one floor of the home only**: the `reception.room` of `myhq.json`,
 by default the room called `assistant`, otherwise the first room (`GET
 /api/state` gives it as `reception.room`, `resolveReceptionRoom` in
@@ -798,18 +820,17 @@ by default the room called `assistant`, otherwise the first room (`GET
 (`room-model.ts`) adds the receptionist to the agents of the room, with the key
 `_hq/onboarding`, and feeds it the runs, events and approvals of `_hq` (the
 store routes them): it sleeps when idle, types while a run reads the repository,
-and on `hq_submit` of its `room_proposal` walks from the counter along the
-lobby to the user's office (the same route as an agent's trip to the tray, the
-folder lands in the tray, the count rises), then goes back; a failed run puts a
-question mark over it. Its name plate reads « Accueil » (`strings.room.reception`),
+and on `hq_submit` of its `room_proposal` steps out from behind the counter
+to the tray (the same kind of trip as an agent's, the folder lands in the tray,
+the count rises), then goes back; a failed run puts a question mark over it.
+Its name tag reads « Accueil » (`strings.room.reception`),
 its chip is the last of the strip with its state, and clicking either opens its
 sheet: what it does, the « Ajouter une salle » form (the component of the desk's
 form, `add-room.tsx`, which calls `POST /api/onboarding`) and its recent
 onboarding runs with their target repository and cost (from `reception.runs` of
 the state, kept up to date by the stream). Its sheet is
-`public/sprites/receptionist.png`, drawn by the same script as the neutral one
-(`scripts/build-neutral-sprite.mjs`), and a home may replace it with
-`onboarding.sprite`. To see it without a real run:
+`public/sprites/iso-receptionist.png` (headset), built by `scripts/iso/`; the
+old `onboarding.sprite` of a home is no longer drawn. To see it without a real run:
 `npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl --agent onboarding`.
 
 **Pieces.**
@@ -819,32 +840,42 @@ the state, kept up to date by the stream). Its sheet is
   and `approval` messages) and gives a visual state per agent. No canvas, no
   real clock: time is a number of milliseconds passed in by the caller, so the
   tests replay the fixtures (`test/room-model.test.ts`) on a fake clock.
-  `src/ui/room-layout.ts` builds the plan from a template and plans the routes;
-  `src/ui/room-store.ts` keeps one model per room outside React.
-- `src/ui/room-renderer.ts`: PixiJS drawing of shapes and sprites behind a
-  small interface (create, draw a scene, resize, set the density, destroy).
-  `src/ui/room-labels.ts`: every piece of text of the floor (name plates, the
-  whiteboard, the tray count, bubbles, the name of a character that is away
-  from its office) is an HTML element over the canvas, placed from the same
-  world coordinates and scale, in the page fonts and colors (CSS variables),
-  with the box of a plate or a bubble drawn by CSS. Nothing is drawn as text
-  in the canvas, so text is sharp at any zoom and in both themes.
+  `src/ui/room-layout.ts` builds the floor from a template and plans the
+  routes, in voxels of the floor set (16 per cell); `src/ui/room-store.ts`
+  keeps one model per room outside React.
+- `src/ui/iso-floor.ts`: the floor set's format (`floor.json`, checked with
+  zod), the scene of a floor as things to draw (tiles, floor shadows and rugs
+  flat, then the boxes of walls, rims and furniture), the depth order
+  (`compose.mjs`'s rule: a box that ends before another on x or y is drawn
+  first) and the character sheet rows.
+- `src/ui/room-renderer.ts`: PixiJS drawing behind a small interface (create,
+  draw a scene, resize, pan, zoom, set the density, destroy). The flat layer is
+  built once per floor and colour; walls, furniture and standing characters
+  are sorted again when a standing character moves; a seated character is drawn
+  inside its chair, between the chair's `under` and `over` frames (the
+  backrest in front of it). Tint masks are sprites tinted with the room colour.
+  `src/ui/room-labels.ts`: every piece of text of the floor (the name over
+  each head, bubbles, the user's desk, the tray count) is an HTML element over
+  the canvas, at whole CSS pixels, in the page fonts and colors (CSS
+  variables), with the box of a tag or a bubble drawn by CSS. Nothing is drawn
+  as text in the canvas, so text is sharp at any zoom and in both themes.
   `src/ui/room-canvas.tsx` imports the renderer dynamically in an effect
-  (never on the server), owns the frame loop, the pointer and the density.
+  (never on the server), owns the frame loop, the pointers (drag, pinch,
+  click), the zoom buttons, the whiteboard card and the density.
   `src/ui/room.tsx` is the page: header, rooms, the canvas or the compact band,
   the strip of agents, the sheet.
 - Walking follows routes of the layout (`routeToOffice`, `routeToUser`; the
-  receptionist's seat is a spot like an office's: straight ahead to the corridor
-  in front of the counter): from
-  the seat round the desk, through the door of the office, along the shortest
-  way of the corridors (a graph built from their center lines, Dijkstra), then
-  through the other door to where a visitor stands, or to the tray in the
-  lobby; two agents of the same office just cross it. A test checks that no
-  route of any template crosses a wall, whatever the number of agents.
-- The neutral character is `public/sprites/neutral.png`, drawn by
-  `scripts/build-neutral-sprite.mjs`; it is tinted per agent from a fixed
-  palette. A home gives an agent its own sheet with `agents[].sprite` (contract
-  in `home-layout.md`, route in `api.md`).
+  receptionist's spot behind the counter is a seat like an office's): from the
+  chair to the aisle cell next to it, along the aisles of the room, out by an
+  opening of its front rim, along the lanes of the hall (the shortest way in
+  the graph of aisles and lanes, Dijkstra), into the other room, to the aisle
+  cell next to the colleague's chair or in front of the tray. Every leg is
+  along x or y, so a character walks in the four directions of its sheet,
+  facing the way it goes; the frame of the walk follows the distance walked.
+- Characters: an agent's own sheet is `agents[].isoSprite` (contract in
+  `home-layout.md`, route in `api.md`); otherwise one of the four neutral
+  people of `public/sprites/iso-person-*.png`, picked from the agent's key so
+  it never changes. The old top-down `sprite` is accepted and no longer drawn.
 
 **What the stream does** (durations are named constants of `room-model.ts`):
 
@@ -853,8 +884,8 @@ the state, kept up to date by the stream). Its sheet is
 | `run` running | The agent is awake at its desk, seated; a new run clears a question mark. |
 | `tool_call` | Types for 2.5 s. |
 | `text` | Thought bubble with the first 64 characters, for 5 s (the stream does not keep `thinking` blocks). |
-| `tool_call` `mcp__hq__hq_message` | Walks in a straight line to the table of `input.to` (the side of the desk that faces it), talks for 3 s, walks back. A recipient that is not in the room makes it an ordinary tool call. |
-| `tool_call` `mcp__hq__hq_submit` | Walks to the desk of the user carrying a folder, stays 2.2 s, drops it in the tray, walks back. The tray counter rises at the drop, not when the `approval` event arrives. |
+| `tool_call` `mcp__hq__hq_message` | Gets up and walks the aisles and the hall to the chair of `input.to`, faces it and talks for 3 s, walks back and sits. A recipient that is not in the room makes it an ordinary tool call. |
+| `tool_call` `mcp__hq__hq_submit` | Walks to the tray of the lobby carrying a folder, stays 2.2 s, drops it in the tray, walks back. The tray counter rises at the drop, not when the `approval` event arrives. |
 | run `failed`, `end` failed, or `hq_task_update` with `status: blocked` | A question mark, until the user decides an item of that agent or the next run starts. It overrides typing and thinking, not a walk, and it does not fall asleep. |
 | no run for 60 s | Asleep. |
 | `approval` | Moves the tray counter (pending items shown). |
@@ -866,14 +897,13 @@ label (types, thinks, "drops an item"...) in `strings.ts`.
 it a list gives, for each agent, its name, its state in text and a button that
 opens its sheet. A single polite live region says the changes of a coarse state
 (asleep, working, visiting, carrying an item, stuck): typing and thinking come
-and go too often to be announced. The name of an agent is always written: on the plate of its office, and under
-its character when it walks away from it. The tints are colour-blind safe: colour
-never carries the identity alone.
+and go too often to be announced. The name of an agent is always written, over
+its head, seated or walking: colour never carries the identity alone. The zoom
+buttons are real buttons with French labels, outside the hidden canvas.
 
 **Performance and motion.** The canvas is drawn at the device pixel ratio
-(`autoDensity`, redrawn at the new density when a zoom changes it). Sprite
-sheets use nearest-neighbour scaling, except when a sheet is drawn well below
-its size (a 128 px cell shown at 46 px), where smoothing avoids jagged edges.
+(`autoDensity`, redrawn at the new density when a zoom changes it), always at a
+whole number of device pixels per art pixel (see above).
 The loop draws only while the tab is visible and the canvas
 on screen (`visibilitychange`, `IntersectionObserver`); the SSE stream keeps
 feeding the model, which is a function of time, so the room catches up on
@@ -884,7 +914,8 @@ crossfade, nothing flashes on the board, and the room is redrawn when its state
 changes (a timer at the next change), which is about no frame at all when idle.
 Under 40 rem of width the page scrolls as before and the canvas is not
 mounted: a compact band (the board figures, the tray count, one agent per
-line) and a "Voir la pièce" button that mounts it on demand.
+line) and a "Voir la pièce" button that mounts it on demand, most of the
+screen high, the floor fitted (offices first) and draggable.
 
 **The sheet of an agent** (click on a character, or its list button): the team
 card (role, model, tools, routines and their arming switch, last run, run

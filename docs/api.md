@@ -30,7 +30,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
 | `PROPOSAL_INVALID` | 422 | Approving a room proposal that fails validation (payload, paths, target repository). Nothing is written; the item stays pending. |
 | `WORKTREE_FAILED` | 422 | Approving a room proposal whose agent worktree cannot be created. Nothing is written; the item stays pending. |
-| `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` for an agent that declares no sprite, or whose file is missing, too large, or not a PNG or WebP. |
+| `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
@@ -220,6 +220,7 @@ restart.
           "role": "rooms/demo/roles/scout.md",
           "allowedTools": ["WebSearch", "WebFetch", "mcp__hq__*"],
           "sprite": null,
+          "isoSprite": "/api/sprites/demo/scout?sheet=iso",
           "armed": false,
           "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
           "state": "idle",
@@ -240,15 +241,20 @@ restart.
 
 - `role` and `targetRepo` are relative to the home.
 - `color`: the room's hex colour from `room.json`, or `null` (a neutral room).
-- `sprite`: `/api/sprites/<room>/<agent>` when the agent declares a character
-  sheet in `room.json` and the file exists, `null` otherwise (the room view
-  then draws the neutral character shipped with the app).
+- `isoSprite`: `/api/sprites/<room>/<agent>?sheet=iso` when the agent declares
+  an isometric character sheet (`isoSprite` in `room.json`) and the file
+  exists, `null` otherwise (the floor then draws one of the neutral people
+  shipped with the app).
+- `sprite`: `/api/sprites/<room>/<agent>` when the agent declares an old
+  top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
+  no longer draws it.
 - `lastRun` is a Run or `null`.
 - `reception`: the onboarding agent seen from the floors. `room` is the one
   floor that draws it as a receptionist (`reception.room` of `myhq.json` when
   that room exists, else the room `assistant`, else the first room, `null`
   when the home has no room); `sprite` is `/api/sprites/_hq/onboarding` when
-  the home sets `onboarding.sprite`, `null` for the shipped sheet; `runs` are
+  the home sets `onboarding.sprite` (an old top-down sheet, no longer drawn:
+  the floor draws the shipped iso receptionist), `null` otherwise; `runs` are
   its latest eight runs (room `_hq`, agent `onboarding`, task « Propose a room
   for the repository <path>. »), newest first. The reserved room `_hq` is not
   in `rooms`; its runs, events and approvals still arrive on the stream like
@@ -460,10 +466,12 @@ A failing command never fails the route: its object has `status: "error"`.
 
 ### `GET /api/sprites/[room]/[agent]`
 
-The character sheet of an agent for the room view (`/room`): a PNG or WebP
-image (see `home-layout.md` for the grid). The file is the one declared in the
-agent's `sprite` field of the validated `room.json` (for the receptionist,
-`/api/sprites/_hq/onboarding`: the `onboarding.sprite` of `myhq.json`): the
+The character sheet of an agent for the floor (`/room`): a PNG or WebP image
+(see `home-layout.md` for the format). With `?sheet=iso` the file is the one
+declared in the agent's `isoSprite` field of the validated `room.json` (the
+isometric sheet the floor draws); without it, its `sprite` field (the old
+top-down sheet, still served, no longer drawn; for the receptionist,
+`/api/sprites/_hq/onboarding`: the `onboarding.sprite` of `myhq.json`). The
 path is never read from the URL, must stay inside the home (symbolic links are resolved), must end
 in `.png` or `.webp`, must not exceed 2 MiB and must really start like a PNG
 or a WebP. `ETag` follows the modification time and `Cache-Control: no-cache`
@@ -471,8 +479,8 @@ makes the browser revalidate, so a redrawn sheet shows up at the next load
 (`304` when it did not change).
 
 Errors: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `SPRITE_NOT_FOUND`
-(no sprite declared, file missing, too large or not an image). The room view
-treats any error as "use the neutral character".
+(no sheet declared, file missing, too large or not an image). The floor
+treats any error, and a sheet of the wrong size, as "draw a neutral person".
 
 ### `GET /api/roadmap`
 

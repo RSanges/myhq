@@ -20,15 +20,28 @@ export function sniffImageType(bytes: Buffer): "image/png" | "image/webp" | null
   return null;
 }
 
-/** URL of the agent's character sheet when it declares one that exists, otherwise null (the neutral sheet). */
-export function spriteUrl(room: string, agent: Agent): string | null {
-  if (!agent.sprite) return null;
+/** Which sheet of an agent: the old top-down one (`sprite`) or the isometric one of the floor (`isoSprite`). */
+export type SheetKind = "sprite" | "iso";
+
+const isFile = (file: string | null): boolean => {
+  if (!file) return false;
   try {
-    if (!fs.statSync(agent.sprite).isFile()) return null;
+    return fs.statSync(file).isFile();
   } catch {
-    return null;
+    return false;
   }
+};
+
+/** URL of the agent's old top-down sheet when it declares one that exists, otherwise null. */
+export function spriteUrl(room: string, agent: Agent): string | null {
+  if (!isFile(agent.sprite)) return null;
   return `/api/sprites/${encodeURIComponent(room)}/${encodeURIComponent(agent.id)}`;
+}
+
+/** URL of the agent's iso sheet (`isoSprite`) when it declares one that exists, otherwise null (a neutral person). */
+export function isoSpriteUrl(room: string, agent: Agent): string | null {
+  if (!isFile(agent.isoSprite)) return null;
+  return `/api/sprites/${encodeURIComponent(room)}/${encodeURIComponent(agent.id)}?sheet=iso`;
 }
 
 /** URL of the receptionist's own sheet (`onboarding.sprite` of myhq.json) when it is set and the file exists, otherwise null (the shipped one). */
@@ -49,15 +62,22 @@ function notFound(message: string): HqError {
 
 /**
  * The character sheet of an agent, served from the path declared in the
- * validated room.json (never from the URL). The file must stay inside the home
+ * validated room.json (never from the URL): `sprite`, or `isoSprite` when
+ * `kind` is "iso" (`?sheet=iso`). The file must stay inside the home
  * once symbolic links are resolved, carry a .png or .webp extension, stay under
  * SPRITE_MAX_BYTES and really be a PNG or a WebP. `ETag` follows the
  * modification time, so a redrawn sheet shows up at the next load.
  */
-export function spriteResponse(request: Request, config: HqConfig, roomName: string, agentId: string): Response {
+export function spriteResponse(
+  request: Request,
+  config: HqConfig,
+  roomName: string,
+  agentId: string,
+  kind: SheetKind = "sprite",
+): Response {
   const home = loadHome(config.home);
   let declared: string | null;
-  if (roomName === RECEPTION_ROOM && agentId === RECEPTION_AGENT) {
+  if (roomName === RECEPTION_ROOM && agentId === RECEPTION_AGENT && kind === "sprite") {
     // The receptionist belongs to no room: its sheet is declared in myhq.json.
     declared = readReceptionSprite(config.home);
   } else {
@@ -69,9 +89,9 @@ export function spriteResponse(request: Request, config: HqConfig, roomName: str
     }
     const agent = room.agents.find((candidate) => candidate.id === agentId);
     if (!agent) throw new HqError("AGENT_NOT_FOUND", 404, `No agent "${agentId}" in room "${roomName}".`);
-    declared = agent.sprite;
+    declared = kind === "iso" ? agent.isoSprite : agent.sprite;
   }
-  if (!declared) throw notFound(`Agent "${agentId}" declares no sprite.`);
+  if (!declared) throw notFound(`Agent "${agentId}" declares no ${kind === "iso" ? "isoSprite" : "sprite"}.`);
   const sprite = declared;
 
   if (!(SPRITE_EXTENSIONS as readonly string[]).includes(path.extname(sprite).toLowerCase())) {
