@@ -47,3 +47,61 @@ export const RAMP_LIST = RAMP_NAMES.map((name) => RAMPS[name].map((colour) => {
   return INDEX[colour];
 }));
 export const RAMP_ID = Object.fromEntries(RAMP_NAMES.map((name, id) => [name, id]));
+
+/**
+ * Registers an extra ramp for one build (colours beyond the shared 32, for
+ * example a brand colour in a private home): `hexes` from darkest (outline)
+ * to lightest. Returns the ramp name.
+ */
+export function addRamp(name, hexes) {
+  if (name in RAMP_ID) return name;
+  const ids = hexes.map((hex) => {
+    const key = `${name}:${hex}`;
+    if (!(key in INDEX)) {
+      INDEX[key] = PALETTE.length;
+      COLORS[key] = hex;
+      PALETTE.push([1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)));
+    }
+    return INDEX[key];
+  });
+  RAMP_ID[name] = RAMP_LIST.length;
+  RAMP_NAMES.push(name);
+  RAMP_LIST.push(ids);
+  RAMPS[name] = hexes.map((hex) => `${name}:${hex}`);
+  return name;
+}
+
+const toHsl = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  if (!d) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, s, l];
+};
+const toHex = (h, s, l) => {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+  return "#" + [f(0), f(8), f(4)].map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
+};
+/** Moves a hue towards a target hue by at most `by` degrees. */
+const towards = (h, target, by) => {
+  const d = ((target - h + 540) % 360) - 180;
+  return (h + Math.sign(d) * Math.min(Math.abs(d), by) + 360) % 360;
+};
+
+/**
+ * A five tone ramp around one colour, in the palette's spirit: shadows lean
+ * cool and purple, highlights warm. Level 2 is the colour itself, so a face
+ * at the default `left` level shows it exactly.
+ */
+export function deriveRamp(hex) {
+  const [h, s, l] = toHsl(hex);
+  return [
+    toHex(towards(h, 265, 22), Math.min(1, s * 0.75), l * 0.34),
+    toHex(towards(h, 265, 10), Math.min(1, s * 0.92), l * 0.7),
+    hex,
+    toHex(towards(h, 50, 8), s, l + (1 - l) * 0.38),
+    toHex(towards(h, 50, 14), s * 0.9, l + (1 - l) * 0.72),
+  ];
+}

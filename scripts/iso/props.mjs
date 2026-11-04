@@ -1,4 +1,4 @@
-// The props of the desk scene. Each prop is a function `(b, options)` that
+// The props of the hub (the desk scene). Each prop is a function `(b, options)` that
 // draws voxels with the builder `b` in its own local frame: x and y on the
 // floor (footprint from 0), z up from 0 at ground contact. One voxel is
 // about 3 cm; small desk items are drawn about 1.4 times larger than life so
@@ -24,12 +24,6 @@ const leafB = material({ ramp: "leaf", top: 3, left: 2, right: 1 });
 const stem = material({ ramp: "leaf", top: 2, left: 2, right: 1, rim: false });
 const bulb = material({ ramp: "gold", top: 4, left: 4, right: 4, emissive: true, rim: false });
 
-/** Folder ramps and lit levels for the document spines. */
-export const SPINES = {
-  pink: { ramp: "pink", level: 2 }, // #ff3d7f on the lit face
-  blue: { ramp: "blue", level: 2 },
-  kraft: { ramp: "wood", level: 4 },
-};
 
 // --------------------------------------------------------------------- room
 
@@ -108,18 +102,7 @@ export function desk(b) {
 
 // ------------------------------------------------------------------ monitor
 
-const postIt = (ramp, level, strokes = 2) => material({
-  ramp, top: level, left: level, right: level - 1, rim: false,
-  paint(face, x, y, z, level) {
-    if (face !== LEFT) return level;
-    const lz = frac(z / 4) * 4;
-    const lx = frac(x / 4) * 4;
-    for (let s = 0; s < strokes; s++) if (band(lz, 2.5 - s * 1.5) && within(lx, 0.5, 3.5 - s)) return { ramp: "ink", level: 2 };
-    return level;
-  },
-});
-
-/** Monitor on a stand, a soft glowing screen, post-its stuck on its edge. */
+/** Monitor on a stand, a soft glowing screen (post-its: see postIts). */
 export function monitor(b) {
   const body = material({
     ramp: "ink", top: 2, left: 2, right: 1,
@@ -140,48 +123,95 @@ export function monitor(b) {
   b.box(7, 1, 0, 8, 6, 1, inkSoft);
   b.box(10, 2, 1, 2, 2, 7, chrome);
   b.box(0, 4, 6, 22, 2, 15, body);
-  b.box(-1, 6, 15, 4, 1, 4, postIt("gold", 3));
-  b.box(18, 6, 6, 4, 1, 4, postIt("pink", 3, 1));
-  b.box(14, 6, 18, 4, 1, 4, postIt("leaf", 4));
+}
+
+/** Where the post-its go, in monitor local coordinates, in order of arrival. */
+const POST_ITS = [
+  { at: [18, 6, 6], ramp: "pink", level: 3, strokes: 1 },
+  { at: [14, 6, 18], ramp: "leaf", level: 4, strokes: 2 },
+  { at: [2, 6, 10], ramp: "gold", level: 3, strokes: 2 },
+  { at: [19, 6, 12], ramp: "blue", level: 3, strokes: 2 },
+  { at: [8, 6, 18], ramp: "gold", level: 4, strokes: 1 },
+];
+
+/** `count` post-its (0 to 5) stuck on the monitor, placed at the monitor origin. */
+export function postIts(b, { count = 3 } = {}) {
+  for (const { at, ramp, level, strokes } of POST_ITS.slice(0, Math.max(0, Math.min(5, count)))) {
+    const note = material({
+      ramp, top: level, left: level, right: level - 1, rim: false,
+      paint(face, x, y, z, lvl) {
+        if (face !== LEFT) return lvl;
+        const lz = z - at[2], lx = x - at[0];
+        if (lz >= 3.5) return lvl + 1; // the glue strip, a tone lighter
+        for (let s = 0; s < strokes; s++) if (band(lz, 2.5 - s * 1.5) && within(lx, 0.5, 3.5 - s)) return { ramp: "ink", level: 2 };
+        return lvl;
+      },
+    });
+    b.box(...at, 4, 1, 4, note);
+  }
 }
 
 // --------------------------------------------------------------- doc pile
 
 /**
- * A pile of documents to sign: `count` folders (clamped to 1..14), one
- * voxel each, so the height shows the real number of items. Spines cycle
- * through `spines` (names of SPINES), the top one shows a page with lines
- * and a signature line, gold tabs mark where to sign.
+ * Sheet offsets of the pile, in voxels: the pile drifts in short runs
+ * instead of alternating, so its edges read as a stack of folders and not
+ * as a zigzag. dy never grows going up: a folder pushed towards the viewer
+ * would hide the spine of the one below.
  */
-export function docPile(b, { count = 5, spines = ["pink", "blue", "kraft"] } = {}) {
-  const n = Math.max(1, Math.min(14, count));
-  const tab = material({ ramp: "gold", top: 3, left: 3, right: 2, rim: false });
+export const PILE_OFFSETS = [[0, 1], [0, 1], [1, 1], [1, 1], [1, 1], [0, 0], [0, 0], [0, 0], [1, 0], [1, 0], [1, 0], [0, 0], [0, 0], [1, 0]];
+/** Example spine colours, shown when the runtime does not tint. */
+const SPINE_EXAMPLES = ["pink", "blue", "leaf", "gold"];
+
+/**
+ * A pile of `count` folders to sign (0 to 14), one voxel each, so its
+ * height shows the real number of items. Folder k has its spine in tint
+ * slot k: the runtime paints the colour of the room of item k there. The
+ * top folder shows a page with a signature line; gold "sign here" flags
+ * stick out of the right side of every third folder.
+ */
+export function docPile(b, { count = 5 } = {}) {
+  const n = Math.max(0, Math.min(14, count));
+  const flag = material({ ramp: "gold", top: 4, left: 3, right: 3, rim: false });
   for (let k = 0; k < n; k++) {
-    const dx = hash(k, 11) < 0.5 ? 0 : 1;
-    const dy = hash(k, 23) < 0.5 ? 0 : 1;
-    const spine = SPINES[spines[k % spines.length]];
+    const [dx, dy] = PILE_OFFSETS[k];
     const top = k === n - 1;
+    const ramp = SPINE_EXAMPLES[k % SPINE_EXAMPLES.length];
+    const spine = material({ ramp, top: 3, left: 2, right: 1, rim: false, tint: "room", slot: k });
     const doc = material({
       ramp: "paper", top: 4, left: 3, right: 3,
       paint(face, x, y, z, level) {
-        if (face === LEFT) return spine;
-        if (face === RIGHT) return within(y - dy, 0, 1.5) ? { ...spine, level: spine.level - 1 } : level;
-        if (!top) return level;
+        if (face === RIGHT) return within(y - dy, 0, 1) ? { ramp: "paper", level: 2 } : level; // page edges
+        if (face !== TOP || !top) return level;
         const lx = x - dx, ly = y - dy;
-        if (within(ly, 0.5, 2) && within(lx, 1, 8)) return { ramp: spine.ramp, level: spine.level };
-        for (const [row, len] of [[3.5, 6], [5, 5], [6.5, 6], [8, 3.5]]) if (band(ly, row) && within(lx, 1, 1 + len)) return 2;
-        if (band(ly, 10) && within(lx, 3.5, 8)) return { ramp: "ink", level: 2 };
+        if (within(ly, 1, 2.5) && within(lx, 1, 7)) return { ramp: "ink", level: 2 }; // title
+        for (const [row, len] of [[3.5, 6], [5, 5], [6.5, 6]]) if (band(ly, row) && within(lx, 1, 1 + len)) return 2;
+        if (band(ly, 9) && within(lx, 3.5, 8)) return { ramp: "ink", level: 2 }; // signature line
+        if (within(ly, 7.5, 9) && within(lx, 1, 2.5)) return { ramp: "gold", level: 3 }; // sign here mark
         return level;
       },
     });
-    b.box(dx, dy, k, 9, 12, 1, doc);
-    if (k % 2 === 0) b.set(dx + 9, dy + 7 + (k % 4), k, tab);
+    b.box(dx, dy, k, 9, 11, 1, doc);
+    b.box(dx, dy + 11, k, 9, 1, 1, spine); // the spine is the +y edge of the folder
+    if (k % 3 === 1) b.box(dx + 9, dy + 2 + (k % 2) * 3, k, 2, 1, 1, flag);
   }
+}
+
+/** A leather desk pad under the pile, so an empty pile still shows a place. */
+export function deskPad(b) {
+  const pad = material({
+    ramp: "wood", top: 2, left: 1, right: 1, rim: false,
+    paint(face, x, y, z, level) {
+      if (face === TOP && (x < 1 || y < 1 || x >= 13 || y >= 16)) return level + 1; // stitched border
+      return level;
+    },
+  });
+  b.box(0, 0, 0, 14, 17, 1, pad);
 }
 
 // ---------------------------------------------------------------- mail tray
 
-/** A letter tray (bannette) with `letters` envelopes, the top one overhanging. */
+/** A letter tray (bannette) with `letters` envelopes (0 to 5), fanned out of the front. */
 export function mailTray(b, { letters = 3 } = {}) {
   const tray = material({ ramp: "ink", top: 4, left: 3, right: 2 });
   b.box(0, 0, 0, 12, 14, 1, tray);
@@ -191,8 +221,7 @@ export function mailTray(b, { letters = 3 } = {}) {
   b.box(1, 13, 1, 10, 1, 1, tray);
   b.clear(0, 8, 2, 1, 6, 2);
   b.clear(11, 8, 2, 1, 6, 2);
-  // Envelopes fanned out of the front, white and kraft, each with a stamp.
-  const n = Math.max(1, Math.min(4, letters));
+  const n = Math.max(0, Math.min(5, letters));
   for (let k = 0; k < n; k++) {
     const y0 = 1 + k * 2;
     const x0 = 1 + (k % 2);
@@ -213,41 +242,116 @@ export function mailTray(b, { letters = 3 } = {}) {
 
 // ---------------------------------------------------------------- newspaper
 
-/** A folded newspaper (long side along y): masthead, headline, photo, columns. */
+/**
+ * A folded daily lying flat, landscape (13 x 10): black masthead along the
+ * far edge, a rule, a two line headline, a photo and text columns. The near
+ * edge is the fold, two sheets thick with a shaded crease.
+ */
 export function newspaper(b) {
-  const news = material({
-    ramp: "paper", top: 3, left: 2, right: 2,
+  const W = 13, D = 10;
+  const page = material({
+    ramp: "paper", top: 4, left: 3, right: 3,
     paint(face, x, y, z, level) {
-      if (face !== TOP) return band(z, 1) ? level - 1 : level;
-      if (within(x, 1, 8) && within(y, 0.5, 1.5)) return { ramp: "ink", level: 1 }; // masthead
-      if (within(x, 1, 8) && band(y, 2)) return { ramp: "ink", level: 2 }; // headline
-      if (within(x, 1, 4.5) && within(y, 3, 6.5)) return { ramp: "ink", level: within(x, 2, 3.5) && within(y, 4, 5.5) ? 2 : 3 }; // photo
-      for (const row of [3.5, 4.5, 5.5, 7, 8, 9]) {
-        if (band(y, row) && within(x, row < 6.5 ? 5.5 : 1, 8)) return 1;
-      }
-      if (band(x, 4.75) && within(y, 7, 9.5)) return 2;
+      if (face === LEFT) return band(z, 1, 0.5) ? level - 1 : level; // the fold
+      if (face === RIGHT) return band(z, 1, 0.5) ? level - 1 : level; // two sheets
+      if (face !== TOP || z < 1.5) return level;
+      const ink = (l) => ({ ramp: "ink", level: l });
+      if (within(y, 0.5, 2) && within(x, 1, 12)) return ink(1); // masthead
+      if (band(y, 2.5) && within(x, 1, 12)) return ink(3); // rule
+      if (within(y, 3.5, 4.5) && within(x, 1, 10)) return ink(2); // headline
+      if (within(x, 1, 5.5) && within(y, 5.5, 9)) return y > 8 - (within(x, 2, 4) ? 1 : 0) ? ink(2) : ink(3); // photo
+      if ((within(x, 6.5, 9) || within(x, 9.5, 12)) && within(y, 5.5, 9.5) && band(frac(y), 0.5)) return ink(4); // columns
       return level;
     },
   });
-  b.box(0, 0, 0, 9, 11, 1, news);
-  b.box(0, 0, 1, 9, 11, 1, news);
-  b.clear(8, 0, 1, 1, 11, 1);
+  b.box(0, 0, 0, W, D, 1, page);
+  b.box(0, 0, 1, W, D, 1, page);
 }
 
 // -------------------------------------------------------------------- phone
 
-/** A smartphone lying flat, its screen on, a notification dot. */
-export function phone(b) {
-  const body = material({
-    ramp: "ink", top: 2, left: 2, right: 1, rim: false,
+/**
+ * A dark office desk phone facing +y: the handset in its cradle on the
+ * left, a light keypad on the right, a small display, and a message light
+ * that glows pink (and a pink envelope on the display) when `unread`.
+ */
+export function deskPhone(b, { unread = false } = {}) {
+  const shell = material({ ramp: "ink", top: 2, left: 2, right: 1 });
+  const keypad = material({
+    ramp: "ink", top: 2, left: 2, right: 1,
     paint(face, x, y, z, level) {
-      if (face !== TOP || !within(x, 1, 7) || !within(y, 0.5, 4.5)) return level;
-      if (within(x, 5.5, 6.5) && within(y, 1, 2)) return { ramp: "pink", level: 2, emissive: true };
-      if (band(y, 2.5) && within(x, 1.5, 5)) return { ramp: "sky", level: 1, emissive: true };
-      return { ramp: "sky", level: 2, emissive: true };
+      if (face !== TOP) return level;
+      const kx = x - 6.5, ky = y - 4.5;
+      if (kx >= 0 && ky >= 0 && kx < 4.5 && ky < 5 && band(frac(kx / 1.5) * 1.5, 0, 1) && band(frac(ky / 1.25) * 1.25, 0, 0.75)) return 5;
+      return level;
     },
   });
-  b.box(0, 0, 0, 8, 5, 1, body);
+  const display = material({
+    ramp: "sky", top: unread ? 2 : 1, left: 1, right: 1, rim: false, emissive: true,
+    paint(face, x, y) {
+      if (face !== TOP) return { ramp: "ink", level: 2, emissive: false };
+      if (unread && within(x, 7, 10) && within(y, 0.5, 2)) return { ramp: "pink", level: within(y, 1, 1.5) && within(x, 8, 9) ? 4 : 2 };
+      return unread ? 3 : 2;
+    },
+  });
+  const handset = material({ ramp: "ink", top: 5, left: 4, right: 3 });
+  const light = unread
+    ? material({ ramp: "pink", top: 4, left: 3, right: 2, emissive: true, rim: false })
+    : material({ ramp: "ink", top: 2, left: 2, right: 1, rim: false });
+  b.box(0, 0, 0, 12, 10, 2, shell);
+  b.box(0, 0, 2, 12, 4, 1, shell); // raised back
+  b.box(6, 4, 1, 6, 6, 1, keypad);
+  b.box(6, 0, 3, 5, 3, 1, display);
+  b.box(11, 4, 2, 1, 1, 1, light);
+  // Handset: earpiece and mouthpiece on the cradle, a grip between them.
+  b.box(0, 0, 3, 5, 3, 2, handset);
+  b.box(0, 7, 2, 5, 3, 2, handset);
+  b.box(1, 3, 4, 3, 4, 1, handset);
+}
+
+// ------------------------------------------------------------------ calendar
+
+/** Calendar grid: 7 columns (Monday first) x 6 rows of days. */
+export const CALENDAR = { cols: 7, rows: 6 };
+const cellOf = (x, z) => {
+  const cx = x - 1, cz = 9.5 - z;
+  if (cx < 0 || cz < 0) return null;
+  const col = Math.floor(cx / 2), row = Math.floor(cz / 1.5);
+  if (col >= CALENDAR.cols || row >= CALENDAR.rows) return null;
+  const line = band(frac(cx / 2) * 2, 1.5) || band(frac(cz / 1.5) * 1.5, 0, 0.5);
+  return { col, row, line };
+};
+
+/**
+ * A wall calendar facing +y: a picture, a month bar, a 7 x 6 day grid,
+ * weekends shaded, and the day at cell `today` (row * 7 + col, or -1)
+ * circled in pink.
+ */
+export function calendar(b, { today = -1 } = {}) {
+  const sheet = material({
+    ramp: "paper", top: 4, left: 4, right: 3, rim: false,
+    paint(face, x, y, z, level) {
+      if (face !== LEFT) return level;
+      if (z >= 19) return { ramp: "ink", level: 2 };
+      if (within(z, 11.5, 19)) { // picture: hills under a sky, a sun
+        if (!within(x, 1, 15) || z >= 18.5) return level;
+        const hill = 13 + (within(x, 3, 9) ? 1 : 0) + (within(x, 4.5, 7.5) ? 1 : 0) + (within(x, 10, 15) ? 0.5 : 0);
+        if (z < hill) return { ramp: "leaf", level: z < 12.5 ? 2 : 3 };
+        if (within(x, 11, 13) && within(z, 15.5, 17)) return { ramp: "gold", level: 3 };
+        return { ramp: "sky", level: 2 };
+      }
+      if (within(z, 10, 11.5)) return within(x, 4, 12) && band(z, 10.5) && band(frac(x / 2) * 2, 0, 1.5) ? { ramp: "pink", level: 3 } : { ramp: "pink", level: 1 };
+      const c = cellOf(x, z);
+      if (!c) return level;
+      if (c.line) return 3;
+      if (c.row * CALENDAR.cols + c.col === today) return { ramp: "pink", level: 2 };
+      if (c.col >= 5) return { ramp: "pink", level: 4 };
+      return level;
+    },
+  });
+  b.box(0, 0, 0, 16, 1, 20, sheet);
+  b.set(4, 1, 19, gold);
+  b.set(11, 1, 19, gold);
 }
 
 // ---------------------------------------------------------------------- mug
@@ -283,37 +387,6 @@ export function keyboard(b) {
     },
   });
   b.box(0, 0, 0, 15, 6, 1, keys);
-}
-
-// ------------------------------------------------------------------ calendar
-
-/** A wall calendar facing +y: a picture, a month bar, a grid with today. */
-export function calendar(b) {
-  const sheet = material({
-    ramp: "paper", top: 4, left: 3, right: 2, rim: false,
-    paint(face, x, y, z, level) {
-      if (face !== LEFT) return level;
-      if (z >= 14) return { ramp: "ink", level: 2 };
-      if (within(z, 8.5, 14)) {
-        if (!within(x, 0.5, 11.5) || z >= 13.5) return level;
-        const hill = 9.5 + (within(x, 2, 7) ? 1 : 0) + (within(x, 3, 5) ? 1 : 0) + (within(x, 8, 11.5) ? 0.5 : 0);
-        if (z < hill) return { ramp: "leaf", level: 3 };
-        if (within(x, 8, 10) && within(z, 11, 12.5)) return { ramp: "gold", level: 3 };
-        return { ramp: "sky", level: 2 };
-      }
-      if (within(z, 7, 8.5)) return { ramp: "pink", level: 1 };
-      if (!within(x, 1, 11) || !within(z, 1, 6.5)) return level;
-      const col = Math.floor((x - 1) / 2), row = Math.floor((6.5 - z) / 1.5);
-      if (band(frac((x - 1) / 2) * 2, 1.5) || band(frac((6.5 - z) / 1.5) * 1.5, 1)) return 2;
-      const day = row * 5 + col;
-      if (day === 8) return { ramp: "pink", level: 2 };
-      if (day < 8) return 3;
-      return level;
-    },
-  });
-  b.box(0, 0, 0, 12, 1, 15, sheet);
-  b.set(3, 1, 14, gold);
-  b.set(8, 1, 14, gold);
 }
 
 // --------------------------------------------------------------------- chair
@@ -406,43 +479,56 @@ export function clock(b) {
 // --------------------------------------------------------------------- plant
 
 /**
- * One drooping leaf from `base` towards `angle`: a pointed blade, a darker
- * midrib, the tip bending down.
+ * One leaf from `base` towards `angle`: a pointed blade, a darker midrib,
+ * the tip bending down. Exported for the floor plants.
  */
-function leaf(b, base, angle, length, width, droop, m, rib) {
+export function leaf(b, base, angle, length, width, droop, m, rib, rise = 0.6) {
   const dir = [Math.cos(angle), Math.sin(angle)];
   const side = [-dir[1], dir[0]];
-  for (let s = 0; s <= length; s += 0.35) {
-    const w = width * Math.sin(Math.PI * Math.min(1, (s + 0.6) / (length + 0.6)));
-    const z = base[2] + s * 0.6 - droop * (s / length) ** 2;
-    for (let t = -w; t <= w; t += 0.35) {
+  for (let s = 0; s <= length; s += 0.3) {
+    const w = width * Math.sin(Math.PI * Math.min(1, (s + 0.4) / (length + 0.4))) ** 0.8;
+    const z = base[2] + s * rise - droop * (s / length) ** 2;
+    for (let t = -w; t <= w; t += 0.3) {
       const x = base[0] + dir[0] * s + side[0] * t;
       const y = base[1] + dir[1] * s + side[1] * t;
-      b.set(Math.floor(x), Math.floor(y), Math.floor(z), Math.abs(t) < 0.4 && s > 1 ? rib : m);
+      b.set(Math.floor(x), Math.floor(y), Math.floor(z), Math.abs(t) < 0.35 && s > 1 && s < length - 1 ? rib : m);
     }
   }
 }
 
-/** A potted plant with broad drooping leaves, about 44 voxels tall. */
-export function plant(target) {
+/**
+ * A potted plant (a dracaena like palm), about 46 voxels tall: many narrow
+ * arching blades that end in a lighter tip, without rim light or creases,
+ * so it reads as foliage and not as blocks.
+ */
+export function plant(target, { blades = 26, height = 26, spread = 1 } = {}) {
   // Leaves never replace voxels of other objects (wall, sill, furniture).
   const b = { ...target, set: (x, y, z, m) => { if (!target.has(x, y, z)) target.set(x, y, z, m); } };
   const terracotta = material({ ramp: "wood", top: 4, left: 3, right: 2, round: [8, 8] });
   const rim = material({ ramp: "wood", top: 5, left: 4, right: 3, round: [8, 8] });
+  const tones = [
+    material({ ramp: "leaf", top: 2, left: 2, right: 1, rim: false }),
+    material({ ramp: "leaf", top: 3, left: 2, right: 1, rim: false }),
+    material({ ramp: "leaf", top: 4, left: 3, right: 2, rim: false }),
+  ];
   b.cylinder(8, 8, 0, 4.6, 8, terracotta);
   b.cylinder(8, 8, 8, 5.4, 2, rim, 4.2);
   b.cylinder(8, 8, 8, 4.2, 1, soil);
-  // Leaves on petioles that fan out from the pot: the higher the leaf, the
-  // further out it starts, so the stems read as a fan and not as a trunk.
-  const leaves = 11;
-  for (let i = 0; i < leaves; i++) {
-    const a = i * 2.39996 + 0.5;
-    const hz = 13 + 22 * (i / (leaves - 1));
-    const reach = 2.5 + i * 0.45;
-    const start = [8 + Math.cos(a) * reach, 8 + Math.sin(a) * reach, hz];
-    b.line([8 + Math.cos(a) * 1.5, 8 + Math.sin(a) * 1.5, 9], start, stem);
-    const length = 10 + (i % 3) - i * 0.25;
-    leaf(b, start, a, length, 3, 7 + (i % 3), i % 2 ? leafA : leafB, stem);
+  for (let i = 0; i < blades; i++) {
+    const a = i * 2.39996 + 0.3;
+    const t = i / (blades - 1); // 0: outer, low blades; 1: inner, upright ones
+    const dir = [Math.cos(a), Math.sin(a)];
+    const length = (15 + 13 * t + (i % 3)) * spread * (height / 26);
+    const up = (52 + 34 * t) * (Math.PI / 180), down = (-20 - 40 * (1 - t)) * (Math.PI / 180);
+    let p = [8 + dir[0] * 0.8, 8 + dir[1] * 0.8, 9];
+    for (let s = 0; s <= length; s += 0.25) {
+      const q = s / length;
+      const e = up + (down - up) * q ** 1.6;
+      p = [p[0] + dir[0] * Math.cos(e) * 0.25, p[1] + dir[1] * Math.cos(e) * 0.25, p[2] + Math.sin(e) * 0.25];
+      const m = tones[q > 0.7 ? 2 : q > 0.3 ? 1 : 0];
+      const w = q < 0.85 ? 0.5 : 0.2;
+      for (let o = -w; o <= w; o += 0.25) b.set(Math.floor(p[0] - dir[1] * o), Math.floor(p[1] + dir[0] * o), Math.floor(p[2]), m);
+    }
   }
 }
 

@@ -1,0 +1,114 @@
+{
+ "version": 1,
+ "format": {
+  "frame": {
+   "w": 96,
+   "h": 136
+  },
+  "anchor": [
+   48,
+   120
+  ],
+  "columns": 8,
+  "rows": [
+   {
+    "direction": "NE",
+    "animation": "idle",
+    "frames": 2,
+    "ms": 600
+   },
+   {
+    "direction": "NE",
+    "animation": "walk",
+    "frames": 8,
+    "ms": 100
+   },
+   {
+    "direction": "NE",
+    "animation": "type",
+    "frames": 4,
+    "ms": 150
+   },
+   {
+    "direction": "SE",
+    "animation": "idle",
+    "frames": 2,
+    "ms": 600
+   },
+   {
+    "direction": "SE",
+    "animation": "walk",
+    "frames": 8,
+    "ms": 100
+   },
+   {
+    "direction": "SE",
+    "animation": "type",
+    "frames": 4,
+    "ms": 150
+   },
+   {
+    "direction": "SW",
+    "animation": "idle",
+    "frames": 2,
+    "ms": 600
+   },
+   {
+    "direction": "SW",
+    "animation": "walk",
+    "frames": 8,
+    "ms": 100
+   },
+   {
+    "direction": "SW",
+    "animation": "type",
+    "frames": 4,
+    "ms": 150
+   },
+   {
+    "direction": "NW",
+    "animation": "idle",
+    "frames": 2,
+    "ms": 600
+   },
+   {
+    "direction": "NW",
+    "animation": "walk",
+    "frames": 8,
+    "ms": 100
+   },
+   {
+    "direction": "NW",
+    "animation": "type",
+    "frames": 4,
+    "ms": 150
+   }
+  ],
+  "seatTop": 14
+ },
+ "walk": {
+  "voxelsPerFrame": 3
+ },
+ "sheets": [
+  {
+   "id": "person-blue",
+   "file": "iso-person-blue.png"
+  },
+  {
+   "id": "person-green",
+   "file": "iso-person-green.png"
+  },
+  {
+   "id": "person-mustard",
+   "file": "iso-person-mustard.png"
+  },
+  {
+   "id": "person-grey",
+   "file": "iso-person-grey.png"
+  },
+  {
+   "id": "receptionist",
+   "file": "iso-receptionist.png"
+  }
+ ]
+}

@@ -15,18 +15,30 @@
 // exposed voxel face (half-open bounds, so faces never overlap or leave
 // gaps) and a z-buffer keeps the nearest one: depth is x + y + z, larger is
 // nearer. The output is deterministic: same voxels, same pixels.
-import { INDEX, PALETTE, RAMP_ID, RAMP_LIST } from "./palette.mjs";
-import { encodePng } from "./png.mjs";
+import { INDEX, RAMP_ID, RAMP_LIST } from "./palette.mjs";
 
 export const TOP = 1;
-export const LEFT = 2;
-export const RIGHT = 3;
-const NORMAL = [null, [0, 0, 1], [0, 1, 0], [1, 0, 0]];
+export const LEFT = 2; // +y normal
+export const RIGHT = 3; // +x normal
+export const NX = 4; // -x normal (only seen on turned objects, in paint)
+export const NY = 5; // -y normal (only seen on turned objects, in paint)
+const NORMAL = [null, [0, 0, 1], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, -1, 0]];
+const faceOf = ([x, y]) => (y === 1 ? LEFT : x === 1 ? RIGHT : x === -1 ? NX : NY);
 
 /** Depth gap (in x + y + z units) above which a silhouette gets an outline. */
 export const OUTLINE_GAP = 2.5;
 /** Depth gap inside one object above which a darker crease line is drawn. */
 export const CREASE_GAP = 2.0;
+
+// ------------------------------------------------------------- rotations
+
+// Quarter turns about z, as maps of a horizontal vector. Turn 1 sends +y to
+// +x: a model drawn facing +y (towards the lower left of the screen) then
+// faces +x (lower right). Proper rotations only, never a mirror.
+const ROT = [(x, y) => [x, y], (x, y) => [y, -x], (x, y) => [-x, -y], (x, y) => [-y, x]];
+const UNROT = [ROT[0], ROT[3], ROT[2], ROT[1]];
+/** Offset that keeps a W x D footprint at [0, W') x [0, D') after a turn. */
+const turnOffset = (rot, [w, d]) => [[0, 0], [0, w], [w, d], [d, 0]][rot];
 
 // ---------------------------------------------------------------- materials
 
@@ -37,15 +49,19 @@ export const materials = [null];
  * `right` are the ramp levels of each face (default: base + 1, base,
  * base - 1, so the top is lightest, the left face mid and the right face
  * darker). Options: `paint(face, x, y, z, level)` returns a level, or
- * { ramp, level, emissive }, or null, from the local surface point (decals);
- * `emissive` ignores lighting; `transparent` lets light through;
- * `rim: false` disables the top edge highlight; `round: [cx, cy]` shades
- * the sides as a smooth cylinder around that local axis; `outline` forces the
- * outline colour (a palette name).
+ * { ramp, level, emissive }, or null, from the local surface point (decals;
+ * on a turned object, x, y and face are given in the model frame, so a
+ * decal follows the object; two more arguments give the world face and the
+ * object's quarter turns, for shading from a model normal: see shadeNormal); `emissive` ignores lighting; `transparent`
+ * lets light through; `rim: false` disables the top edge highlight;
+ * `round: [cx, cy]` shades the sides as a smooth cylinder around that local
+ * axis; `crease: false` draws no crease line inside the material (limbs); `outline` forces the outline colour (a palette name);
+ * `tint: "room" | "pastel"` (with `slot`, 0 to 15) marks its pixels for
+ * runtime tinting (see TINT_FACTORS).
  */
 export function material(def) {
   const base = def.base ?? 2;
-  const m = { top: base + 1, left: base, right: base - 1, rim: true, ...def };
+  const m = { top: base + 1, left: base, right: base - 1, rim: true, slot: 0, ...def };
   if (!(m.ramp in RAMP_ID)) throw new Error(`unknown ramp ${m.ramp}`);
   m.rampId = RAMP_ID[m.ramp];
   m.id = materials.length;
@@ -54,14 +70,35 @@ export function material(def) {
 }
 
 /**
+ * Runtime tint: a tinted pixel keeps its ramp level (0 outline to 4 light);
+ * its tint mask pixel is the grey of the matching multiply factor. "room"
+ * shows the room colour itself at level 2 (the lit side of a spine) and
+ * above; "pastel" multiplies a pastel of it (see image.mjs) and keeps one
+ * more shadow tone, for large surfaces such as carpets.
+ */
+export const TINT_FACTORS = { room: [0.34, 0.68, 1, 1, 1], pastel: [0.5, 0.7, 0.86, 1, 1] };
+export const TINT_MODES = ["room", "pastel"];
+
+/**
+ * The ramp level of a surface from its model normal [nx, ny, nz] under a
+ * turn: `top` where it faces up most, `left` where it faces world +y most,
+ * `right` otherwise. Smooth shapes (a rounded body) shade by their true
+ * normal instead of their voxel steps.
+ */
+export function shadeNormal([nx, ny, nz], rot, { top, left, right }) {
+  const [wx, wy] = ROT[rot](nx, ny);
+  if (nz >= Math.max(wx, wy) * 1.05) return top;
+  return wy >= wx ? left : right;
+}
+
+/**
  * Side shading of a round material (`round: [cx, cy]`, its axis in local
  * coordinates): voxel stairs would alternate left and right tones, so the
  * level follows the true cylinder normal instead, with a highlight band on
- * the lit side.
+ * the lit side. `(dx, dy)` is the horizontal normal in world axes.
  */
 const ROUND_LIGHT = [-0.45, 0.89];
-function roundLevel(m, x, y) {
-  const dx = x - m.round[0], dy = y - m.round[1];
+function roundLevel(m, dx, dy) {
   const l = Math.hypot(dx, dy) || 1;
   const t = (dx * ROUND_LIGHT[0] + dy * ROUND_LIGHT[1]) / l;
   if (t > 0.8) return m.left + 1;
@@ -74,6 +111,11 @@ function roundLevel(m, x, y) {
 const OFF = 1024;
 const SIZE = 2048;
 const pack = (x, y, z) => ((x + OFF) * SIZE + (y + OFF)) * SIZE + (z + OFF);
+export const unpack = (key) => {
+  const z = (key % SIZE) - OFF;
+  const rest = Math.floor(key / SIZE);
+  return [Math.floor(rest / SIZE) - OFF, (rest % SIZE) - OFF, z];
+};
 
 export class World {
   constructor() {
@@ -83,30 +125,49 @@ export class World {
 
   /**
    * Places an object: `build(b)` draws it with the builder `b` in local
-   * coordinates, `at` is the world position of its local origin.
-   * `extra.sunShadow: false` keeps it from casting the key light shadow.
+   * (model) coordinates, `at` is the world position of its local origin.
+   * Extra: `sunShadow: false` keeps it from casting the key light shadow,
+   * `cover: false` from casting the contact shadow; `rot` (0 to 3 quarter
+   * turns, turn 1 sends +y to +x) with `size` ([w, d] model footprint, kept
+   * at [0, w') x [0, d') after the turn; without it the turn is about the
+   * local origin).
    */
   add(name, at, build, extra = {}) {
-    const object = { id: this.objects.length, name, origin: at, ...extra };
+    const object = { id: this.objects.length, name, origin: at, rot: 0, ...extra };
+    object.offset = object.size ? turnOffset(object.rot, object.size) : [0, 0];
     this.objects.push(object);
     build(builder(this, object));
     return object;
   }
 }
 
-/** Drawing helpers in the local frame of one object. */
-export function builder(world, object) {
+/** Model point (continuous) of a world local point. */
+const toModel = (object, x, y) => UNROT[object.rot](x - object.offset[0], y - object.offset[1]);
+
+/** Drawing helpers in the local frame of one object (shifted by `local`). */
+export function builder(world, object, local = [0, 0, 0]) {
   const [ox, oy, oz] = object.origin;
+  const [lx, ly, lz] = local;
   const tag = object.id * 65536;
+  const turn = ROT[object.rot];
+  const [tx, ty] = object.offset;
+  const key = (x, y, z) => {
+    const [rx, ry] = turn(x + lx + 0.5, y + ly + 0.5);
+    return pack(ox + Math.round(rx + tx - 0.5), oy + Math.round(ry + ty - 0.5), oz + lz + z);
+  };
   const b = {
+    /** The same builder, its origin moved by (dx, dy, dz): sub-assemblies. */
+    at(dx, dy, dz) {
+      return builder(world, object, [lx + dx, ly + dy, lz + dz]);
+    },
     set(x, y, z, m) {
-      world.cells.set(pack(ox + x, oy + y, oz + z), tag + m.id);
+      world.cells.set(key(x, y, z), tag + m.id);
     },
     del(x, y, z) {
-      world.cells.delete(pack(ox + x, oy + y, oz + z));
+      world.cells.delete(key(x, y, z));
     },
     has(x, y, z) {
-      return world.cells.has(pack(ox + x, oy + y, oz + z));
+      return world.cells.has(key(x, y, z));
     },
     box(x, y, z, w, d, h, m) {
       for (let i = x; i < x + w; i++) for (let j = y; j < y + d; j++) for (let k = z; k < z + h; k++) b.set(i, j, k, m);
@@ -129,6 +190,18 @@ export function builder(world, object) {
       for (let s = 0; s <= steps; s++) {
         const t = s / steps;
         b.set(...[0, 1, 2].map((k) => Math.floor(a[k] + (c[k] - a[k]) * t)), m);
+      }
+    },
+    /** A thick segment: voxel centres within r of the segment a-c. */
+    capsule(a, c, r, m, keep = () => true) {
+      const lo = [0, 1, 2].map((k) => Math.floor(Math.min(a[k], c[k]) - r));
+      const hi = [0, 1, 2].map((k) => Math.ceil(Math.max(a[k], c[k]) + r));
+      const d = [0, 1, 2].map((k) => c[k] - a[k]);
+      const dd = d[0] ** 2 + d[1] ** 2 + d[2] ** 2 || 1;
+      for (let i = lo[0]; i <= hi[0]; i++) for (let j = lo[1]; j <= hi[1]; j++) for (let k = lo[2]; k <= hi[2]; k++) {
+        const p = [i + 0.5 - a[0], j + 0.5 - a[1], k + 0.5 - a[2]];
+        const t = Math.max(0, Math.min(1, (p[0] * d[0] + p[1] * d[1] + p[2] * d[2]) / dd));
+        if ((p[0] - d[0] * t) ** 2 + (p[1] - d[1] * t) ** 2 + (p[2] - d[2] * t) ** 2 <= r * r && keep(i, j, k)) b.set(i, j, k, m);
       }
     },
     /** Filled ellipsoid; `keep(i, j, k)` may refuse voxels (holes, cuts). */
@@ -172,11 +245,18 @@ export function hash(...values) {
  * - windows: [{ dir, outside(x, y, z) }]: daylight through openings, one
  *   tone lighter where a ray towards `dir` reaches an `outside` cell;
  * - lamps: [{ at, radius, topOnly }]: point lights, one tone lighter;
- * - hover: object ids that get a 1 px bright outline.
- * Returns { w, h, idx (palette index per pixel, -1 transparent), obj, uMin, vMin }.
+ * - frame: { uMin, vMin, w, h } forces the image frame (to diff two renders);
+ * - shadowOnly: ids of objects that receive shadows but are not drawn (a
+ *   floor slab under a lone prop): see `shadowed`;
+ * - outline: "all" (default), "top" (only above the silhouette: pieces that
+ *   tile side by side, such as walls) or "none" (floor tiles).
+ * Returns { w, h, uMin, vMin, idx (palette index per pixel, -1 transparent),
+ * tint (0, or 1 + level + 5 * mode + 10 * slot), owner (object id behind the
+ * pixel colour, outlines included), surface (object id of the nearest face,
+ * drawn or not), shadowed (1 where that face is in shadow) }.
  */
 export function render(world, options = {}) {
-  const { pad = 2, ground = false, sun = null, cover = 0, windows = [], lamps = [], hover = [], hoverColour = "gold2" } = options;
+  const { pad = 2, ground = false, sun = null, cover = 0, windows = [], lamps = [], frame = null, shadowOnly = [], outline = "all" } = options;
 
   // Voxels into flat arrays and a dense grid for ray marching.
   const count = world.cells.size;
@@ -187,10 +267,7 @@ export function render(world, options = {}) {
   let n = 0;
   let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
   for (const [key, value] of world.cells) {
-    const z = (key % SIZE) - OFF;
-    const rest = Math.floor(key / SIZE);
-    const y = (rest % SIZE) - OFF;
-    const x = Math.floor(rest / SIZE) - OFF;
+    const [x, y, z] = unpack(key);
     xs[n] = x; ys[n] = y; zs[n] = z; vs[n] = value; n++;
     if (x < x0) x0 = x;
     if (x > x1) x1 = x;
@@ -205,10 +282,14 @@ export function render(world, options = {}) {
   for (let i = 0; i < count; i++) grid[cellIndex(xs[i], ys[i], zs[i])] = vs[i];
   const inside = (x, y, z) => x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1;
   const at = (x, y, z) => (inside(x, y, z) ? grid[cellIndex(x, y, z)] : 0);
+  const matOf = (value) => materials[value & 0xffff];
+  const objOf = (value) => world.objects[value >>> 16];
+  const hidden = new Set(shadowOnly);
 
-  // Screen bounds.
+  // Screen bounds (objects that are not drawn do not count).
   let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
   for (let i = 0; i < count; i++) {
+    if (hidden.has(vs[i] >>> 16)) continue;
     const U = 2 * (xs[i] - ys[i]);
     const V = xs[i] + ys[i] - 2 * zs[i];
     if (U - 2 < uMin) uMin = U - 2;
@@ -217,6 +298,7 @@ export function render(world, options = {}) {
     if (V + 2 > vMax) vMax = V + 2;
   }
   uMin -= pad; vMin -= pad; uMax += pad; vMax += pad;
+  if (frame) { uMin = frame.uMin; vMin = frame.vMin; uMax = uMin + frame.w; vMax = vMin + frame.h; }
   const W = uMax - uMin;
   const H = vMax - vMin;
   const N = W * H;
@@ -230,6 +312,7 @@ export function render(world, options = {}) {
   const PX = new Float32Array(N), PY = new Float32Array(N), PZ = new Float32Array(N);
 
   const plot = (px, py, d, value, f, X, Y, Z) => {
+    if (px < 0 || py < 0 || px >= W || py >= H) return;
     const i = py * W + px;
     if (d > depth[i]) {
       depth[i] = d; cell[i] = value; face[i] = f; PX[i] = X; PY[i] = Y; PZ[i] = Z;
@@ -294,8 +377,6 @@ export function render(world, options = {}) {
     }
     return false;
   };
-  const matOf = (value) => materials[value & 0xffff];
-  const objOf = (value) => world.objects[value >>> 16];
   const blocksCover = (value) => (value && !matOf(value).transparent && objOf(value).sunShadow !== false && objOf(value).cover !== false ? true : undefined);
   const blocksSun = (value) => (value && !matOf(value).transparent && objOf(value).sunShadow !== false ? true : undefined);
   const norm = (v) => { const l = Math.hypot(...v); return v.map((c) => c / l); };
@@ -343,6 +424,7 @@ export function render(world, options = {}) {
   const levelOf = new Int8Array(N);
   const objAt = new Uint16Array(N);
   const emissiveAt = new Uint8Array(N);
+  const shadowed = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     if (!face[i]) continue;
     const m = matOf(cell[i]);
@@ -351,10 +433,12 @@ export function render(world, options = {}) {
     const f = face[i];
     let ramp = m.rampId;
     let level = f === TOP ? m.top : f === LEFT ? m.left : m.right;
-    if (m.round && f !== TOP) level = roundLevel(m, PX[i] - o.origin[0], PY[i] - o.origin[1]);
+    const [mx, my] = toModel(o, PX[i] - o.origin[0], PY[i] - o.origin[1]);
+    if (m.round && f !== TOP) level = roundLevel(m, ...ROT[o.rot](mx - m.round[0], my - m.round[1]));
     let emissive = m.emissive;
     if (m.paint) {
-      const r = m.paint(f, PX[i] - o.origin[0], PY[i] - o.origin[1], PZ[i] - o.origin[2], level);
+      const mf = f === TOP ? TOP : faceOf(UNROT[o.rot](NORMAL[f][0], NORMAL[f][1]));
+      const r = m.paint(mf, mx, my, PZ[i] - o.origin[2], level, f, o.rot);
       if (typeof r === "number") level = r;
       else if (r) {
         if (r.ramp) ramp = RAMP_ID[r.ramp];
@@ -362,15 +446,20 @@ export function render(world, options = {}) {
         if (r.emissive !== undefined) emissive = r.emissive;
       }
     }
-    if (!emissive) level += levelShift(i);
+    if (!emissive) {
+      const s = levelShift(i);
+      level += s;
+      if (s < 0) shadowed[i] = 1;
+    }
     emissiveAt[i] = emissive ? 1 : 0;
     rampOf[i] = ramp;
     levelOf[i] = Math.max(1, Math.min(RAMP_LIST[ramp].length - 1, level));
   }
 
   // Ground depth for empty pixels: a virtual floor at z = 0, or nothing.
+  const isEmpty = (i) => !face[i] || hidden.has(objAt[i]);
   const depthAt = (i) => {
-    if (face[i]) return vdepth[i];
+    if (face[i] && !hidden.has(objAt[i])) return vdepth[i];
     if (!ground) return -Infinity;
     const u = (i % W) + uMin + 0.5, v = Math.floor(i / W) + vMin + 0.5;
     return Math.floor((u / 2 + v) / 2) + Math.floor((v - u / 2) / 2) + 0.5; // floor voxel under the ray
@@ -395,98 +484,55 @@ export function render(world, options = {}) {
       if (face[j] && face[j] !== TOP && objAt[j] === objAt[i] && Math.abs(depth[i] - depth[j]) < 1.6) shift[i] = 1;
     }
     for (const j of neighbours(i)) {
+      // `crease: false` smooths a curved part (a limb) against itself.
+      if (m.crease === false && (cell[j] & 0xffff) === (cell[i] & 0xffff)) continue;
       if (face[j] && objAt[j] === objAt[i] && vdepth[j] - vdepth[i] > CREASE_GAP) { shift[i] = -1; break; }
     }
   }
 
+  const tintCode = (m, level) => (m.tint ? 1 + level + 5 * TINT_MODES.indexOf(m.tint) + 10 * m.slot : 0);
   const idx = new Int16Array(N).fill(-1);
+  const tint = new Uint8Array(N);
+  const owner = new Uint16Array(N);
   for (let i = 0; i < N; i++) {
-    if (!face[i]) continue;
+    if (isEmpty(i)) continue;
     const ramp = RAMP_LIST[rampOf[i]];
-    idx[i] = ramp[Math.max(1, Math.min(ramp.length - 1, levelOf[i] + shift[i]))];
+    const level = Math.max(1, Math.min(ramp.length - 1, levelOf[i] + shift[i]));
+    idx[i] = ramp[level];
+    owner[i] = objAt[i];
+    const m = matOf(cell[i]);
+    // A decal painted in another ramp is not tinted.
+    if (m.tint && rampOf[i] === m.rampId) tint[i] = tintCode(m, Math.min(4, level));
   }
 
   // Selective outline: a pixel behind the silhouette of a nearer object takes
   // the darkest tone of that object's ramp. At ground contact the depth gap
   // is small, so no outline is drawn there.
-  const outlined = idx.slice();
+  const outIdx = idx.slice();
+  const outTint = tint.slice();
+  const outOwner = owner.slice();
   for (let i = 0; i < N; i++) {
+    if (outline === "none") break;
     const di = depthAt(i);
     let best = -1;
     let bestDepth = -Infinity;
     for (const j of neighbours(i)) {
-      if (!face[j] || (face[i] && objAt[j] === objAt[i])) continue;
+      if (isEmpty(j) || (!isEmpty(i) && objAt[j] === objAt[i])) continue;
+      if (outline === "top" && j !== i + W) continue;
       if (vdepth[j] - di > OUTLINE_GAP && vdepth[j] > bestDepth) { best = j; bestDepth = vdepth[j]; }
     }
     if (best >= 0) {
       const m = matOf(cell[best]);
-      outlined[i] = m.outline !== undefined ? INDEX[m.outline] : RAMP_LIST[rampOf[best]][0];
+      outIdx[i] = m.outline !== undefined ? INDEX[m.outline] : RAMP_LIST[rampOf[best]][0];
+      outTint[i] = m.outline === undefined && rampOf[best] === m.rampId ? tintCode(m, 0) : 0;
+      outOwner[i] = objAt[best];
     }
   }
 
-  // Hover: a 1 px bright line around the hovered objects.
-  if (hover.length) {
-    const set = new Set(hover);
-    for (let i = 0; i < N; i++) {
-      if (face[i] && set.has(objAt[i])) continue;
-      if (neighbours(i).some((j) => face[j] && set.has(objAt[j]))) outlined[i] = INDEX[hoverColour];
-    }
-  }
-
-  return { w: W, h: H, idx: outlined, obj: objAt, uMin, vMin };
+  return { w: W, h: H, uMin, vMin, idx: outIdx, tint: outTint, owner: outOwner, shadowed, surface: objAt };
 }
 
-// ------------------------------------------------------------------- images
-
-export function blank(w, h, fill = -1) {
-  return { w, h, idx: new Int16Array(w * h).fill(fill) };
-}
-
-/** Crops transparent borders; returns the image and the crop offset. */
-export function trim(img) {
-  let ax = img.w, ay = img.h, bx = -1, by = -1;
-  for (let y = 0; y < img.h; y++) {
-    for (let x = 0; x < img.w; x++) {
-      if (img.idx[y * img.w + x] < 0) continue;
-      if (x < ax) ax = x;
-      if (x > bx) bx = x;
-      if (y < ay) ay = y;
-      if (y > by) by = y;
-    }
-  }
-  const out = blank(bx - ax + 1, by - ay + 1);
-  for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) out.idx[(y - ay) * out.w + x - ax] = img.idx[y * img.w + x];
-  return { img: out, dx: ax, dy: ay };
-}
-
-/** Nearest neighbour integer upscale. */
-export function upscale(img, k) {
-  const out = blank(img.w * k, img.h * k);
-  for (let y = 0; y < out.h; y++) for (let x = 0; x < out.w; x++) out.idx[y * out.w + x] = img.idx[Math.floor(y / k) * img.w + Math.floor(x / k)];
-  return out;
-}
-
-/** Copies the opaque pixels of src into dst at (x, y). */
-export function blit(dst, src, x, y) {
-  for (let j = 0; j < src.h; j++) {
-    for (let i = 0; i < src.w; i++) {
-      const c = src.idx[j * src.w + i];
-      const tx = x + i, ty = y + j;
-      if (c >= 0 && tx >= 0 && ty >= 0 && tx < dst.w && ty < dst.h) dst.idx[ty * dst.w + tx] = c;
-    }
-  }
-}
-
-export function toPng(img) {
-  const rgba = new Uint8Array(img.w * img.h * 4);
-  for (let i = 0; i < img.w * img.h; i++) {
-    const c = img.idx[i];
-    if (c < 0) continue;
-    const [r, g, b] = PALETTE[c];
-    rgba[i * 4] = r;
-    rgba[i * 4 + 1] = g;
-    rgba[i * 4 + 2] = b;
-    rgba[i * 4 + 3] = 255;
-  }
-  return encodePng(img.w, img.h, rgba);
+/** Screen pixel of a world point in a render frame. */
+export function project(r, [x, y, z]) {
+  return { x: 2 * (x - y) - r.uMin, y: x + y - 2 * z - r.vMin };
 }
