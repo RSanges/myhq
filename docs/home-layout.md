@@ -108,6 +108,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram) starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
 | `agents[].resources` | no | Shared resources the agent's runs hold, for example `["gpu"]` (lowercase letters, digits, `-` or `_`, each listed once). Two runs holding a common resource never run at once, in any room (see "Shared resources" below). Default: none. |
+| `agents[].skills` | no | Claude Code skills the agent follows: folders relative to the **room directory**, each holding a `SKILL.md` (see "Skills" below). Default: none. |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
 `8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
@@ -210,6 +211,44 @@ The agent sheet lists the resources and shows « En attente : gpu occupé »
 while the agent's work waits for one of them. The lock is MyHQ's: a process
 outside MyHQ that uses the same GPU is not seen, so a role can still check the
 card itself before starting heavy work.
+
+#### Skills
+
+The agents run `claude -p --setting-sources project,local` from their working
+directory, so they never see the user's own skills (`~/.claude/skills`). Claude
+Code does read project skills from `<working directory>/.claude/skills/<name>/SKILL.md`,
+and `skills` is how a room hands some to an agent:
+
+```json
+{ "id": "scenariste", "skills": ["skills/scripter-video-courte"], "...": "..." }
+```
+
+Keep the skill folders in the home, next to the roles (`rooms/<room>/skills/<name>/`
+with its `SKILL.md` and any `scripts/`), and list them relative to the room
+directory. A path that leaves the room directory, is absolute, is not a folder,
+has no `SKILL.md`, has a folder name with anything but letters, digits, `.`, `-`
+or `_`, or repeats another skill's folder name makes the room invalid, with an
+error naming the agent and the path.
+
+Before each run MyHQ copies every listed folder to
+`<working directory>/.claude/skills/<folder name>/`, replacing the previous copy
+(an edit of the source is live from the next run), and adds `Skill` to the
+agent's `--tools` (without it, the model cannot call a skill; nothing is needed
+in `allowedTools`). Other folders of `.claude/skills` are never touched. A folder
+of the same name that MyHQ did not create (a skill the repository versions) is
+not overwritten: the run fails with `SKILL_CONFLICT`. MyHQ marks its copies with
+a `.myhq-skill` file.
+
+For an agent in a Git `worktree`, each copy also gets a `.gitignore` holding
+`*`, so Git ignores the whole folder and the agent can never commit it. This was
+preferred to `.git/info/exclude`, which Git shares between all the worktrees of
+a repository: it would also hide the folder in the owner's own checkout, and
+needs the worktree's common Git directory found first. The `.gitignore` lives
+and dies with the copy.
+
+Claude Code also lists its bundled skills (`loop`, `schedule`, `simplify`...)
+next to the agent's own, and `Skill` is not limited to the listed ones. Deny one
+in `disallowedTools` (for example `Skill(loop)`) if a role must not reach it.
 
 #### Character sheets
 

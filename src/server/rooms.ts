@@ -4,6 +4,7 @@ import { z } from "zod";
 import { isInside } from "./config";
 import { cronError } from "./cron";
 import { now, type Db } from "./db";
+import { resolveSkillDirs } from "./skills";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
 export const idSchema = z
@@ -77,6 +78,8 @@ export const agentSchema = z.strictObject({
   /** Extra directories the agent may read (`--add-dir`), relative to the home. */
   addDirs: z.array(z.string().min(1)).optional(),
   maxBudgetUsd: z.number().positive().optional(),
+  /** Claude Code skill folders (each holding a SKILL.md), relative to the room directory: copied into the agent's working directory before each run. */
+  skills: z.array(z.string().min(1)).min(1).max(32).optional(),
   /** Old top-down character sheet (4 by 4 cells), relative to the home: still accepted, no longer drawn. */
   sprite: spriteSchema.optional(),
   /** Isometric character sheet of the floor, relative to the home (a neutral person when left out). */
@@ -140,6 +143,8 @@ export type Agent = {
   /** Built-in tools that exist for the agent when they differ from its whitelist (MyHQ's own agents only). */
   tools?: string[];
   maxBudgetUsd: number | null;
+  /** Absolute paths of the skill folders copied into the working directory before each run (see skills.ts). */
+  skills?: string[];
   /** Absolute path of the agent's old top-down sheet, always inside the home, or null. No longer drawn. */
   sprite: string | null;
   /** Absolute path of the agent's iso character sheet, always inside the home, or null for a neutral person. */
@@ -249,6 +254,13 @@ export function loadRoom(home: string, roomDir: string): Room {
       throw new Error(`${file}: isoSprite of "${agent.id}" must stay inside the home`);
     }
 
+    let skills: string[];
+    try {
+      skills = resolveSkillDirs(roomDir, agent.id, agent.skills ?? []);
+    } catch (error) {
+      throw new Error(`${file}: ${(error as Error).message}`);
+    }
+
     return {
       id: agent.id,
       name: agent.name,
@@ -268,6 +280,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       disallowedTools: agent.disallowedTools ?? [],
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
+      skills,
       sprite,
       isoSprite,
       onApproval: agent.onApproval ?? null,

@@ -14,6 +14,7 @@ import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { resourceHolder } from "./resources";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
+import { skillTools, syncSkills } from "./skills";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
@@ -403,6 +404,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
     }
     fs.mkdirSync(agent.workDir, { recursive: true });
+    syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
     fs.mkdirSync(config.runsDir, { recursive: true });
     writeMcpConfig({
       file: mcpConfigPath,
@@ -421,7 +423,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       allowedTools: agent.allowedTools,
       disallowedTools: agent.disallowedTools,
       addDirs: agent.addDirs,
-      tools: agent.tools,
+      tools: skillTools(agent),
       mcpConfigPath,
       maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
       workDir: agent.workDir,
