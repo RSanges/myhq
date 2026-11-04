@@ -257,7 +257,14 @@ restart.
           "isoSprite": "/api/sprites/demo/scout?sheet=iso",
           "isoStride": null,
           "armed": false,
-          "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
+          "routines": [
+            {
+              "cron": "0 7 * * 1-5",
+              "task": null,
+              "nextAt": "2026-11-03T06:00:00.000Z",
+              "schedule": { "times": ["07:00"], "weekdays": [1, 2, 3, 4, 5], "monthDays": null, "months": null, "dayRule": "and" }
+            }
+          ],
           "state": "idle",
           "resources": [],
           "waitingFor": [],
@@ -314,7 +321,15 @@ restart.
 - `armed`: whether the agent's routines may start runs (the database value
   once changed, the `armed` of `room.json` until then). `routines`: one entry
   per cron of the agent, `task` `null` for the routine work of the role,
-  `nextAt` its next fire in UTC (`null` for an expression that never fires).
+  `nextAt` its next fire in UTC (`null` for an expression that never fires),
+  `schedule` what the expression says, without any wording, for an interface
+  to phrase it (« Du lundi au vendredi à 7 h »): `times` the times of day it
+  fires, `"HH:MM"` on the wall clock of `scheduler.timeZone`, in order (`null`
+  past six a day); `weekdays` the days of the week it is limited to, 0 Sunday
+  to 6 Saturday (`null`: every day of the week); `monthDays` the days of the
+  month (`null`: every day); `months` 1 to 12 (`null`: every month); `dayRule`
+  how `weekdays` and `monthDays` combine when both are set, `"or"` (classic
+  cron, both fields restricted) or `"and"` (one of them starts with `*`).
 - `scheduler.enabled`: `HQ_SCHEDULER=on`; `running`: this process runs the
   routines (another MyHQ process on the same home may hold them);
   `timeZone`: `HQ_TIMEZONE` or the machine's zone.
@@ -890,12 +905,22 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
 
 ### `GET /api/routines`
 
-The scheduler's state and the journal of routine firings, newest first.
-`?limit=` from 1 to 500 (default 50).
+The scheduler's state, the journal of routine firings, newest first, and the
+routines of each agent as of now. `?limit=` from 1 to 500 (default 50).
 
 ```json
-{ "scheduler": { "enabled": true, "running": true, "timeZone": "Europe/Paris" }, "firings": [{ "...": "Firing shape" }] }
+{
+  "scheduler": { "enabled": true, "running": true, "timeZone": "Europe/Paris" },
+  "firings": [{ "...": "Firing shape" }],
+  "agents": [{ "room": "demo", "agentId": "scout", "armed": true, "routines": [{ "...": "as in GET /api/state" }] }]
+}
 ```
+
+`agents` lists every agent that has routines, with its armed state and its
+routines in the shape of `GET /api/state` (`nextAt` computed at the time of
+the request). The interface reads this route every minute and after each run,
+so that a next fire that has come moves on, and an agent armed from Telegram
+shows it, without loading the state again.
 
 Errors: `INVALID_INPUT` for a bad `limit`.
 

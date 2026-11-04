@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import { liveConfig, type HqConfig } from "./config";
-import { nextFire, parseCron } from "./cron";
+import { describeCron, nextFire, parseCron, type CronSummary } from "./cron";
 import { getDbAt, now, type Db, type FiringOutcome, type FiringRow, type RunRow } from "./db";
 import { HqError } from "./errors";
 import { acquireLock, type Lock } from "./lock";
@@ -139,6 +139,38 @@ export function fireRoutine(
 /** The next fire of a routine, or null when its expression never fires. */
 export function nextRoutineFire(routine: Routine, after: Date, timeZone: string): Date | null {
   return nextFire(parseCron(routine.cron), after, timeZone);
+}
+
+/** A routine as the interface sees it: its expression, its task, its next fire (UTC) and what its schedule says. */
+export type RoutineDto = { cron: string; task: string | null; nextAt: string | null; schedule: CronSummary };
+
+export function toRoutineDto(routine: Routine, after: Date, timeZone: string): RoutineDto {
+  const schedule = parseCron(routine.cron);
+  return {
+    cron: routine.cron,
+    task: routine.task,
+    nextAt: nextFire(schedule, after, timeZone)?.toISOString() ?? null,
+    schedule: describeCron(schedule),
+  };
+}
+
+/** The armed state and the routines of every agent that has routines, for GET /api/routines. */
+export function agentRoutines(
+  db: Db,
+  home: Home,
+  after: Date,
+  timeZone: string,
+): { room: string; agentId: string; armed: boolean; routines: RoutineDto[] }[] {
+  return home.rooms.flatMap((room) =>
+    room.agents
+      .filter((agent) => agent.routines.length > 0)
+      .map((agent) => ({
+        room: room.name,
+        agentId: agent.id,
+        armed: isArmed(db, room.name, agent),
+        routines: agent.routines.map((routine) => toRoutineDto(routine, after, timeZone)),
+      })),
+  );
 }
 
 // --- Scheduler -------------------------------------------------------------------

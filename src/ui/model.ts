@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DEFAULT_FLOOR_LAYOUT, type FloorLayoutMode } from "./floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "./reception";
-import type { Agent, Approval, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
+import type { Agent, AgentRoutines, Approval, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
 import { strings } from "./strings";
 
 // Pure state of the page: a snapshot from /api/state, then upserts from the SSE
@@ -39,7 +39,7 @@ export type Action =
   | { type: "event"; event: HqEvent }
   | { type: "message"; message: Message }
   | { type: "approval"; approval: Approval }
-  | { type: "routines"; scheduler: Scheduler; firings: Firing[] }
+  | { type: "routines"; scheduler: Scheduler; firings: Firing[]; agents?: AgentRoutines[] }
   | { type: "armed"; room: string; agentId: string; armed: boolean };
 
 export const initialModel: Model = {
@@ -104,8 +104,22 @@ export function reducer(model: Model, action: Action): Model {
         firings: state.firings,
       };
     }
-    case "routines":
-      return { ...model, scheduler: action.scheduler, firings: action.firings };
+    case "routines": {
+      // The routines of each agent as of now: their next fire moves on once one has come, `armed` may have
+      // changed from Telegram. An agent the refresh does not list keeps what it had.
+      const fresh = new Map((action.agents ?? []).map((entry) => [agentKey(entry.room, entry.agentId), entry]));
+      const rooms =
+        fresh.size === 0
+          ? model.rooms
+          : model.rooms.map((room) => ({
+              ...room,
+              agents: room.agents.map((agent) => {
+                const entry = fresh.get(agentKey(room.name, agent.id));
+                return entry ? { ...agent, armed: entry.armed, routines: entry.routines } : agent;
+              }),
+            }));
+      return { ...model, rooms, scheduler: action.scheduler, firings: action.firings };
+    }
     case "armed":
       return {
         ...model,

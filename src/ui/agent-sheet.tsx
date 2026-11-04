@@ -20,11 +20,14 @@ const t = strings.room.sheet;
 export function SheetShell({
   label,
   title,
+  lead,
   onClose,
   children,
 }: {
   label: string;
   title: string;
+  /** Shown before the title (a room's logo). */
+  lead?: ReactNode;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -50,7 +53,10 @@ export function SheetShell({
   return (
     <aside className="room-sheet" role="dialog" aria-label={label}>
       <div className="room-sheet-head">
-        <h2 className="wall-display text-lg font-semibold">{title}</h2>
+        <div className="flex min-w-0 items-center gap-2">
+          {lead}
+          <h2 className="wall-display min-w-0 break-words text-lg font-semibold">{title}</h2>
+        </div>
         <button ref={closeRef} type="button" className={buttonClass()} onClick={onClose}>
           {t.close}
         </button>

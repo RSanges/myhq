@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cronError, cronMatches, nextFire, parseCron } from "../src/server/cron";
+import { cronError, cronMatches, describeCron, nextFire, parseCron } from "../src/server/cron";
 import { addDays, dayKey, dayRange, wallTime, wallToInstants } from "../src/server/time";
 
 const next = (expr: string, after: string, tz: string) => nextFire(parseCron(expr), new Date(after), tz)?.toISOString() ?? null;
@@ -73,4 +73,21 @@ test("wall time helpers", () => {
   const range = dayRange("2026-10-25", "Europe/Paris");
   assert.equal(range.start.toISOString(), "2026-10-24T22:00:00.000Z");
   assert.equal(range.end.toISOString(), "2026-10-25T23:00:00.000Z");
+});
+
+test("a schedule is summed up without words: times of day, days of the week or of the month, months", () => {
+  const sum = (expr: string) => describeCron(parseCron(expr));
+  assert.deepEqual(sum("0 7 * * *"), { times: ["07:00"], weekdays: null, monthDays: null, months: null, dayRule: "and" });
+  assert.deepEqual(sum("30 8 * * 1-5").weekdays, [1, 2, 3, 4, 5]);
+  assert.deepEqual(sum("30 8 * * 1-5").times, ["08:30"]);
+  assert.deepEqual(sum("0 6 * * 2,4").weekdays, [2, 4]);
+  assert.deepEqual(sum("0 7,19 * * sun,7").weekdays, [0]);
+  assert.deepEqual(sum("0 7,19 * * *").times, ["07:00", "19:00"]);
+  assert.deepEqual(sum("0 10 3 * *").monthDays, [3]);
+  assert.deepEqual(sum("0 9 1 jan,jul *").months, [1, 7]);
+  // Too many times a day: the expression says it better.
+  assert.equal(sum("*/15 9-17 * * *").times, null);
+  // Both kinds of days restricted: either one fires (classic cron), and the summary says so.
+  assert.equal(sum("0 0 13 * fri").dayRule, "or");
+  assert.equal(sum("0 0 */2 * fri").dayRule, "and");
 });

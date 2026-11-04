@@ -52,6 +52,24 @@ export function formatShortDay(value: string): string {
   return date ? shortDay.format(date) : value;
 }
 
+/**
+ * When something happened or will happen, near `at`, in words: « à 07:00 »
+ * the same day, « hier à », « demain à », else « le 9 nov. à 06:00 ».
+ */
+export function formatWhen(iso: string, at: number = Date.now()): string {
+  const date = toDate(iso);
+  if (!date) return iso;
+  const w = strings.room.roomSheet.when;
+  const midnight = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  // Rounded: a day with a daylight saving change is 23 or 25 hours long.
+  const days = Math.round((midnight(date) - midnight(new Date(at))) / 86_400_000);
+  const time = clock.format(date);
+  if (days === 0) return w.today(time);
+  if (days === -1) return w.yesterday(time);
+  if (days === 1) return w.tomorrow(time);
+  return w.other(shortDay.format(date), time);
+}
+
 export function formatTime(iso: string): string {
   const date = toDate(iso);
   return date ? time.format(date) : iso;

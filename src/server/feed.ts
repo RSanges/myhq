@@ -14,7 +14,7 @@ import type {
   RunStatus,
 } from "./db";
 import { NOTIFICATION_NOTE, readFloorLayout, readReceptionRoom } from "./home-settings";
-import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
+import { isArmed, listFirings, toRoutineDto, type FiringDto, type RoutineDto } from "./routines";
 import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
@@ -237,7 +237,7 @@ export type StateDto = {
       isoStride: number | null;
       /** Armed state of the routines (the database value, or room.json's until changed). */
       armed: boolean;
-      routines: { cron: string; task: string | null; nextAt: string | null }[];
+      routines: RoutineDto[];
       state: AgentState;
       /** Shared resources its runs hold (room.json `resources`). */
       resources: string[];
@@ -321,11 +321,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           isoSprite: isoSpriteUrl(room.name, agent),
           isoStride: isoStrideOf(agent),
           armed: isArmed(db, room.name, agent),
-          routines: agent.routines.map((routine) => ({
-            cron: routine.cron,
-            task: routine.task,
-            nextAt: nextRoutineFire(routine, at, scheduler.timeZone)?.toISOString() ?? null,
-          })),
+          routines: agent.routines.map((routine) => toRoutineDto(routine, at, scheduler.timeZone)),
           state,
           resources: agent.resources,
           waitingFor: state === "working" ? [] : waitingFor(db, room.name, agent.id, agent.resources),

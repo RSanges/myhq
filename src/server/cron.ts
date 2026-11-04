@@ -162,3 +162,40 @@ export function nextFire(s: CronSchedule, after: Date, timeZone: string): Date |
   }
   return null;
 }
+
+/** More times of day than this and a summary gives none (`*\/5 * * * *` reads better as its expression). */
+export const SUMMARY_MAX_TIMES = 6;
+
+/**
+ * What a schedule says, without any wording, for an interface to phrase it
+ * (« tous les jours à 7 h »). Times are on the wall clock the expression is
+ * read on (the scheduler's time zone). When both `weekdays` and `monthDays`
+ * are set, they combine as the classic cron rule does: `dayRule` says how.
+ */
+export type CronSummary = {
+  /** The times of day it fires, "HH:MM", in order; null when there are more than SUMMARY_MAX_TIMES. */
+  times: string[] | null;
+  /** The days of the week it is limited to, 0 Sunday to 6 Saturday, in order; null for every day of the week. */
+  weekdays: number[] | null;
+  /** The days of the month it is limited to, in order; null for every day of the month. */
+  monthDays: number[] | null;
+  /** The months it is limited to, 1 to 12, in order; null for every month. */
+  months: number[] | null;
+  /** How the days of the week and of the month combine when both are set: either one, or both. */
+  dayRule: "or" | "and";
+};
+
+const sorted = (values: Iterable<number>): number[] => [...values].sort((a, b) => a - b);
+const two = (n: number): string => String(n).padStart(2, "0");
+
+/** The summary of a parsed schedule (see CronSummary). */
+export function describeCron(s: CronSchedule): CronSummary {
+  const count = s.minutes.length * s.hours.length;
+  return {
+    times: count > SUMMARY_MAX_TIMES ? null : s.hours.flatMap((hour) => s.minutes.map((minute) => `${two(hour)}:${two(minute)}`)),
+    weekdays: s.daysOfWeek.size >= 7 ? null : sorted(s.daysOfWeek),
+    monthDays: s.daysOfMonth.size >= 31 ? null : sorted(s.daysOfMonth),
+    months: s.months.size >= 12 ? null : sorted(s.months),
+    dayRule: s.anyDayOfMonth || s.anyDayOfWeek ? "and" : "or",
+  };
+}

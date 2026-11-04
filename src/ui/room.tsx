@@ -9,9 +9,11 @@ import { parseHash } from "./deep-link";
 import { pileHref } from "./floor-mode";
 import { neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
 import { pendingTitle, selectAgents, selectPending, selectUnseen } from "./model";
-import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
+import { RECEPTION_AGENT, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
 import { RoomCanvas } from "./room-canvas";
+import { RoomSheet } from "./room-sheet";
+import { roomDigest, type SheetAgentInput } from "./room-sheet-model";
 import { chipStyle } from "./room-color";
 import { buildBoard } from "./room-board";
 import type { AgentStatus, AgentView, Coarse, RoomView } from "./room-model";
@@ -136,6 +138,13 @@ export function RoomPage() {
   const receptionHere = model.reception.room !== null && (single || model.reception.room === room);
   const roomColor = single ? null : (chipStyle(room === null ? null : roomColors.get(room))?.["--room-color"] ?? null);
   const closeSheet = useCallback(() => setSelectedKey(null), []);
+  // The sheet of a room of the single floor (a click on the room or its button), under an agent's sheet opened from it.
+  const [sheetRoom, setSheetRoom] = useState<string | null>(null);
+  const openRoomSheet = useCallback((name: string | null) => {
+    setSheetRoom(name);
+    if (name !== null) setSelectedKey(null);
+  }, []);
+  const closeRoomSheet = useCallback(() => setSheetRoom(null), []);
 
   const snapshot = useRoomSnapshot(store, room, reduced);
 
@@ -198,6 +207,34 @@ export function RoomPage() {
     [],
   );
 
+  // What the sheet of the room says, rebuilt with the model (the stream keeps it live).
+  const pendingApprovals = useMemo(() => selectPending(model), [model]);
+  const sheet = useMemo(() => {
+    if (!single || sheetRoom === null) return null;
+    const reception = sheetRoom === RECEPTION_ROOM;
+    if (reception ? model.reception.room === null : !roomNames.includes(sheetRoom)) return null;
+    const receptionRun = model.reception.runs[0] ?? null;
+    const members: SheetAgentInput[] = reception
+      ? [{ key: RECEPTION_KEY, id: RECEPTION_AGENT, name: t.reception.name, lastRun: receptionRun, armed: false, routines: [] }]
+      : roomAgents.filter((agent) => agent.room === sheetRoom);
+    const blocked = new Set(snapshot?.view.agents.filter((agent) => agent.status.kind === "blocked").map((agent) => agent.key) ?? []);
+    return {
+      name: roomLabel(sheetRoom),
+      color: reception ? null : (roomColors.get(sheetRoom) ?? null),
+      logo: reception ? null : (model.rooms.find((each) => each.name === sheetRoom)?.logo ?? null),
+      href: pileHref(deskObjects, sheetRoom),
+      digest: roomDigest({
+        room: sheetRoom,
+        agents: members,
+        pending: snapshot?.view.pendingByRoom[sheetRoom] ?? 0,
+        approvals: pendingApprovals,
+        events: model.events,
+        usage: model.usage,
+        blocked,
+      }),
+    };
+  }, [single, sheetRoom, model.reception, model.rooms, model.events, model.usage, roomNames, roomAgents, roomColors, snapshot, pendingApprovals, deskObjects]);
+
   const title = room === null || single ? t.title : t.floorTitle(room);
 
   return (
@@ -219,8 +256,10 @@ export function RoomPage() {
                   data-tint={tint ? "" : undefined}
                   style={tint ?? undefined}
                   aria-label={count > 0 ? t.single.goToWithCount(name, count) : t.single.goTo(name)}
+                  aria-haspopup="dialog"
                   onClick={() => {
                     setFocus((before) => ({ room: name, seq: (before?.seq ?? 0) + 1 }));
+                    openRoomSheet(name);
                     // On a phone the floor is under the band: open it (brought into view below).
                     if (!wide) setNarrowOpen(true);
                   }}
@@ -322,6 +361,7 @@ export function RoomPage() {
                     logos={logos}
                     officeTray={officeTray}
                     focus={single ? focus : null}
+                    onRoom={single ? openRoomSheet : undefined}
                   />
                 )}
               </div>
@@ -376,6 +416,19 @@ export function RoomPage() {
         </section>
       )}
 
+      {sheet && selectedKey === null && (
+        <RoomSheet
+          key={sheetRoom}
+          name={sheet.name}
+          color={sheet.color}
+          logo={sheet.logo}
+          digest={sheet.digest}
+          pileHref={sheet.href}
+          schedulerEnabled={model.scheduler.enabled}
+          onOpenAgent={setSelectedKey}
+          onClose={closeRoomSheet}
+        />
+      )}
       {selected && <AgentSheet key={selected.key} agent={selected} events={model.events} dispatch={dispatch} onClose={closeSheet} />}
       {receptionHere && selectedKey === RECEPTION_KEY && (
         <ReceptionSheet key={RECEPTION_KEY} runs={model.reception.runs} dispatch={dispatch} onClose={closeSheet} />

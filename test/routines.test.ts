@@ -6,7 +6,7 @@ import type { Engine, RunEvent } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
 import { getState } from "../src/server/feed";
 import { loadHome, syncHome } from "../src/server/rooms";
-import { isArmed, Scheduler, setArmed, startScheduler } from "../src/server/routines";
+import { agentRoutines, isArmed, Scheduler, setArmed, startScheduler } from "../src/server/routines";
 import { getUsage } from "../src/server/usage";
 import { makeHome, waitForRun } from "./helpers";
 
@@ -63,6 +63,16 @@ test("the armed state starts from room.json, then the database wins", () => {
     [
       ["scout", false, "2026-11-03T07:00:00.000Z"],
       ["dev", true, "2026-11-03T05:00:00.000Z"],
+    ],
+  );
+  assert.deepEqual(agents[0]!.routines[0]!.schedule, { times: ["07:00"], weekdays: null, monthDays: null, months: null, dayRule: "and" });
+  // GET /api/routines gives the same, as of now, for the agents that have routines.
+  const fresh = agentRoutines(db, loadHome(config.home), new Date("2026-11-03T08:00:00Z"), "UTC");
+  assert.deepEqual(
+    fresh.map((entry) => [entry.agentId, entry.armed, entry.routines[0]!.nextAt]),
+    [
+      ["scout", false, "2026-11-04T07:00:00.000Z"],
+      ["dev", true, "2026-11-04T05:00:00.000Z"],
     ],
   );
 });

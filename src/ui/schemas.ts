@@ -84,10 +84,21 @@ export const approvalSchema = z.object({
   createdAt: z.string(),
 });
 
+/** What a routine's schedule says, without wording (the server's CronSummary, docs/api.md). */
+export const scheduleSchema = z.object({
+  times: z.array(z.string()).nullable(),
+  weekdays: z.array(z.number().int()).nullable(),
+  monthDays: z.array(z.number().int()).nullable(),
+  months: z.array(z.number().int()).nullable(),
+  dayRule: z.enum(["or", "and"]),
+});
+
 export const routineSchema = z.object({
   cron: z.string(),
   task: z.string().nullable(),
   nextAt: z.string().nullable(),
+  /** Absent from an older server: the interface then shows the expression. */
+  schedule: scheduleSchema.optional(),
 });
 
 export const agentSchema = z.object({
@@ -180,7 +191,14 @@ export const usageSchema = z.object({
   chat: z.object({ today: chatTotalsSchema, week: chatTotalsSchema }).nullable().default(null),
 });
 
-export const routinesResponseSchema = z.object({ scheduler: schedulerSchema, firings: z.array(firingSchema) });
+export const routinesResponseSchema = z.object({
+  scheduler: schedulerSchema,
+  firings: z.array(firingSchema),
+  /** The armed state and routines of each agent that has some, with their next fire as of now. */
+  agents: z
+    .array(z.object({ room: z.string(), agentId: z.string(), armed: z.boolean(), routines: z.array(routineSchema) }))
+    .default([]),
+});
 export const armResponseSchema = z.object({ agent: z.object({ room: z.string(), id: z.string(), armed: z.boolean() }) });
 
 export const errorBodySchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
@@ -304,3 +322,5 @@ export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;
 export type Scheduler = z.infer<typeof schedulerSchema>;
 export type Routine = z.infer<typeof routineSchema>;
+export type Schedule = z.infer<typeof scheduleSchema>;
+export type AgentRoutines = z.infer<typeof routinesResponseSchema>["agents"][number];

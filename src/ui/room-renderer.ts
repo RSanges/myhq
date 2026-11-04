@@ -15,6 +15,7 @@ import {
   type FloorSet,
   type SignPart,
 } from "./iso-floor";
+import { focusZoom } from "./floor-view";
 import type { LabelLayer } from "./room-labels";
 import { CELL, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type OwnerDesk, type Point, type RoomLayout } from "./room-layout";
 import { faceColumns, inkFor, LOGO_MARGIN, paintFace, planSign, shrinkLogo, type Pixels } from "./room-signs";
@@ -104,10 +105,16 @@ export type RoomRenderer = {
   agentAt(view: RoomView, x: number, y: number): AgentView | null;
   /** The user's desk of a room of the single floor under a point of the canvas (CSS pixels): the room it serves. */
   ownerDeskAt(x: number, y: number): string | null;
-  /** Centres the view on a room of the single floor (the room of the home it stands for), at the largest whole zoom that shows it whole. */
-  focusRoom(room: string, animate?: boolean): void;
+  /**
+   * Centres the view on a room of the single floor (the room of the home it stands for), at a whole zoom that
+   * gives it about the size of the view (`focusZoom`). `insetRight`: CSS pixels on the right of the canvas
+   * that a panel covers, left out of the view the room is centred in.
+   */
+  focusRoom(room: string, animate?: boolean, insetRight?: number): void;
   /** The same for a room of the floor by its index in the layout. */
-  focusIndex(index: number, animate?: boolean): void;
+  focusIndex(index: number, animate?: boolean, insetRight?: number): void;
+  /** The room of the home a room of the floor stands for (`_hq` for the lobby), null for the user's office or a floor of one room. */
+  roomName(index: number): string | null;
   /** The room of the floor under a point of the canvas (CSS pixels): its index, or null for the hall, the garden or nothing. */
   roomAt(x: number, y: number): number | null;
   /** Whether a point of the canvas is on the user's own office (single floor), or on the user's desk or tray of a lobby. */
@@ -381,8 +388,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     clampCenter();
     applyView();
   };
-  /** The view that shows a room of the floor whole (walls and signboard included) at the largest whole zoom. */
-  const roomView = (index: number): View | null => {
+  /**
+   * The view of a room of the floor (walls and signboard included): at the zoom of `focusZoom`, centred in the
+   * part of the canvas left of `insetRight` CSS pixels.
+   */
+  const roomView = (index: number, insetRight = 0): View | null => {
     const room = layout?.rooms[index];
     if (!room) return null;
     const corners = [
@@ -398,10 +408,16 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     const wallTop = Math.min(...corners.map((p) => p.y)) - 2 * WALL_HEIGHT - 6;
     const minY = Math.min(wallTop, board ? board.top : room.sign ? wallTop - 2 * (SIGN_TOP - WALL_HEIGHT) : wallTop);
     const maxY = Math.max(...corners.map((p) => p.y)) + 10;
-    const device = { w: cssSize.width * resolution, h: cssSize.height * resolution };
+    const inset = Math.max(0, Math.min(cssSize.width - 1, insetRight));
+    const device = { w: (cssSize.width - inset) * resolution, h: cssSize.height * resolution };
     // The box has its own few pixels of air: no margin on top of them, so a room fills the view as soon as it fits.
-    const fits = Math.floor(Math.min(device.w / (maxX - minX), device.h / (maxY - minY)));
-    return { zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fits)), center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
+    const fits = Math.min(device.w / (maxX - minX), device.h / (maxY - minY));
+    const next = focusZoom(fits, overviewView()?.zoom ?? MIN_ZOOM, MIN_ZOOM, MAX_ZOOM);
+    // The middle of the part left visible is half the inset left of the canvas's centre. A room taller than the
+    // view keeps its signboard and back wall in sight: its top at the top of the view, its front cut instead.
+    const tall = (maxY - minY) * next > device.h;
+    const y = tall ? minY + device.h / next / 2 : (minY + maxY) / 2;
+    return { zoom: next, center: { x: (minX + maxX) / 2 + ((inset / 2) * resolution) / next, y } };
   };
   /** A point of the canvas (CSS pixels) in art pixels. */
   const artOf = (x: number, y: number): Point => {
@@ -718,7 +734,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let lastOrderKey = "";
   let drawnLayout: RoomLayout | null = null;
   /** A room to show, asked for before the floor was built. */
-  let pendingFocus: { room: string; animate: boolean } | null = null;
+  let pendingFocus: { room: string; animate: boolean; insetRight: number } | null = null;
   let frames = 0;
   let destroyed = false;
   let bumpAt = Number.NEGATIVE_INFINITY;
@@ -822,21 +838,24 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       if (!layout?.office) return false;
       return renderer.roomAt(x, y) === layout.office.room;
     },
-    focusRoom(name, animate = false) {
+    focusRoom(name, animate = false, insetRight = 0) {
       if (!layout) {
         // Asked before the first drawing: done once the floor is built.
-        pendingFocus = { room: name, animate };
+        pendingFocus = { room: name, animate, insetRight };
         return;
       }
       pendingFocus = null;
       const index = layout.rooms.findIndex((candidate) => candidate.project === name);
-      if (index >= 0) renderer.focusIndex(index, animate);
+      if (index >= 0) renderer.focusIndex(index, animate, insetRight);
     },
-    focusIndex(index, animate = false) {
-      const view = roomView(index);
+    focusIndex(index, animate = false, insetRight = 0) {
+      const view = roomView(index, insetRight);
       if (!view) return;
       adjusted = true;
       goTo(view, animate);
+    },
+    roomName(index) {
+      return layout?.rooms[index]?.project ?? null;
     },
     agentAt(view, x, y) {
       const at = offset();
@@ -869,7 +888,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         if (!adjusted) fitView();
         clampCenter();
         applyView();
-        if (pendingFocus !== null) renderer.focusRoom(pendingFocus.room, pendingFocus.animate);
+        if (pendingFocus !== null) renderer.focusRoom(pendingFocus.room, pendingFocus.animate, pendingFocus.insetRight);
       }
       const current = view.layout;
       buildSigns(current, scene);

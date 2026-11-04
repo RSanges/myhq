@@ -2107,6 +2107,109 @@ body {
   }
 }
 
+/* The sheet of a room: its mark (logo on the colour), its figures, its agents and their routines. */
+.room-sheet-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--card);
+  overflow: hidden;
+}
+
+/* The room colour in full, like its signboard on the floor: a logo stands on it as on the board. */
+.room-sheet-mark[data-tint] {
+  border-color: color-mix(in srgb, var(--room-color) 70%, var(--foreground));
+  background: var(--room-color);
+}
+
+.room-sheet-mark img {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+}
+
+.room-sheet-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+}
+
+.room-sheet-figures > div {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--card);
+}
+
+.room-sheet-figures dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.room-sheet-figures dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  font-size: 0.875rem;
+}
+
+.room-sheet-agent {
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.room-sheet-agent-open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.room-sheet-agent-open:hover {
+  background: var(--soft);
+}
+
+.room-sheet-agent-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* One line on what an agent does or did: the rest is on its own sheet. */
+.room-sheet-agent-line {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-sheet-routines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem 0.6rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.8125rem;
+}
+
+.room-sheet-routines li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
 /* ---- The conversation panel: /room and / --------------------------------------- */
 
 /* The page and the panel side by side: the page gives up the width of the panel, so the floor re-fits. */

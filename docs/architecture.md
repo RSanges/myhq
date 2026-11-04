@@ -1095,12 +1095,18 @@ The wheel zooms, one whole step per notch, around the pointer (a trackpad's
 two finger scroll cannot be told apart from a wheel for sure, so it zooms
 too, and its pinch arrives as the wheel with ctrl); a drag (a mouse, one
 finger) pans; a pinch and the + and - buttons zoom. A click on a room flies to
-it: centred, at the largest whole zoom that shows it whole (walls and
-signboard included), the zoom passing through whole steps only so every frame
+it, and always closer than the overview: at the whole zoom nearest to the one
+where the room (walls and signboard included) fills the view, and at least one
+step closer than the overview, so a big room overflows the view a little
+rather than being only recentred (never more than FOCUS_OVERFLOW, 1.75 times,
+along its tighter side; `focusZoom` of `floor-view.ts`). A room taller than
+the view keeps its signboard and back wall in sight, its front is cut. On a
+wide screen it is centred in the part of the canvas left of the room's sheet
+it opens (below). The zoom passes through whole steps only so every frame
 stays crisp, at once under `prefers-reduced-motion`. A click on the floor
 outside the rooms, or the « Vue d'ensemble » button, flies back to the
-overview. A click on an agent still opens its sheet, on a user's desk its
-pile.
+overview and closes the room's sheet. A click on an agent still opens its
+sheet, on a user's desk its pile, on the user's own office the desk.
 
 **Templates.** The floor is not computed: it is one of three hand-designed
 templates by number of agents, data in floor cells in
@@ -1332,6 +1338,23 @@ button: `AgentCard` of `team.tsx`) and its recent runs with their journal
 (`FeedRow` of `feed.tsx`), rebuilt from the events the page holds since the
 API has no list of old runs. A side panel on a wide screen, the whole screen on
 a phone; Escape closes it and focus returns to what opened it.
+
+**The sheet of a room** (single floor: a click on a room, or its button at
+the top; `room-sheet.tsx`, the figures in `room-sheet-model.ts`, pure): the
+same panel, for the room: its name, its colour and logo (the logo on the
+colour, like its signboard); what waits for the user's decision (the count of
+the room's desk, a link to « À signer » filtered to the room); the runs and
+cost of the day (`agents.today` of `/api/usage`); and each agent, as a button
+that opens its own sheet (closing it comes back to the room's): its state
+(works, waits for a decision of the user, waits for a shared resource, stuck,
+failed, asleep), one line on what it does (the latest thought of its running
+run) or did (the first line of its last summary), the time of its last run,
+and its routines in words (« Du lundi au vendredi à 8 h », from `schedule` of
+the state, `schedule.ts`; the cron expression when words would not help),
+armed or not, with their next fire. The lobby's sheet is the reception's, its
+agent the receptionist. Built from the page's model, it follows the stream;
+the routines and their arming come again from `GET /api/routines` every
+minute and after each run.
 
 **The conversation panel** (`chat-panel.tsx`, `use-chat.ts`; on `/` and
 on `/bureau`): a button in the header (and the key `c`, when nothing is being typed)

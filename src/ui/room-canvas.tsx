@@ -36,6 +36,11 @@ export type RoomCanvasProps = {
   officeTray?: number;
   /** Take the view to this room of the single floor; a new `seq` asks again for the same room. */
   focus?: { room: string; seq: number } | null;
+  /**
+   * A click on a room of the single floor (the room of the home it stands for, `_hq` for the lobby), or null for
+   * a click that goes back to the overview. Given, the room is centred left of the sheet it opens (wide screens).
+   */
+  onRoom?: (room: string | null) => void;
 };
 
 /** Where floor.json and floor.png are served (public/iso/floor). */
@@ -48,6 +53,18 @@ const WHEEL_STEP = 50;
 const WHEEL_PAUSE = 90;
 /** A wheel quiet for this long (ms) starts a new gesture. */
 const WHEEL_GESTURE = 250;
+/** The width of a sheet on a wide screen (`.room-sheet` in globals.css), in rem, and from which width it is one. */
+const SHEET_REM = 28;
+const WIDE = "(min-width: 40rem)";
+
+/** CSS pixels of the canvas's right side that a sheet covers once open: none on a phone, where it takes the screen. */
+function sheetInset(host: HTMLElement): number {
+  if (!window.matchMedia(WIDE).matches) return 0;
+  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const viewport = document.documentElement.clientWidth;
+  const left = viewport - Math.min(SHEET_REM * rem, viewport);
+  return Math.max(0, host.getBoundingClientRect().right - left);
+}
 
 /**
  * The whiteboard of the floor: the figures of the day, each one flashing when
@@ -334,10 +351,13 @@ export function RoomCanvas(props: RoomCanvasProps) {
         current.onOffice();
         return;
       }
-      // A room: fly to it, whole on screen; the floor outside the rooms: back to the overview.
+      // A room: fly to it (and open its sheet); the floor outside the rooms: back to the overview.
       const room = renderer.roomAt(point.x, point.y);
-      if (room !== null) renderer.focusIndex(room, !current.reduced);
+      const name = room === null ? null : renderer.roomName(room);
+      const opens = name !== null && current.onRoom !== undefined;
+      if (room !== null) renderer.focusIndex(room, !current.reduced, opens ? sheetInset(host) : 0);
       else renderer.fit(!current.reduced);
+      current.onRoom?.(name);
       refreshZoom();
       kick();
     };
@@ -382,7 +402,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
         const asked = latest.current.focus;
         if (asked) {
           created.resize(host.clientWidth, host.clientHeight);
-          created.focusRoom(asked.room);
+          created.focusRoom(asked.room, false, latest.current.onRoom ? sheetInset(host) : 0);
         }
         kick();
       } catch {
@@ -419,7 +439,9 @@ export function RoomCanvas(props: RoomCanvasProps) {
   const focusRoom = props.focus?.room ?? null;
   useEffect(() => {
     if (focusRoom === null) return;
-    rendererRef.current?.focusRoom(focusRoom, !latest.current.reduced);
+    const host = hostRef.current;
+    const inset = host && latest.current.onRoom ? sheetInset(host) : 0;
+    rendererRef.current?.focusRoom(focusRoom, !latest.current.reduced, inset);
     refreshZoom();
     kickRef.current();
   }, [focusRoom, focusSeq]);
@@ -431,6 +453,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
   };
   const fit = () => {
     rendererRef.current?.fit(!props.reduced);
+    props.onRoom?.(null);
     refreshZoom();
     kickRef.current();
   };

@@ -2,6 +2,11 @@
  * Every user-facing string of MyHQ (French for now), in one module so that the
  * interface can be translated later. Telegram notifications live here too.
  */
+/** A French list: « a », « a et b », « a, b et c ». */
+function frenchList(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} et ${items[items.length - 1]}`;
+}
+
 export const strings = {
   locale: "fr-FR",
   app: {
@@ -565,6 +570,43 @@ export const strings = {
       runCost: (cost: string) => `Coût ${cost}`,
       events: (count: number) => (count === 1 ? "1 événement" : `${count} événements`),
     },
+    /** The sheet of a room of the single floor, opened by a click on the room or its button at the top. */
+    roomSheet: {
+      label: (room: string) => `Fiche de la salle ${room}`,
+      decisions: "Ta décision",
+      pending: (count: number) =>
+        count === 0 ? "Rien n'attend ta décision." : count === 1 ? "1 item attend ta décision." : `${count} items attendent ta décision.`,
+      openPile: (count: number) => (count === 0 ? "Ouvrir À signer" : `Voir ${count === 1 ? "l'item" : `les ${count} items`} dans À signer`),
+      today: "Aujourd'hui",
+      cost: (runs: number, cost: string) => (runs === 0 ? "Aucun tour" : `${runs} tour${runs > 1 ? "s" : ""}, ${cost}`),
+      team: "L'équipe",
+      noAgents: "Aucun agent dans cette salle.",
+      openAgent: (name: string) => `Ouvrir la fiche de ${name}`,
+      state: {
+        working: "Travaille",
+        deciding: (count: number) => (count === 1 ? "Attend ta décision" : `Attend ${count} décisions`),
+        stuck: "Bloqué, attend une réponse",
+        failed: "Tour échoué",
+        asleep: "Dort",
+      },
+      runningSince: (when: string) => `Tour en cours, commencé ${when}`,
+      noSummary: "Tour terminé, sans résumé.",
+      noRun: "Aucun tour pour l'instant.",
+      lastRun: (when: string) => `Dernier tour ${when}`,
+      routines: "Routines",
+      armed: "armée",
+      disarmed: "désarmée",
+      next: (when: string) => `prochain ${when}`,
+      never: "ne se déclenche jamais",
+      schedulerOff: "Planificateur éteint : aucune routine ne part seule.",
+      /** When something happened or will happen, near now: « à 07:00 », « demain à 07:00 », « le 9 nov. à 06:00 ». */
+      when: {
+        today: (time: string) => `à ${time}`,
+        yesterday: (time: string) => `hier à ${time}`,
+        tomorrow: (time: string) => `demain à ${time}`,
+        other: (day: string, time: string) => `le ${day} à ${time}`,
+      },
+    },
   },
   /** The isometric floor of /room: its zoom buttons. */
   roomView: {
@@ -572,6 +614,21 @@ export const strings = {
     zoomIn: "Rapprocher",
     zoomOut: "Éloigner",
     fit: "Vue d'ensemble",
+  },
+  /** A routine's schedule in words, put together by schedule.ts: « Du lundi au vendredi à 8 h ». */
+  schedule: {
+    /** Indexed like cron, 0 Sunday to 6 Saturday. */
+    weekdays: ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+    everyDay: "tous les jours",
+    /** Three days of the week or more in a row (Monday first). */
+    dayRange: (from: string, to: string) => `du ${from} au ${to}`,
+    someDays: (days: readonly string[]) => frenchList(days.map((day) => `le ${day}`)),
+    monthDays: (days: readonly number[]) => `${frenchList(days.map((day) => `le ${day === 1 ? "1er" : day}`))} de chaque mois`,
+    time: (hour: number, minute: number) => (minute === 0 ? `${hour} h` : `${hour} h ${String(minute).padStart(2, "0")}`),
+    line: (days: string, times: readonly string[]) => {
+      const text = `${days} à ${frenchList(times)}`;
+      return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+    },
   },
   /** `npx tsx scripts/replay-fixture.ts` (scripts/replay-fixture.ts), in the terminal. */
   replay: {
