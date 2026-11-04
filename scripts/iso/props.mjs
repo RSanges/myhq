@@ -325,13 +325,14 @@ const cellOf = (x, z) => {
 /**
  * A wall calendar facing +y: a picture, a month bar, a 7 x 6 day grid,
  * weekends shaded, and the day at cell `today` (row * 7 + col, or -1)
- * circled in pink.
+ * circled in pink. `lift` hangs it that many voxels above the floor (on a wall).
  */
-export function calendar(b, { today = -1 } = {}) {
+export function calendar(b, { today = -1, lift = 0 } = {}) {
   const sheet = material({
     ramp: "paper", top: 4, left: 4, right: 3, rim: false,
-    paint(face, x, y, z, level) {
+    paint(face, x, y, zWorld, level) {
       if (face !== LEFT) return level;
+      const z = zWorld - lift;
       if (z >= 19) return { ramp: "ink", level: 2 };
       if (within(z, 11.5, 19)) { // picture: hills under a sky, a sun
         if (!within(x, 1, 15) || z >= 18.5) return level;
@@ -349,9 +350,9 @@ export function calendar(b, { today = -1 } = {}) {
       return level;
     },
   });
-  b.box(0, 0, 0, 16, 1, 20, sheet);
-  b.set(4, 1, 19, gold);
-  b.set(11, 1, 19, gold);
+  b.box(0, 0, lift, 16, 1, 20, sheet);
+  b.set(4, 1, lift + 19, gold);
+  b.set(11, 1, lift + 19, gold);
 }
 
 // ---------------------------------------------------------------------- mug

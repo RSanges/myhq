@@ -1,10 +1,15 @@
 import type { FeedEntry } from "./model";
 
-// Deep links to the desk: `/#approval-<id>` and `/#run-<id>`. Telegram alerts
-// carry them when HQ_PUBLIC_URL is set (src/server/public-url.ts), and the desk
-// follows them on load and on `hashchange`. Pure helpers: no DOM here.
+// Deep links to the desk: `/bureau#approval-<id>` and `/bureau#run-<id>`.
+// Telegram alerts carry them when HQ_PUBLIC_URL is set (src/server/public-url.ts),
+// and the desk follows them on load and on `hashchange`; the home page (the
+// floor) sends the old `/#approval-<id>` and `/#run-<id>` on to the desk.
+// Pure helpers: no DOM here.
 
 export type DeepLink = { kind: "approval" | "run"; id: number };
+
+/** The address of the desk page (the floor is the home page). */
+export const DESK_PATH = "/bureau";
 
 /** Which tab of the desk shows an item. */
 export type DeskTab = "pending" | "history";
@@ -19,7 +24,7 @@ export function parseHash(hash: string): DeepLink | null {
 
 export const approvalAnchor = (id: number): string => `approval-${id}`;
 export const runAnchor = (id: number): string => `run-${id}`;
-/** The hash that opens an item or a run: what the alerts carry after the address of the desk. */
+/** The hash that opens an item or a run: what the alerts carry after the address of the desk page. */
 export const approvalHash = (id: number): string => `#${approvalAnchor(id)}`;
 export const runHash = (id: number): string => `#${runAnchor(id)}`;
 

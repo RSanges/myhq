@@ -8,7 +8,7 @@
 // One voxel is about 3 cm and furniture is life size: a desk top is at
 // z = 25 (75 cm), a seat at z = 14, a standing character about 52 voxels.
 import { LEFT, NX, NY, RIGHT, TOP, hash, material } from "./engine.mjs";
-import { leaf, plant as hubPlant } from "./props.mjs";
+import { calendar as hubCalendar, floorLamp as hubFloorLamp, leaf, plant as hubPlant } from "./props.mjs";
 
 export const CELL = 16;
 export const WALL = { height: 64, thick: 4, rim: 6 };
@@ -581,6 +581,53 @@ export function receptionCounter(b) {
   for (let i = 0; i < 6; i++) leaf(b, [40, 12, 39], i * 1.05, 3.5, 1, 1.5, i % 2 ? leafA : leafB, leafB);
 }
 
+// ---------------------------------------------------------------- the owner's office
+
+/** The hub's floor lamp (a glowing drum shade), centred in a cell. */
+export function floorLamp(b) {
+  hubFloorLamp(b.at(2, 2, 0));
+}
+
+/** The hub's wall calendar, hung on the back wall of its cell (-y), facing +y. */
+export function wallCalendar(b) {
+  hubCalendar(b, { lift: 30 });
+}
+
+// ---------------------------------------------------------------- signboard
+
+/**
+ * The signboard of a room: a board standing on two short posts on top of
+ * the back wall that runs along x (behind y = 0), facing +y. Its face and
+ * its frame take the room colour at runtime (the frame a shade darker);
+ * the name and the logo are drawn over the face at runtime, in the face's
+ * pixel columns that floor.json lists. A board is a left end, `segments`
+ * middle segments and a right end (SIGN, in voxels): the build slices one
+ * long render into those parts so that boards of any length join without
+ * a seam. `probe` paints the face in a colour of its own, to find its pixels.
+ */
+export const SIGN = { end: 4, segment: 8, post: 3, face: 10, frame: 1, depth: 2 };
+export const SIGN_BOTTOM = WALL.height + SIGN.post;
+/** The top of a signboard (voxels above the floor): what the rules about hiding must account for. */
+export const SIGN_TOP = SIGN_BOTTOM + SIGN.face + 2 * SIGN.frame;
+
+export function signBoard(b, { segments = 3, probe = false } = {}) {
+  const L = 2 * SIGN.end + segments * SIGN.segment;
+  const F = SIGN.frame;
+  const z0 = SIGN_BOTTOM, z1 = SIGN_TOP;
+  // The face, recessed one voxel behind its frame.
+  const face = material({
+    ramp: "pink", top: 3, left: 2, right: 1, tint: "room",
+    paint: probe ? (f, x, y, z, level) => (f === LEFT ? { ramp: "blue", level: 2, emissive: true } : level) : undefined,
+  });
+  const frame = material({ ramp: "pink", top: 2, left: 1, right: 1, tint: "room" });
+  b.box(0, -SIGN.depth, z0, L, SIGN.depth - 1, z1 - z0, face);
+  b.box(0, -SIGN.depth, z0, L, SIGN.depth, F, frame);
+  b.box(0, -SIGN.depth, z1 - F, L, SIGN.depth, F, frame);
+  b.box(0, -SIGN.depth, z0, F, SIGN.depth, z1 - z0, frame);
+  b.box(L - F, -SIGN.depth, z0, F, SIGN.depth, z1 - z0, frame);
+  for (const x of [1, L - 3]) b.box(x, -SIGN.depth, WALL.height, 2, 1, SIGN.post, walnut);
+}
+
 // ---------------------------------------------------------------- catalogue
 
 /**
@@ -603,4 +650,6 @@ export const FURNITURE = [
   { name: "filing-cabinet", build: filingCabinet, cells: [1, 1], turns: [0, 1] },
   { name: "rug", build: rug, cells: [3, 2], turns: [0, 1], flat: true },
   { name: "reception-counter", build: receptionCounter, cells: [3, 1], turns: [0, 1], staff: [1, -1] },
+  { name: "floor-lamp", build: floorLamp, cells: [1, 1], turns: [0, 1] },
+  { name: "wall-calendar", build: wallCalendar, cells: [1, 1], turns: [0, 1] },
 ];

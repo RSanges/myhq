@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
+import { parseHash } from "./deep-link";
 import { pileHref } from "./floor-mode";
 import { neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
-import { selectAgents } from "./model";
+import { pendingTitle, selectAgents, selectPending, selectUnseen } from "./model";
 import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
 import { RoomCanvas } from "./room-canvas";
@@ -17,6 +18,7 @@ import type { AgentStatus, AgentView, Coarse, RoomView } from "./room-model";
 import { FLOOR_MODEL, snapshotRoom } from "./room-model";
 import { createRoomStore, type RoomStore } from "./room-store";
 import { strings } from "./strings";
+import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote } from "./ui";
 import { useDesk } from "./use-desk";
 import { useHq } from "./use-hq";
@@ -96,6 +98,17 @@ export function RoomPage() {
   const agents = useMemo(() => selectAgents(model), [model]);
   const router = useRouter();
 
+  // The floor is the home page; the links of the alerts and the old bookmarks of the desk (`/#approval-<id>`,
+  // `/#run-<id>`) open the item on the desk page.
+  useEffect(() => {
+    const follow = () => {
+      if (parseHash(window.location.hash)) router.replace(`/bureau${window.location.hash}`);
+    };
+    follow();
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, [router]);
+
   const roomNames = useMemo(() => model.rooms.map((room) => room.name), [model.rooms]);
   const roomColors = useMemo(() => new Map(model.rooms.map((each) => [each.name, each.color])), [model.rooms]);
   // The single floor of the home: every room on one floor, the buttons at the top take the view to a room.
@@ -126,9 +139,12 @@ export function RoomPage() {
 
   const snapshot = useRoomSnapshot(store, room, reduced);
 
+  // The tab says how many items wait, as the desk's did when it was the home page.
+  const waiting = useMemo(() => selectPending(model).length, [model]);
+  const unseen = useMemo(() => selectUnseen(model).length, [model]);
   useEffect(() => {
-    document.title = t.pageTitle;
-  }, []);
+    document.title = pendingTitle(t.pageTitle, waiting, unseen);
+  }, [waiting, unseen]);
 
   const board = useMemo(
     () =>
@@ -165,13 +181,20 @@ export function RoomPage() {
     [desk],
   );
   const openPile = useCallback((name: string) => router.push(pileHref(deskObjects, name)), [router, deskObjects]);
+  const openDesk = useCallback(() => router.push("/bureau"), [router]);
+  // The logos of the rooms' projects, for their signboards; the letters of the desk's tray, for the tray of the user's office.
+  const logos = useMemo(
+    () => Object.fromEntries(model.rooms.flatMap((each) => (each.logo ? [[each.name, each.logo] as const] : []))),
+    [model.rooms],
+  );
+  const officeTray = desk?.objects.find((object) => object.object === "tray")?.count ?? 0;
   // The users' desks of the single floor, in the order of the home, the reception's last.
   const piles = useMemo(
     () => (single ? [...roomNames, ...(model.reception.room !== null ? [RECEPTION_ROOM] : [])] : []),
     [single, roomNames, model.reception.room],
   );
   const labels = useMemo(
-    () => ({ userDesk: t.userDesk, trayCount: t.trayCount, roomSign: roomLabel }),
+    () => ({ userDesk: t.userDesk, trayCount: t.trayCount, roomSign: roomLabel, officeSign: t.userDesk }),
     [],
   );
 
@@ -181,12 +204,7 @@ export function RoomPage() {
     <div className="chat-shell">
     <div className="wall-page room-page chat-main" inert={chat.open && !wide}>
       <header className="room-top">
-        <Link href="/" className="wall-back">
-          <svg viewBox="0 0 20 20" aria-hidden focusable="false">
-            <path d="M12 4 6 10l6 6" />
-          </svg>
-          {t.back}
-        </Link>
+        <SiteNav current="floor" />
         <h1 className="room-title wall-display">{title}</h1>
         {model.loaded && single && roomNames.length > 0 && (
           <div className="room-rooms" role="group" aria-label={t.single.roomsLabel}>
@@ -300,6 +318,9 @@ export function RoomPage() {
                     onSelect={setSelectedKey}
                     onFailure={() => setCanvasFailed(true)}
                     onOwnerDesk={single ? openPile : undefined}
+                    onOffice={openDesk}
+                    logos={logos}
+                    officeTray={officeTray}
                     focus={single ? focus : null}
                   />
                 )}

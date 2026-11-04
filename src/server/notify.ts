@@ -126,7 +126,7 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
  * alert line then its body as is, cut in messages of 4000 characters, with a
  * single « Vu » button on the last one when it is still unseen. When
  * HQ_PUBLIC_URL is set (read from `env`), each one ends with the line
- * « Ouvrir : <url>/#approval-<id> ». A pending item with files lists them, and
+ * « Ouvrir : <url>/bureau#approval-<id> ». A pending item with files lists them, and
  * its alert carries the first video, image or sound Telegram takes (see
  * telegram-media.ts); otherwise it stays text, with its link.
  */

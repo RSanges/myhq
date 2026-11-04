@@ -255,7 +255,7 @@ annotations, the Approuver guard, « Demander une révision », every action); a
 unfolded body stays mounted when folded again, so a note being typed is kept.
 Which items are unfolded is held by the desk by id, so a refresh from the live
 stream, a switch of tab or a decision elsewhere never folds an item the user
-opened. A deep link `#approval-<id>` unfolds its item and scrolls to it, and
+opened. A deep link `/bureau#approval-<id>` unfolds its item and scrolls to it, and
 « Tout déplier / Tout replier » acts on what is on screen.
 
 #### Acting on an approved item
@@ -544,7 +544,7 @@ through the approval queue.
 - **Real time**: Server-Sent Events from the app to the browser.
 - **The room view** (slice 4): an isometric pixel art floor on a canvas
   (PixiJS, the one runtime dependency added for it, pinned to an exact version
-  and loaded only on `/room`) with character sheets in four directions
+  and loaded only on `/`, the floor) with character sheets in four directions
   (standing, walking, typing), driven by the real events of the stream-json
   output. See section 7.
 - **Rooms and roles**: `room.json` and `roles/*.md` in the home directory,
@@ -919,9 +919,11 @@ Failure alerts stay plain text.
 
 **Links to the desk.** When `HQ_PUBLIC_URL` is set (the address of the desk
 from another device, see the README on Tailscale), an alert about an item and
-a notification end with « Ouvrir : <url>/#approval-<id> », a failure alert
-with « Ouvrir : <url>/#run-<id> », and a brief or summary with
-« Bureau : <url> » (`src/server/public-url.ts`). The desk follows these
+a notification end with « Ouvrir : <url>/bureau#approval-<id> », a failure alert
+with « Ouvrir : <url>/bureau#run-<id> », and a brief or summary with
+« Bureau : <url>/bureau » (`src/server/public-url.ts`). The floor, the home
+page, sends an old `/#approval-<id>` or `/#run-<id>` on to the desk page with
+its hash. The desk follows these
 hashes on load and on `hashchange` (`src/ui/deep-link.ts`): the tab of the
 item (pending or history; an « À regarder » item sits above the tabs), unfolded,
 scrolled into view and ringed for a moment;
@@ -1011,10 +1013,10 @@ mcp add --help`):
 
 ## 7. The room view
 
-`/room` (linked from the header of `/`, with a link back) is the floor of a
-project, drawn in isometric pixel art as a small agency: cutaway rooms (back
-walls at full height with windows and a door, a low rim in front) on a wooden
-hall. The lobby holds the user's own desk, a filing cabinet with the "to
+The home page `/` is the floor, drawn in isometric pixel art as a small
+agency (`/room`, its old address, redirects there, in `next.config.ts`):
+cutaway rooms (back walls at full height with windows and a door, a low rim
+in front) on a wooden hall. The lobby holds the user's own desk, a filing cabinet with the "to
 approve" tray (its paper pile and its count) and, on one floor, the reception
 counter; offices hold the agents' workstations (desk, screen, chair), a
 bookshelf, plants and a rug; the meeting room has its table, its whiteboard and
@@ -1026,19 +1028,36 @@ against the cap, cost, share of the weekly budget, routines armed, next fire
 and last firing: the numbers of `/api/usage` and `/api/routines`) are a card
 in a corner of the canvas, each one flashing when it changes. The canvas takes
 the whole width and the height that is left under the header and above the
-strip of agents. It is a separate page because the canvas weighs something and
-must be able to stop; `/` stays the desk that works everywhere. When the home
-has several rooms, buttons choose the floor shown.
+strip of agents. The desk, the page that works everywhere (the items to
+decide, the team, the feed), is `/bureau`: a click on the user's own office
+opens it (below). When the home has several rooms, buttons choose the floor
+shown. Every page has the same navigation in its header (`site-nav.tsx`):
+« L'étage » (`/`), « Le bureau » (`/bureau`), « Feuille de route », « Réglages ».
 
 **Pixel art, zoom and pan.** The art (`public/iso/`, built by
 `scripts/iso/`, formats in `scripts/iso/README.md`) is only ever drawn at a
-whole number of device pixels per art pixel, with nearest sampling and whole
-pixel positions (`roundPixels`), so it stays sharp. On load, or with the
-"Vue d'ensemble" button, the floor takes the largest such zoom that fits the
-canvas, centered; when even one device pixel per pixel is too big (a phone, a
-small window), it shows the offices at that zoom and the rest is a drag away.
-The floor pans with a drag (or the wheel), zooms with the + and - buttons, a
-pinch, or ctrl and the wheel, one whole step at a time.
+whole number of device pixels per art pixel, one at least, with nearest
+sampling, no mipmaps and whole pixel positions (`roundPixels`), so it stays
+sharp. The canvas holds one pixel per device pixel (`autoDensity`), is
+displayed with `image-rendering: pixelated`, and under a fractional pixel
+ratio (125 %, 150 %) is moved by the fraction of a device pixel the page lays
+it out at, so the browser never resamples it. On load, or with the « Vue
+d'ensemble » button, the floor takes the largest such zoom that fits the
+canvas, centred; when even one device pixel per art pixel is too big (a
+1280 to 1440 pixel screen for the single floor, a phone), it stays at one and
+the rest is a drag away (the floor of one room then shows its offices). There
+is no step under one: the old overview of the single floor went to half a
+device pixel per art pixel, sampled smoothly, and blurred every piece of art.
+The wheel zooms, one whole step per notch, around the pointer (a trackpad's
+two finger scroll cannot be told apart from a wheel for sure, so it zooms
+too, and its pinch arrives as the wheel with ctrl); a drag (a mouse, one
+finger) pans; a pinch and the + and - buttons zoom. A click on a room flies to
+it: centred, at the largest whole zoom that shows it whole (walls and
+signboard included), the zoom passing through whole steps only so every frame
+stays crisp, at once under `prefers-reduced-motion`. A click on the floor
+outside the rooms, or the « Vue d'ensemble » button, flies back to the
+overview. A click on an agent still opens its sheet, on a user's desk its
+pile.
 
 **Templates.** The floor is not computed: it is one of three hand-designed
 templates by number of agents, data in floor cells in
@@ -1069,7 +1088,7 @@ under the floor but have no office on it.
 
 **The single floor.** With `floor.layout: "room-per-project"` in `myhq.json`
 (`home-layout.md`; the default, `"floor-per-project"`, is the floor of one
-room above), `/room` draws the whole home as one floor where each room of the
+room above), `/` draws the whole home as one floor where each room of the
 home is a suite of its own (`layoutFloor`, `src/ui/floor-plan.ts`): a block
 with its own back walls, windows and front rim, like the rooms of the
 templates. The lobby is the entrance, at the front corner of the floor (the
@@ -1077,14 +1096,15 @@ bottom of the screen): the main corridor runs along the front from its
 opening, the spine climbs from the same corner along the right edge to the
 back, and ribs branch off the spine. Each row of suites, right-aligned on the
 spine, stands on a rib and opens onto it: the front row on the main corridor,
-the lobby at its right end and the room of the reception (`reception.room`)
-beside it. The rows are as wide as their own suites, the rooms shared out so
+the lobby at its right end, the user's own office beside it, then the room
+of the reception (`reception.room`). The rows are as wide as their own suites, the rooms shared out so
 the rows stay even, and the arrangement is the most compact one, two rows at
-least from two rooms. A back wall hides about four cells behind it, so a
-corridor runs along the front of the suites it serves and keeps clear of any
-other back wall: between a rib and the back walls of the row in front of it
-lies their shadow (three cells), two suites side by side keep four cells
-apart, and that shadow, mostly covered by the walls on screen, is a garden
+least from two rooms. A back wall hides about four cells behind it, its
+signboard about five, so a corridor runs along the front of the suites it
+serves and keeps clear of any other back wall: between a rib and the back
+walls of the row in front of it lies their shadow (four cells), two suites
+side by side keep four cells apart (a sign hides nothing beside its room), and
+that shadow, mostly covered by the walls on screen, is a garden
 (the `grass` tile of the floor set). No block hides another, no corridor runs
 behind a wall and every window looks onto the garden. A suite is six cells
 deep and as long as its team needs (`roomLength`): two rows of workstations
@@ -1097,24 +1117,57 @@ by the opening, with a pile of folders on it: one per item of that room
 waiting for a decision (ten drawn at most), the spines in the room colour, and
 a count over it. The lobby (eight by eight) holds the reception counter, the
 receptionist behind it, the coffee corner, a sofa by a rug and the user's desk
-of the onboarding room `_hq`, where room proposals land. The tests run every
+of the onboarding room `_hq`, where room proposals land.
+
+The user's own office (`ownerOffice`, a block of OFFICE_LENGTH by six cells
+beside the lobby, `layout.office`) is drawn in the look of the desk's scene,
+as far as the floor set allows: a wooden floor, the desk against the back
+wall with its chair, the hub's wall calendar and floor lamp (pieces of the
+floor set), the filing cabinet of the tray with as many letters on it as the
+desk's tray holds, a bookshelf, a rug and plants. Its desk holds the pile of
+every item waiting for a decision, with its count. Nobody works there; a click
+anywhere on it opens the desk, `/bureau`. On a floor of one room
+(`"floor-per-project"`), the user's desk and tray of the lobby (« Votre
+bureau ») play that part: a click on them opens `/bureau`.
+
+**Signboards.** Every block of the single floor (the suites, the lobby, the
+user's office) carries a signboard on its back wall along x, like a shop sign
+on a roof: a board standing on two short posts on top of the wall, facing the
+viewer, centred, in the room colour (a neutral slate without one) with a
+frame a shade darker. It is floor art (`sign` of `floor.json`, built by
+`scripts/iso/`): a left end, middle segments and a right end, as many
+segments as the name and the logo need (`room-signs.ts`, `planSign`), never
+longer than the wall (the logo goes first, then the end of the name). The
+name is written in capitals on the face with the pixel font of the floor set
+(`font` of `floor.json`), each pixel of a glyph a square of two by two on the
+face's own stairs (the face falls one pixel every two columns, like the
+wall), in paper white or ink black, whichever contrasts most with the board.
+A room whose `room.json` has a `logo` (`GET /api/rooms/<room>/logo`) shows it
+on the left of the name, reduced to the height of the face without blending
+any colour (`shrinkLogo`: each pixel takes the colour that covers most of its
+block, or a detail in strong contrast with it), outlined in the ink when its
+colours are too close to the board's. The names are on the canvas only; the
+room buttons at the top and the list « À signer, par salle » under the floor
+name every room for the keyboard and screen readers. A sign rises to
+SIGN_TOP voxels (79, the wall 64): the hiding rules count it on the whole
+length of the wall, so it never hides a room or a corridor.
+
+The tests run every
 rule above on generated homes of 1 to 8 rooms of 1 to 12 agents, check that
 blocks stand apart with their walls, that the lobby is the front corner where
 the corridors start, and that rooms and corridors take most of the floor's box
 (the garden only the rest). The page shows every agent of the home in the
-strip, the receptionist last; the buttons at the top centre the view on a room
-(close enough to see it whole when it fits) and carry its count; the name of
-each room is a sign at its opening. A click on a user's desk (or the list « À
+strip, the receptionist last; the buttons at the top fly the view to a room
+(as a click on it does) and carry its count. A click on a user's desk (or the list « À
 signer, par salle » under the floor, its equivalent for the keyboard and
 screen readers) opens the page of the pile of decisions filtered to that room,
 `/bureau/<id>?room=<room>` (section 8). An agent carries what it submits to the
 user's desk of its own room, a delivery of a shared room (`forRoom`) to the
 desk of the room that ordered it, and a message to an agent of another room
 (`hq_message` with `room`) is a walk along the corridors to that agent's desk.
-The floor is meant to be panned (a drag, a swipe, the wheel); its overview,
-centred on the whole, may go one step under one device pixel per art pixel
-(half of one, sampled smoothly, without the names over the heads) so that it
-fits the screen.
+The floor is meant to be panned (a drag, a swipe) and zoomed (the wheel, a
+pinch, a click on a room); its overview is centred on the whole, at one device
+pixel per art pixel at least.
 
 **The reception.** Onboarding is an agent too (section 3), and it is
 the one agent that no room owns: its runs belong to the reserved room `_hq`. So
@@ -1165,11 +1218,16 @@ old `onboarding.sprite` of a home is no longer drawn. To see it without a real r
   `src/ui/room-labels.ts`: every piece of text of the floor (the name over
   each head, bubbles, the user's desk, the tray count) is an HTML element over
   the canvas, at whole CSS pixels, in the page fonts and colors (CSS
-  variables), with the box of a tag or a bubble drawn by CSS. Nothing is drawn
-  as text in the canvas, so text is sharp at any zoom and in both themes.
+  variables), with the box of a tag or a bubble drawn by CSS. No font is
+  drawn in the canvas, so text is sharp at any zoom and in both themes (the
+  names on the signboards are pixel art of the floor set, drawn like the rest
+  of the art).
   `src/ui/room-canvas.tsx` imports the renderer dynamically in an effect
   (never on the server), owns the frame loop, the pointers (drag, pinch,
-  click), the zoom buttons, the whiteboard card and the density.
+  click on an agent, a desk, the office or a room), the wheel, the zoom
+  buttons, the whiteboard card, the density and the alignment of the canvas
+  on the device pixels. `src/ui/room-signs.ts`: the signboards (their length,
+  the ink, the logo reduced, the face painted), pure.
   `src/ui/room.tsx` is the page: header, rooms, the canvas or the compact band,
   the strip of agents, the sheet.
 - Walking follows routes of the layout (`routeToOffice`, `routeToUser`; the
@@ -1232,8 +1290,8 @@ button: `AgentCard` of `team.tsx`) and its recent runs with their journal
 API has no list of old runs. A side panel on a wide screen, the whole screen on
 a phone; Escape closes it and focus returns to what opened it.
 
-**The conversation panel** (`chat-panel.tsx`, `use-chat.ts`; on `/room` and
-on `/`): a button in the header (and the key `c`, when nothing is being typed)
+**The conversation panel** (`chat-panel.tsx`, `use-chat.ts`; on `/` and
+on `/bureau`): a button in the header (and the key `c`, when nothing is being typed)
 slides in a panel titled with the assistant's name (`strings.chat`), the same
 conversation as Telegram's (`GET /api/chat/history`, then the `chat` events of
 the stream, loaded again after each reconnection). The user's messages are
@@ -1241,7 +1299,7 @@ right-aligned, the chat's replies left-aligned, what the bot sent on its own
 (alerts, notifications, run summaries, the confirmation of a task sent to an
 agent) is a muted card labelled with its kind; a message from Telegram says so. The
 row of chips under the log chooses the recipient: the assistant (default), or one
-agent of the room shown (all the agents on `/`), each with its state as a dot and
+agent of the room shown (all the agents on `/bureau`), each with its state as a dot and
 in text. Enter sends, Shift+Enter makes a new line. A message to the assistant
 is `POST /api/chat`; to an agent, the same route with `to`, which starts a run at
 once, so that it shows up in the feed and walks the floor. While a turn runs the
@@ -1253,7 +1311,7 @@ docked at 380 px on the right and the page gives up that width, so the canvas
 re-fits (it already follows the size of its box); under 40 rem it is a sheet over
 the whole screen and the page behind is inert. Colors, fonts and tokens are
 the floor's (`.chat-*` rules of `globals.css`, with the desk's tokens as
-fallbacks on `/`); the panel's entrance and the dots of the typing indicator
+fallbacks on `/bureau`); the panel's entrance and the dots of the typing indicator
 stop under `prefers-reduced-motion`.
 
 **Without a real run.** `scripts/replay-fixture.ts` plays a fixture into a
@@ -1265,7 +1323,7 @@ the room (README, "Trying the room without a real run").
 - PixiJS rather than a hand-written 2D canvas: the plan decides it and richer
   animations can use it. Fifteen sprites would not need it. The cost is about
   168 kB gzipped (572 kB minified; esbuild estimate of the renderer chunk, under
-  the 250 kB threshold), paid on `/room` only, since the module is a dynamic
+  the 250 kB threshold), paid on the floor only, since the module is a dynamic
   import. The renderer is behind an interface, so a canvas 2D one can replace it
   without touching the model.
 - The tray counts the items of the shown room; on the single floor, each
@@ -1274,7 +1332,7 @@ the room (README, "Trying the room without a real run").
 
 ## 8. The desk objects
 
-The desk (`/`) opens on a scene, the hub: the user's office in isometric
+The desk (`/bureau`, a click on the user's office of the floor) opens on a scene, the hub: the user's office in isometric
 pixel art, where each object on the desk is a module (a pile of items to sign,
 a mail tray, a newspaper, post-its, a wall calendar, a phone). It stands on
 the model, the data, the API and one page per object.
@@ -1299,7 +1357,8 @@ the model, the data, the API and one page per object.
   the first and stopped with the last); a command is run again only when its
   cache is stale. The first reading is the baseline and is not announced.
 - **The pages**, `/bureau/<id>` (`src/ui/desk-module.tsx`,
-  `desk-module-views.tsx`): a back link to the desk, the label and the count,
+  `desk-module-views.tsx`): the navigation of every page (« Le bureau »
+  marked, since a module belongs to the desk), the label and the count,
   the connection state, and the interface of the object, chosen by its kind
   and its source. A pile of `approvals` is the desk's own approval cards
   (`Desk`: folded lines, annotations, the Approuver guard, every action, the
@@ -1314,15 +1373,16 @@ the model, the data, the API and one page per object.
   conversation panel as the page itself. Any other pairing gets a plain list.
   Each page follows the live stream like the desk does (`useHq`), and reads
   `GET /api/desk` again on each `desk` message (`useDesk`).
-- **Deep links** keep working: `/#approval-<id>` opens the item on `/` as
-  before, and the items of a module link to `/bureau/<id>#approval-<id>`, which
+- **Deep links** keep working: `/bureau#approval-<id>` opens the item on the
+  desk (the floor sends an old `/#approval-<id>` there), and the items of a
+  module link to `/bureau/<id>#approval-<id>`, which
   unfolds and rings the item on the page of the pile or the tray.
   `/bureau/<id>?room=<room>` (the user's desk of a room of the single floor)
   shows the pile of `approvals` filtered to that room (its own items and the
   deliveries ordered from a shared room), with a « Filtré sur » chip whose
   cross goes back to the whole pile.
 - **The hub** (`src/ui/hub.tsx`, the mapping in `src/ui/hub-scene.ts`), at the
-  top of `/`: the scene composed in the browser from `public/iso/hub/` (format
+  top of `/bureau`: the scene composed in the browser from `public/iso/hub/` (format
   in `scripts/iso/README.md`). Each object of the scene takes the state that
   matches its desk object: the pile has one folder per pending item (14 at
   most), each spine tinted with the room colour of its item, oldest at the
@@ -1353,5 +1413,5 @@ the model, the data, the API and one page per object.
   fits the width and a list of the modules follows it (label, count, link);
   should the assets fail to load, that list stands in for the scene.
   Under the scene, the desk keeps its folded items (« À regarder », then « À
-  valider » and the history), so `/#approval-<id>` works as before; the meter
+  valider » and the history), so `/bureau#approval-<id>` works as before; the meter
   comes after them on a wide screen.

@@ -13,19 +13,24 @@ import {
   type Box,
   type Draw,
   type FloorSet,
+  type SignPart,
 } from "./iso-floor";
 import type { LabelLayer } from "./room-labels";
-import { CELL, roomOfKey, screenOf, type OwnerDesk, type Point, type RoomLayout } from "./room-layout";
+import { CELL, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type OwnerDesk, type Point, type RoomLayout } from "./room-layout";
+import { faceColumns, inkFor, LOGO_MARGIN, paintFace, planSign, shrinkLogo, type Pixels } from "./room-signs";
 import { VOXELS_PER_STEP, walkFrame, type AgentView, type RoomView } from "./room-model";
-import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
+import { RECEPTION_KEY } from "./reception";
 
 // The drawing of the floor, behind a small interface (create, draw a state,
 // resize, pan and zoom, destroy) so that the engine can change without
 // touching the model or the page. PixiJS, WebGL, at the device pixel ratio of
 // the screen. The floor is isometric pixel art (public/iso/floor, see
 // scripts/iso/README.md): it is only ever drawn at a whole number of device
-// pixels per art pixel, with nearest sampling and whole-pixel positions, so it
-// stays crisp. Tiles, floor shadows and rugs lie flat under everything; walls,
+// pixels per art pixel (one at least), with nearest sampling, no mipmaps and
+// whole-pixel positions, so it stays crisp; a view that flies to a room or
+// back to the overview passes through whole zoom steps only. The signboards
+// of the single floor are floor art too, their names drawn with the pixel
+// font of the floor set. Tiles, floor shadows and rugs lie flat under everything; walls,
 // rims, furniture and standing characters are sorted back to front by their
 // footprints; a seated character is drawn inside its chair (under the
 // backrest). Every piece of text is an HTML label over the canvas
@@ -58,9 +63,15 @@ export type RoomScene = {
   labels: {
     userDesk: string;
     trayCount: (count: number) => string;
-    /** The sign at the door of a room of the single floor: its name. */
+    /** The name on the signboard of a room of the single floor (the room of the home it stands for). */
     roomSign?: (room: string) => string;
+    /** The name on the signboard of the user's own office (single floor). */
+    officeSign?: string;
   };
+  /** The logo of each room of the home that has one (an image URL), drawn on the left of its signboard. */
+  logos?: Record<string, string>;
+  /** How many letters lie in the tray of the user's own office. */
+  officeTray?: number;
   /** Colour of the room (a normalized hex): carpets, tiles, rugs, sofas, the counter and the name tags. Null: neutral. */
   color: string | null;
   selected: string | null;
@@ -83,18 +94,26 @@ export type RoomRenderer = {
   zoomBy(step: number, around?: Point): void;
   /** Moves the floor by this many CSS pixels. */
   panBy(dx: number, dy: number): void;
-  /** Back to the zoom that fits the floor (or the offices, on a small screen). */
-  fit(): void;
+  /** Back to the overview: the largest whole zoom that fits the floor (one, centred, when even one does not); `animate` flies there. */
+  fit(animate?: boolean): void;
+  /** True while the view is the overview (nothing moved it since). */
+  readonly overview: boolean;
   /** Whether a step closer or further is possible. */
   canZoom(step: number): boolean;
   /** The character under a point of the canvas (CSS pixels), the front one when they overlap. */
   agentAt(view: RoomView, x: number, y: number): AgentView | null;
   /** The user's desk of a room of the single floor under a point of the canvas (CSS pixels): the room it serves. */
   ownerDeskAt(x: number, y: number): string | null;
-  /** Centres the view on a room of the single floor (the room of the home it stands for), close enough to see it whole. */
-  focusRoom(room: string): void;
+  /** Centres the view on a room of the single floor (the room of the home it stands for), at the largest whole zoom that shows it whole. */
+  focusRoom(room: string, animate?: boolean): void;
+  /** The same for a room of the floor by its index in the layout. */
+  focusIndex(index: number, animate?: boolean): void;
+  /** The room of the floor under a point of the canvas (CSS pixels): its index, or null for the hall, the garden or nothing. */
+  roomAt(x: number, y: number): number | null;
+  /** Whether a point of the canvas is on the user's own office (single floor), or on the user's desk or tray of a lobby. */
+  officeAt(x: number, y: number): boolean;
   draw(scene: RoomScene, at: number): void;
-  /** True while a transient effect (the tray count that just rose) still needs frames; never with reduced motion. */
+  /** True while something moves by itself: the view flying somewhere, or the tray count that just rose (never with reduced motion). */
   busy(at: number, reduced: boolean): boolean;
   /** Frames drawn so far (the measure of "nothing is drawn while the tab is hidden"). */
   readonly frames: number;
@@ -115,13 +134,13 @@ export type RendererOptions = {
 /** The closest the floor gets: this many device pixels per art pixel. */
 export const MAX_ZOOM = 6;
 /**
- * The overview of the single floor, which spreads its suites far apart, may
- * go one step further than one device pixel per art pixel: half of one,
- * sampled smoothly (the art is then a map, not pixel art, until the next step
- * closer). The floor of one room never goes under one.
+ * The furthest: one device pixel per art pixel, never less (a smoothed half
+ * step blurred the art). A floor bigger than the screen at one is panned.
  */
-export const OVERVIEW_ZOOM = 0.5;
+export const MIN_ZOOM = 1;
 const BUMP_MS = 650;
+/** How long the view takes to fly to a room or back to the overview. */
+const FLIGHT_MS = 380;
 /** Free space around the floor when it is fitted, in art pixels. */
 const MARGIN = 8;
 /** A floor at most this much bigger than the canvas (at one device pixel) is still centred whole; a bigger one shows its offices. */
@@ -147,8 +166,7 @@ function sliceSheet(image: HTMLImageElement): Sheet | null {
   const { w, h } = SHEET.frame;
   const rows = SHEET.directions.length * SHEET.animations.length;
   if (image.naturalWidth !== w * SHEET.columns || image.naturalHeight !== h * rows) return null;
-  const texture = Texture.from(image);
-  texture.source.scaleMode = "nearest";
+  const texture = crisp(Texture.from(image));
   const frames: Texture[][] = [];
   for (let row = 0; row < rows; row += 1) {
     const line: Texture[] = [];
@@ -181,6 +199,41 @@ function sliceSheet(image: HTMLImageElement): Sheet | null {
 }
 
 const hexToNumber = (hex: string | null): number | null => (hex ? Number.parseInt(hex.slice(1), 16) : null);
+
+/** Nearest sampling and no mipmaps: pixel art drawn at a whole number of device pixels per pixel. */
+function crisp(texture: Texture): Texture {
+  texture.source.scaleMode = "nearest";
+  texture.source.autoGenerateMipmaps = false;
+  return texture;
+}
+
+/**
+ * A logo `height` pixels high from its image: a PNG from its own pixels, an
+ * SVG rasterized at eight times that first; then reduced (shrinkLogo).
+ */
+function logoPixels(image: HTMLImageElement, height: number, vector: boolean): Pixels | null {
+  const natural = { w: image.naturalWidth || image.width, h: image.naturalHeight || image.height };
+  if (natural.w === 0 || natural.h === 0) return null;
+  const scale = vector ? (height * 8) / natural.h : 1;
+  const w = Math.max(1, Math.round(natural.w * scale));
+  const h = Math.max(1, Math.round(natural.h * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(image, 0, 0, w, h);
+  return shrinkLogo({ width: w, height: h, data: context.getImageData(0, 0, w, h).data }, height);
+}
+
+/** A crisp texture of a pixel buffer. */
+function pixelTexture(pixels: Pixels): Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = pixels.width;
+  canvas.height = pixels.height;
+  canvas.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height), 0, 0);
+  return crisp(Texture.from(canvas));
+}
 
 /** The colour of the room of an agent on the single floor (its name tag), null for none. */
 const roomColorHex = (layout: RoomLayout, key: string): string | null =>
@@ -231,17 +284,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     preference: "webgl",
   });
 
-  const atlas = Texture.from(atlasImage);
-  atlas.source.scaleMode = "nearest";
-  /** Every texture source drawn (the atlas, the character sheets): nearest at a whole zoom, linear under one. */
-  const sources = new Set([atlas.source]);
-  let sampling: "nearest" | "linear" = "nearest";
-  const applySampling = () => {
-    const wanted = zoom < 1 ? "linear" : "nearest";
-    if (wanted === sampling) return;
-    sampling = wanted;
-    for (const source of sources) source.scaleMode = wanted;
-  };
+  const atlas = crisp(Texture.from(atlasImage));
   const frameTextures = floorSet.atlas.frames.map(([x, y, w, h]) => new Texture({ source: atlas.source, frame: new Rectangle(x, y, w, h) }));
 
   // Layers, back to front: the flat floor, the marks on it, everything sorted, effects on top.
@@ -251,7 +294,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   const sortedLayer = new Container();
   sortedLayer.sortableChildren = true;
   const effects = new Graphics();
-  world.addChild(flatLayer, marks, sortedLayer, effects);
+  // The signboards stand on the back walls, above anything in front of them: drawn after everything sorted.
+  const signLayer = new Container();
+  world.addChild(flatLayer, marks, sortedLayer, signLayer, effects);
   app.stage.addChild(world);
 
   // View: a whole number of device pixels per art pixel, the art point at the centre of the canvas.
@@ -262,14 +307,14 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let layout: RoomLayout | null = null;
 
   const scale = () => zoom / resolution;
-  /** The lowest zoom of the floor shown: the overview step on the single floor, one device pixel elsewhere. */
-  const minZoom = () => (layout?.template === "rooms" ? OVERVIEW_ZOOM : 1);
+  type View = { zoom: number; center: Point };
+  /** The view flying to another (a room clicked, the overview), through whole zoom steps only; null when still. */
+  let flight: { from: View; to: View; start: number | null } | null = null;
   const offset = (): Point => ({
     x: Math.round((cssSize.width / 2 - center.x * scale()) * resolution) / resolution,
     y: Math.round((cssSize.height / 2 - center.y * scale()) * resolution) / resolution,
   });
   const applyView = () => {
-    applySampling();
     const at = offset();
     world.scale.set(scale());
     world.position.set(at.x, at.y);
@@ -280,25 +325,88 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     const b = layout.bounds;
     center = { x: Math.min(b.x + b.w, Math.max(b.x, center.x)), y: Math.min(b.y + b.h, Math.max(b.y, center.y)) };
   };
-  const fitView = () => {
-    if (!layout) return;
+  /** The overview: the largest whole zoom that fits the floor, centred; one device pixel when even that is too big. */
+  const overviewView = (): View | null => {
+    if (!layout) return null;
     const b = layout.bounds;
     const device = { w: cssSize.width * resolution, h: cssSize.height * resolution };
     const fits = Math.min(device.w / (b.w + 2 * MARGIN), device.h / (b.h + 2 * MARGIN));
-    zoom = fits >= 1 ? Math.min(MAX_ZOOM, Math.floor(fits)) : minZoom();
-    const overflow = Math.max(((b.w + 2 * MARGIN) * zoom) / device.w, ((b.h + 2 * MARGIN) * zoom) / device.h);
-    // The overview of the single floor is always centred on the whole of it.
+    const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(fits)));
+    const overflow = Math.max(((b.w + 2 * MARGIN) * next) / device.w, ((b.h + 2 * MARGIN) * next) / device.h);
+    // The single floor is centred on the whole of it (what does not fit is a drag away).
     if (overflow <= NEARLY_FITS || layout.offices.length === 0 || layout.template === "rooms") {
-      center = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-    } else {
-      // Much too big for the screen even at one device pixel (a phone): show where the agents work.
-      const seats = layout.offices.map((office) => screenOf(office.seat.x, office.seat.y));
-      center = {
-        x: seats.reduce((sum, p) => sum + p.x, 0) / seats.length,
-        y: seats.reduce((sum, p) => sum + p.y, 0) / seats.length - 40,
-      };
-      clampCenter();
+      return { zoom: next, center: { x: b.x + b.w / 2, y: b.y + b.h / 2 } };
     }
+    // A floor of one room much too big for the screen even at one device pixel (a phone): show where the agents work.
+    const seats = layout.offices.map((office) => screenOf(office.seat.x, office.seat.y));
+    return {
+      zoom: next,
+      center: { x: seats.reduce((sum, p) => sum + p.x, 0) / seats.length, y: seats.reduce((sum, p) => sum + p.y, 0) / seats.length - 40 },
+    };
+  };
+  const fitView = () => {
+    const view = overviewView();
+    if (!view) return;
+    flight = null;
+    zoom = view.zoom;
+    center = view.center;
+    clampCenter();
+  };
+  /** Takes the view there: at once, or flying (the frame loop moves it while `busy` says so). */
+  const goTo = (to: View, animate: boolean) => {
+    if (!animate || (to.zoom === zoom && Math.hypot(to.center.x - center.x, to.center.y - center.y) < 1)) {
+      flight = null;
+      zoom = to.zoom;
+      center = to.center;
+      clampCenter();
+      applyView();
+      return;
+    }
+    flight = { from: { zoom, center }, to, start: null };
+  };
+  const stepFlight = (at: number) => {
+    if (!flight) return;
+    flight.start ??= at;
+    const t = Math.min(1, (at - flight.start) / FLIGHT_MS);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    const { from, to } = flight;
+    // The zoom moves on a log scale, drawn at the nearest whole step: every frame stays crisp.
+    zoom = Math.max(MIN_ZOOM, Math.round(Math.exp(Math.log(from.zoom) + (Math.log(to.zoom) - Math.log(from.zoom)) * e)));
+    center = { x: from.center.x + (to.center.x - from.center.x) * e, y: from.center.y + (to.center.y - from.center.y) * e };
+    if (t >= 1) {
+      zoom = to.zoom;
+      center = to.center;
+      flight = null;
+    }
+    clampCenter();
+    applyView();
+  };
+  /** The view that shows a room of the floor whole (walls and signboard included) at the largest whole zoom. */
+  const roomView = (index: number): View | null => {
+    const room = layout?.rooms[index];
+    if (!room) return null;
+    const corners = [
+      screenOf(room.x * CELL, room.y * CELL),
+      screenOf((room.x + room.w) * CELL, room.y * CELL),
+      screenOf(room.x * CELL, (room.y + room.d) * CELL),
+      screenOf((room.x + room.w) * CELL, (room.y + room.d) * CELL),
+    ];
+    const minX = Math.min(...corners.map((p) => p.x)) - 6;
+    const maxX = Math.max(...corners.map((p) => p.x)) + 6;
+    // The back walls rise above the room, and its signboard (where it stands on the wall, or as high as one may).
+    const board = signBoxes.find((box) => box.room === index);
+    const wallTop = Math.min(...corners.map((p) => p.y)) - 2 * WALL_HEIGHT - 6;
+    const minY = Math.min(wallTop, board ? board.top : room.sign ? wallTop - 2 * (SIGN_TOP - WALL_HEIGHT) : wallTop);
+    const maxY = Math.max(...corners.map((p) => p.y)) + 10;
+    const device = { w: cssSize.width * resolution, h: cssSize.height * resolution };
+    // The box has its own few pixels of air: no margin on top of them, so a room fills the view as soon as it fits.
+    const fits = Math.floor(Math.min(device.w / (maxX - minX), device.h / (maxY - minY)));
+    return { zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fits)), center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
+  };
+  /** A point of the canvas (CSS pixels) in art pixels. */
+  const artOf = (x: number, y: number): Point => {
+    const at = offset();
+    return { x: (x - at.x) / scale(), y: (y - at.y) / scale() };
   };
 
   // ---- Character sheets ----
@@ -309,13 +417,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     void loadImage(url)
       .then((image) => {
         if (destroyed) return;
-        const sheet = sliceSheet(image);
-        const source = sheet?.frames[0]?.[0]?.source;
-        if (source) {
-          source.scaleMode = sampling;
-          sources.add(source);
-        }
-        sheets.set(url, sheet);
+        sheets.set(url, sliceSheet(image));
         options.onLoad();
       })
       .catch(() => {
@@ -386,7 +488,112 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       staticItems.push({ node, box: desk.box });
       piles.set(owner.room, { node, count: -1 });
     }
+    // The pile on the desk of the user's own office: every item waiting for a decision.
+    officePile = null;
+    const office = next.office;
+    if (office) {
+      const desk = staticItems.find((entry, index) => scene.sorted[index]?.piece === office.desk);
+      if (desk) {
+        const node = new Graphics();
+        sortedLayer.addChild(node);
+        staticItems.push({ node, box: desk.box });
+        officePile = { node, count: -1 };
+      }
+    }
     lastOrderKey = "";
+    signKey = "";
+  }
+
+  // ---- Signboards (single floor) ----
+  /** Logos by URL: their pixels at the height of a face, null while loading or when they fail. */
+  const logos = new Map<string, { pixels: Pixels | null; done: boolean }>();
+  const faceHeight = floorSet.sign.middle.face.cols.find((col) => col !== null)?.[1] ?? 18;
+  const loadLogo = (url: string) => {
+    if (logos.has(url)) return;
+    logos.set(url, { pixels: null, done: false });
+    void (async () => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`${url}: ${response.status}`);
+        const blob = await response.blob();
+        const local = URL.createObjectURL(blob);
+        try {
+          const image = await loadImage(local);
+          if (destroyed) return;
+          logos.set(url, { pixels: logoPixels(image, faceHeight - 2 * LOGO_MARGIN, blob.type === "image/svg+xml"), done: true });
+        } finally {
+          URL.revokeObjectURL(local);
+        }
+      } catch {
+        logos.set(url, { pixels: null, done: true });
+      }
+      if (!destroyed) options.onLoad();
+    })();
+  };
+  let signKey = "";
+  /** The textures of the names and logos drawn on the boards (their own, destroyed with the boards). */
+  let signTextures: Texture[] = [];
+  /** The faces of the boards on screen (art pixels), for the pointer: columns, and rows from a top that falls one pixel every two columns. */
+  let signBoxes: { room: number; x0: number; x1: number; top: number; h: number }[] = [];
+  const signTextOf = (current: RoomLayout, index: number, labels: RoomScene["labels"]): string | null => {
+    const room = current.rooms[index]!;
+    if (!room.sign) return null;
+    if (room.kind === "owner") return labels.officeSign ?? null;
+    if (room.project === null) return null;
+    return labels.roomSign ? labels.roomSign(room.project) : room.project;
+  };
+  /** The signboard of every room that has one: the board in the room colour, the logo and the name on its face. */
+  function buildSigns(current: RoomLayout, scene: RoomScene) {
+    const texts = current.rooms.map((_, index) => signTextOf(current, index, scene.labels));
+    const urls = current.rooms.map((room) => (room.sign && room.project !== null ? (scene.logos?.[room.project] ?? null) : null));
+    for (const url of urls) if (url) loadLogo(url);
+    const key = `${texts.join("|")}#${urls.map((url) => (url ? `${url}:${logos.get(url)?.done ? 1 : 0}` : "")).join("|")}#${roomColors.join(",")}`;
+    if (key === signKey) return;
+    signKey = key;
+    signLayer.removeChildren().forEach((child) => child.destroy({ children: true }));
+    for (const texture of signTextures) texture.destroy(true);
+    signTextures = [];
+    signBoxes = [];
+    const set = floorSet.sign;
+    current.rooms.forEach((room, index) => {
+      const text = texts[index];
+      if (!text) return;
+      const url = urls[index];
+      const logo = url ? (logos.get(url)?.pixels ?? null) : null;
+      const plan = planSign(set, floorSet.font, text, logo?.width ?? 0, room.w * CELL);
+      const length = 2 * set.end + plan.segments * set.segment;
+      // Centred on the back wall along x, on whole voxels.
+      const anchor = screenOf(room.x * CELL + Math.floor((room.w * CELL - length) / 2), room.y * CELL);
+      const color = colorOf(index);
+      const group = new Container();
+      const part = (piece: SignPart, k: number) => {
+        const shift = { x: k * set.period[0], y: k * set.period[1] };
+        const add = (ref: [number, number, number], tint: number | null) => {
+          const sprite = new Sprite(frameTextures[ref[0]]!);
+          sprite.position.set(anchor.x + ref[1] + shift.x, anchor.y + ref[2] + shift.y);
+          if (tint !== null) sprite.tint = tint;
+          group.addChild(sprite);
+        };
+        add(piece.sprite, null);
+        for (const mask of piece.masks) add(mask.frame, mask.mode === "pastel" ? pastel(color) : color);
+      };
+      part(set.left, 0);
+      for (let k = 0; k < plan.segments - 1; k += 1) part(set.middle, k);
+      part(set.right, plan.segments - 1);
+      const columns = faceColumns(set, plan.segments);
+      const face = paintFace(columns, plan, floorSet.font, inkFor(color), plan.logoWidth > 0 ? logo : null, color);
+      if (face) {
+        const texture = pixelTexture(face.pixels);
+        signTextures.push(texture);
+        const sprite = new Sprite(texture);
+        sprite.position.set(anchor.x + face.left, anchor.y + face.top);
+        group.addChild(sprite);
+      }
+      signLayer.addChild(group);
+      const first = columns[0];
+      const last = columns[columns.length - 1];
+      if (first && last) signBoxes.push({ room: index, x0: anchor.x + first.x - 4, x1: anchor.x + last.x + 4, top: anchor.y + first.top - 6, h: first.h + 12 });
+    });
   }
 
   // ---- Characters ----
@@ -482,15 +689,36 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       g.poly([a[0], a[1] - 1, b[0], b[1] - 1, b[0], b[1], a[0], a[1]]).fill(shade(spine, 0.72));
     }
   };
+  /** Sheets of paper in a tray on top of a filing cabinet whose top centre is at `top`: whole art pixels, an outline a pixel wider. */
+  const drawPapers = (top: Point, count: number) => {
+    const x = Math.round(top.x);
+    for (let i = 0; i < count; i += 1) {
+      const y = Math.round(top.y) - 58 - i * 2;
+      effects.poly([x - 10, y, x, y - 5, x + 10, y, x, y + 5]).fill(theme.woodEdge);
+      effects.poly([x - 8, y, x, y - 4, x + 8, y, x, y + 4]).fill(theme.paper);
+    }
+  };
+  /** The screen box of a footprint of cells (art pixels), with `rise` pixels above it for what stands on it. */
+  const footprintBox = (cell: [number, number], cells: [number, number], rise: number) => {
+    const a = screenOf(cell[0] * CELL, cell[1] * CELL);
+    const b = screenOf((cell[0] + cells[0]) * CELL, (cell[1] + cells[1]) * CELL);
+    const c = screenOf(cell[0] * CELL, (cell[1] + cells[1]) * CELL);
+    const d = screenOf((cell[0] + cells[0]) * CELL, cell[1] * CELL);
+    return { x0: c.x - 4, x1: d.x + 4, y0: a.y - rise, y1: b.y + 4 };
+  };
   /** Screen boxes of the users' desks of the single floor, last frame (art pixels), for the pointer. */
   let ownerBoxes: { room: string; x0: number; y0: number; x1: number; y1: number }[] = [];
+  /** Screen boxes of the user's desk and tray of a lobby (the floor of one room), last frame: they open the desk. */
+  let userBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
   /** The pile of each user's desk: sorted with its desk (drawn right after it), redrawn when its count changes. */
   const piles = new Map<string, { node: Graphics; count: number }>();
+  /** The pile on the desk of the user's own office (single floor). */
+  let officePile: { node: Graphics; count: number } | null = null;
 
   let lastOrderKey = "";
   let drawnLayout: RoomLayout | null = null;
   /** A room to show, asked for before the floor was built. */
-  let pendingFocus: string | null = null;
+  let pendingFocus: { room: string; animate: boolean } | null = null;
   let frames = 0;
   let destroyed = false;
   let bumpAt = Number.NEGATIVE_INFINITY;
@@ -502,10 +730,14 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
    * the names of neighbours overlap less.
    */
   const px = (css: number) => (css * Math.min(1, Math.max(0.8, 0.7 + 0.3 * scale()))) / scale();
+  const inBox = (p: Point, box: { x0: number; y0: number; x1: number; y1: number }) => p.x >= box.x0 && p.x <= box.x1 && p.y >= box.y0 && p.y <= box.y1;
 
   const renderer: RoomRenderer = {
     get frames() {
       return frames;
+    },
+    get overview() {
+      return !adjusted;
     },
     setSprites(urls, strides = {}) {
       wanted = urls;
@@ -516,10 +748,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       theme = next;
       // The piles are drawn in the theme's colours: draw them again.
       for (const pile of piles.values()) pile.count = -1;
+      if (officePile) officePile.count = -1;
     },
     resize(cssWidth, cssHeight) {
       cssSize = { width: Math.max(1, cssWidth), height: Math.max(1, cssHeight) };
-      app.renderer.resize(Math.round(cssSize.width), Math.round(cssSize.height));
+      app.renderer.resize(cssSize.width, cssSize.height);
       if (!adjusted) fitView();
       else clampCenter();
       applyView();
@@ -528,17 +761,17 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       if (next === resolution) return;
       resolution = next;
       app.renderer.resolution = next;
-      app.renderer.resize(Math.round(cssSize.width), Math.round(cssSize.height));
+      app.renderer.resize(cssSize.width, cssSize.height);
       if (!adjusted) fitView();
       applyView();
     },
     zoomBy(step, around) {
-      // Whole steps, and the overview step under one on the single floor.
-      const next = step > 0 ? Math.min(MAX_ZOOM, zoom < 1 ? 1 : zoom + step) : zoom > 1 ? Math.max(1, zoom + step) : minZoom();
+      // Whole steps only, from one device pixel per art pixel to MAX_ZOOM.
+      flight = null;
+      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + Math.sign(step)));
       if (next === zoom) return;
       const anchor = around ?? { x: cssSize.width / 2, y: cssSize.height / 2 };
-      const at = offset();
-      const art = { x: (anchor.x - at.x) / scale(), y: (anchor.y - at.y) / scale() };
+      const art = artOf(anchor.x, anchor.y);
       zoom = next;
       center = { x: art.x - (anchor.x - cssSize.width / 2) / scale(), y: art.y - (anchor.y - cssSize.height / 2) / scale() };
       adjusted = true;
@@ -546,51 +779,64 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       applyView();
     },
     panBy(dx, dy) {
+      flight = null;
       center = { x: center.x - dx / scale(), y: center.y - dy / scale() };
       adjusted = true;
       clampCenter();
       applyView();
     },
-    fit() {
+    fit(animate = false) {
+      const view = overviewView();
+      if (!view) return;
+      goTo(view, animate);
       adjusted = false;
-      fitView();
-      applyView();
     },
     canZoom(step) {
-      return step > 0 ? zoom < MAX_ZOOM : zoom > minZoom();
+      return step > 0 ? zoom < MAX_ZOOM : zoom > MIN_ZOOM;
     },
     ownerDeskAt(x, y) {
-      const at = offset();
-      const art = { x: (x - at.x) / scale(), y: (y - at.y) / scale() };
-      return ownerBoxes.find((box) => art.x >= box.x0 && art.x <= box.x1 && art.y >= box.y0 && art.y <= box.y1)?.room ?? null;
+      const art = artOf(x, y);
+      return ownerBoxes.find((box) => inBox(art, box))?.room ?? null;
     },
-    focusRoom(name) {
+    roomAt(x, y) {
+      if (!layout) return null;
+      const art = artOf(x, y);
+      // A signboard first (it stands above the floor), then the room whose floor, walls or furniture are there:
+      // the ground under the point at rising heights, the first inside a room.
+      const board = signBoxes.find((box) => art.x >= box.x0 && art.x <= box.x1 && art.y >= box.top + (art.x - box.x0) / 2 && art.y <= box.top + (art.x - box.x0) / 2 + box.h);
+      if (board) return board.room;
+      const rooms = layout.rooms;
+      for (let z = 0; z <= WALL_HEIGHT; z += 4) {
+        const vx = (art.x / 2 + art.y + 2 * z) / 2;
+        const vy = (art.y + 2 * z - art.x / 2) / 2;
+        const index = rooms.findIndex(
+          (room) => vx >= room.x * CELL - 4 && vx < (room.x + room.w) * CELL + 4 && vy >= room.y * CELL - 4 && vy < (room.y + room.d) * CELL + 4,
+        );
+        if (index >= 0) return index;
+      }
+      return null;
+    },
+    officeAt(x, y) {
+      const art = artOf(x, y);
+      if (userBoxes.some((box) => inBox(art, box))) return true;
+      if (!layout?.office) return false;
+      return renderer.roomAt(x, y) === layout.office.room;
+    },
+    focusRoom(name, animate = false) {
       if (!layout) {
         // Asked before the first drawing: done once the floor is built.
-        pendingFocus = name;
+        pendingFocus = { room: name, animate };
         return;
       }
       pendingFocus = null;
-      const room = layout.rooms.find((candidate) => candidate.project === name);
-      if (!room) return;
-      const corners = [
-        screenOf(room.x * CELL, room.y * CELL),
-        screenOf((room.x + room.w) * CELL, room.y * CELL),
-        screenOf(room.x * CELL, (room.y + room.d) * CELL),
-        screenOf((room.x + room.w) * CELL, (room.y + room.d) * CELL),
-      ];
-      const minX = Math.min(...corners.map((p) => p.x));
-      const maxX = Math.max(...corners.map((p) => p.x));
-      // The back walls rise above the room; its name sign and the heads of its agents too.
-      const minY = Math.min(...corners.map((p) => p.y)) - 2 * 64;
-      const maxY = Math.max(...corners.map((p) => p.y)) + 8;
-      const device = { w: cssSize.width * resolution, h: cssSize.height * resolution };
-      const fits = Math.floor(Math.min(device.w / (maxX - minX + 4 * MARGIN), device.h / (maxY - minY + 4 * MARGIN)));
-      zoom = Math.max(1, Math.min(MAX_ZOOM - 2, Math.max(zoom, fits)));
-      center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+      const index = layout.rooms.findIndex((candidate) => candidate.project === name);
+      if (index >= 0) renderer.focusIndex(index, animate);
+    },
+    focusIndex(index, animate = false) {
+      const view = roomView(index);
+      if (!view) return;
       adjusted = true;
-      clampCenter();
-      applyView();
+      goTo(view, animate);
     },
     agentAt(view, x, y) {
       const at = offset();
@@ -613,6 +859,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     draw(scene, at) {
       if (destroyed) return;
       const { view, reduced } = scene;
+      stepFlight(at);
       const key = `${scene.color ?? ""}`;
       if (view.layout !== drawnLayout || key !== staticKey) {
         layout = view.layout;
@@ -622,9 +869,10 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         if (!adjusted) fitView();
         clampCenter();
         applyView();
-        if (pendingFocus !== null) renderer.focusRoom(pendingFocus);
+        if (pendingFocus !== null) renderer.focusRoom(pendingFocus.room, pendingFocus.animate);
       }
       const current = view.layout;
+      buildSigns(current, scene);
       marks.clear();
       effects.clear();
 
@@ -671,12 +919,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
           if (agent.alpha > 0.05) marks.ellipse(node.feet.x, node.feet.y, 11, 5).fill({ color: theme.ink, alpha: 0.18 * agent.alpha });
         }
         if (scene.selected === agent.key) {
-          marks.ellipse(node.feet.x, node.feet.y, 18, 9).stroke({ width: 2 / scale(), color: theme.accent, alignment: 0.5 });
+          marks.ellipse(node.feet.x, node.feet.y, 18, 9).stroke({ width: 2, color: theme.accent, alignment: 0.5 });
         }
 
         // The name over the head, and what the agent is doing over the name.
-        // Under one device pixel per art pixel (the overview of the single floor) the floor is a map: no name over the heads.
-        if (agent.alpha > 0.5 && zoom >= 1) {
+        if (agent.alpha > 0.5) {
           const top = node.feet.y - node.height - 3;
           labels.place(`name:${agent.key}`, {
             text: agent.name,
@@ -721,6 +968,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       }
 
       // The user's desk and the tray of the lobby, with its count (the floor of one room).
+      userBoxes = [];
       if (current.user) {
         const deskPiece = current.pieces[current.user.desk]!;
         const deskTop = screenOf((deskPiece.cell[0] + 1) * CELL, deskPiece.cell[1] * CELL + 8);
@@ -728,10 +976,12 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         const trayPiece = current.pieces[current.user.tray]!;
         const trayTop = screenOf((trayPiece.cell[0] + 0.5) * CELL, (trayPiece.cell[1] + 0.5) * CELL);
         const papers = Math.min(view.pending, 6);
-        for (let i = 0; i < papers; i += 1) {
-          const y = trayTop.y - 58 - i * 2;
-          effects.poly([trayTop.x - 9, y, trayTop.x, y - 4, trayTop.x + 9, y, trayTop.x, y + 4]).fill(theme.paper).stroke({ width: 1 / scale(), color: theme.woodEdge });
-        }
+        drawPapers(trayTop, papers);
+        const deskTurn = turnOf(floorSet, deskPiece.name, deskPiece.turn);
+        userBoxes = [
+          footprintBox(deskPiece.cell, deskTurn.cells, 70),
+          footprintBox(trayPiece.cell, [1, 1], 80),
+        ];
         if (lastPending >= 0 && view.pending > lastPending) bumpAt = at;
         lastPending = view.pending;
         const bump = reduced ? 0 : Math.max(0, 1 - (at - bumpAt) / BUMP_MS);
@@ -749,7 +999,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         });
       }
 
-      // The single floor: the user's desk of each room, its pile and its count; the name of each room at its door.
+      // The single floor: the user's desk of each room, its pile and its count.
       ownerBoxes = [];
       for (const owner of current.owners) {
         const count = view.pendingByRoom[owner.room] ?? 0;
@@ -783,25 +1033,32 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
           });
         }
       }
-      if (current.template === "rooms" && scene.labels.roomSign) {
-        for (const room of current.rooms) {
-          if (room.project === null || room.project === RECEPTION_ROOM) continue;
-          const door = room.open.y[0] !== undefined ? { x: room.x + room.open.y[0] + 0.5, y: room.y + room.d } : room.open.x[0] !== undefined ? { x: room.x + room.w, y: room.y + room.open.x[0] + 0.5 } : null;
-          if (!door) continue;
-          const at = screenOf(door.x * CELL, door.y * CELL, 30);
-          labels.place(`sign:${room.x},${room.y}`, {
-            text: scene.labels.roomSign(room.project),
-            x: at.x,
-            y: at.y,
-            size: px(12),
+      // The user's own office: the pile of every item waiting for a decision on its desk, letters in its tray.
+      const office = current.office;
+      if (office) {
+        const desk = current.pieces[office.desk]!;
+        const spot = { x: (desk.cell[0] + 1 + 0.55) * CELL, y: (desk.cell[1] + 0.5) * CELL };
+        if (officePile && officePile.count !== view.pending) {
+          officePile.node.clear();
+          drawPile(officePile.node, spot, Math.min(PILE_MAX, view.pending), theme.accent);
+          officePile.count = view.pending;
+        }
+        if (view.pending > 0) {
+          const top = screenOf(spot.x, spot.y, 25 + Math.min(PILE_MAX, view.pending) * 2);
+          labels.place("office", {
+            text: view.pending > 99 ? "99+" : String(view.pending),
+            x: top.x,
+            y: top.y - 6,
+            size: px(13),
             weight: 700,
-            display: true,
-            box: "plate",
-            color: room.color,
+            box: "count",
+            tone: "onDanger",
             ax: 0.5,
             ay: 1,
           });
         }
+        const tray = current.pieces[office.tray]!;
+        drawPapers(screenOf((tray.cell[0] + 0.5) * CELL, (tray.cell[1] + 0.5) * CELL), Math.min(scene.officeTray ?? 0, 6));
       }
 
       // Coffee steam over the coffee corner, unless motion is reduced.
@@ -821,12 +1078,14 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       frames += 1;
     },
     busy(at, reduced) {
+      if (flight) return true;
       if (reduced) return false;
       return at - bumpAt < BUMP_MS;
     },
     destroy() {
       destroyed = true;
       app.destroy({ removeView: false }, { children: true });
+      for (const texture of signTextures) texture.destroy(true);
     },
   };
   return renderer;

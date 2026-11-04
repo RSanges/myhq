@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { World, material, render } from "./engine.mjs";
 import { Img, bbox, blit, colour, contactSheet, crop, fromRender, pack, pastel, tintOnto, upscale, writePng } from "./image.mjs";
 import * as F from "./furniture.mjs";
+import { signFont } from "./font.mjs";
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public", "iso", "floor");
 export const SUN = [0, 0.55, 1];
@@ -150,9 +151,85 @@ export function buildFloor() {
     json.furniture[piece.name] = entry;
   }
 
+  // Signboards: one long board, sliced into a left end, a middle period and a right end.
+  const sign = buildSign();
+  json.sign = sign.json;
+  json.font = signFont();
+  previews.push({ name: "sign", p: sign.preview });
+
   const atlas = pack(frames, 1024);
   json.atlas = { file: "floor.png", w: atlas.img.w, h: atlas.img.h, frames: atlas.rects.map((r) => [r.x, r.y, r.w, r.h]) };
   return { json, atlas, previews };
+}
+
+/** Middle segments of the long board the sign slices are cut from. */
+const SIGN_RENDER = 3;
+
+/** The columns [x0, x1) of a placed layer (anchor relative), trimmed, moved by (-sx, -sy); null when empty. */
+function columns(placed, x0, x1, [sx, sy] = [0, 0]) {
+  if (!placed) return null;
+  const i0 = Math.max(0, x0 - placed.dx), i1 = Math.min(placed.img.w, x1 - placed.dx);
+  if (i1 <= i0) return null;
+  const strip = crop(placed.img, { x: i0, y: 0, w: i1 - i0, h: placed.img.h });
+  const box = bbox(strip);
+  if (!box) return null;
+  return { img: crop(strip, box), dx: placed.dx + i0 + box.x - sx, dy: placed.dy + box.y - sy };
+}
+
+/**
+ * The signboard parts (see furniture.mjs signBoard). The anchor is the screen
+ * pixel of the board's back left corner on the floor, under the front face
+ * (model point (0, 0, 0)). Drawing a board of n >= 1 middle segments: the
+ * left part at the anchor, then n - 1 middle periods, the k-th one shifted by
+ * k times `period`, then the right part shifted by n - 1 periods. `face` gives,
+ * for each pixel column of a part from its column `x`, the top row and the
+ * height of the face (where the name goes), or null outside the face.
+ */
+function buildSign() {
+  const { end: E, segment: S } = F.SIGN;
+  const period = [2 * S, S];
+  const art = renderPiece({ build: (b) => F.signBoard(b, { segments: SIGN_RENDER }), outline: "all" });
+  const probe = renderPiece({ build: (b) => F.signBoard(b, { segments: SIGN_RENDER, probe: true }), outline: "all" });
+  const faceColour = colour("blue2");
+  // The first column whose pixels all come from middle voxels (the top face lags the front by its depth).
+  const c0 = 2 * (E + F.SIGN.depth);
+  const last = (SIGN_RENDER - 1) * period[0];
+  const shift = [(SIGN_RENDER - 1) * period[0], (SIGN_RENDER - 1) * period[1]];
+  const minX = art.sprite.dx - 2, maxX = art.sprite.dx + art.sprite.img.w + 2;
+  const faceOf = (x0, x1, [sx, sy]) => {
+    const cols = [];
+    const img = probe.sprite.img;
+    for (let x = x0; x < x1; x++) {
+      const i = x - probe.sprite.dx;
+      let top = -1, h = 0;
+      for (let j = 0; i >= 0 && i < img.w && j < img.h; j++) {
+        const [r, g, b, a] = img.get(i, j);
+        if (a && r === faceColour[0] && g === faceColour[1] && b === faceColour[2]) {
+          if (top < 0) top = j;
+          h += 1;
+        }
+      }
+      cols.push(top < 0 ? null : [probe.sprite.dy + top - sy, h]);
+    }
+    return { x: x0 - sx, cols };
+  };
+  const part = (x0, x1, move) => {
+    const sprite = columns(art.sprite, x0, x1, move);
+    const masks = Object.fromEntries(Object.entries(art.masks).map(([key, m]) => [key, columns(m, x0, x1, move)]));
+    return { sprite: addFrame(sprite), masks: maskList(masks), face: faceOf(x0, x1, move) };
+  };
+  const json = {
+    end: E,
+    segment: S,
+    post: F.SIGN.post,
+    bottom: F.SIGN_BOTTOM,
+    top: F.SIGN_TOP,
+    period,
+    left: part(minX, c0, [0, 0]),
+    middle: part(c0, c0 + period[0], [0, 0]),
+    right: part(c0 + last, maxX, shift),
+  };
+  return { json, preview: art };
 }
 
 /** Composes a piece at its anchor the runtime way (shadow, sprite, tints). */

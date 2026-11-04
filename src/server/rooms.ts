@@ -113,6 +113,12 @@ export const roomFileSchema = z.strictObject({
   color: roomColorSchema.optional(),
   /** A shared studio: every room of the home may order from it (hq_message with `room`), and it delivers with hq_submit `forRoom`. */
   shared: z.boolean().optional(),
+  /** The logo of its project, relative to the room directory (.png, .webp or .svg): drawn on its signboard on the floor. */
+  logo: z
+    .string()
+    .min(1)
+    .refine((value) => [".png", ".webp", ".svg"].includes(path.extname(value).toLowerCase()), "must be a .png, .webp or .svg file")
+    .optional(),
   targetRepo: z.string().min(1),
   agents: z.array(agentSchema).min(1),
 });
@@ -172,6 +178,8 @@ export type Room = {
   color: string | null;
   /** A shared studio that every room may order from. */
   shared: boolean;
+  /** Absolute path of the logo of its project, always inside the room directory, or null. */
+  logo?: string | null;
   agents: Agent[];
 };
 
@@ -291,12 +299,16 @@ export function loadRoom(home: string, roomDir: string): Room {
     };
   });
 
+  const logo = room.logo ? path.resolve(roomDir, room.logo) : null;
+  if (logo && !isInside(roomDir, logo)) throw new Error(`${file}: logo must stay inside the room directory`);
+
   return {
     name: room.name,
     dir: roomDir,
     targetRepo,
     color: room.color ?? null,
     shared: room.shared ?? false,
+    logo,
     agents,
   };
 }

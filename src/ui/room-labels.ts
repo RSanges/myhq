@@ -1,6 +1,7 @@
 // The text of the floor: HTML elements over the canvas, placed from the same
 // world coordinates and the same scale as the drawing, in the page's fonts and
-// colors. Text is never drawn in the canvas: it stays sharp at any zoom and
+// colors. No font is drawn in the canvas (the names on the signboards are pixel
+// art of the floor set): text stays sharp at any zoom and
 // device pixel ratio, in both themes, and follows the page's font loading.
 // The layer is imperative (the loop moves labels on every frame without a
 // React render) and decorative (aria-hidden, no pointer events): the list of
@@ -17,13 +18,11 @@ export type LabelSpec = {
   size: number;
   tone?: Tone;
   weight?: 400 | 600 | 700;
-  /** The display face of the wall (figures, titles) instead of the body face. */
-  display?: boolean;
   /** Which point of the label sits at (x, y): 0 left or top, 0.5 center, 1 right or bottom. Default: centered. */
   ax?: number;
   ay?: number;
-  /** A box around the text, drawn in CSS: a name plate, a name tag over a head, a bubble, a round badge, a count pill. */
-  box?: "plate" | "tag" | "bubble" | "badge" | "count";
+  /** A box around the text, drawn in CSS: a name tag over a head, a bubble, a round badge, a count pill. */
+  box?: "tag" | "bubble" | "badge" | "count";
   /** A colour (normalized hex) for the box: a thin line under a name plate or tag. Null or left out: none. */
   color?: string | null;
   /** Wrap at this width (world units), for a bubble. */
@@ -92,14 +91,12 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
       if (element.hidden) element.hidden = false;
       const fontSize = Math.round(spec.size * scale * 100) / 100;
       const maxWidth = spec.maxWidth ? Math.round(spec.maxWidth * scale) : 0;
-      const data = `${spec.tone ?? "ink"}|${spec.weight ?? 600}|${spec.display ? 1 : 0}|${spec.box ?? ""}|${spec.color ?? ""}`;
+      const data = `${spec.tone ?? "ink"}|${spec.weight ?? 600}|${spec.box ?? ""}|${spec.color ?? ""}`;
       let measure = false;
       if (entry.data !== data) {
         entry.data = data;
         element.dataset.tone = spec.tone ?? "ink";
         element.style.fontWeight = String(spec.weight ?? 600);
-        if (spec.display) element.dataset.display = "";
-        else delete element.dataset.display;
         if (spec.box) element.dataset.box = spec.box;
         else delete element.dataset.box;
         if (spec.color) {

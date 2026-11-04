@@ -205,7 +205,7 @@ test("routes walk the aisles and lanes only: axis-aligned, through openings, aro
 });
 
 /** Furniture tall enough to stand in front of a window: it never does. */
-const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
+const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner", "floor-lamp", "wall-calendar"]);
 
 /**
  * The cells of a room's walls with what lies beyond each: the back walls (-y,
@@ -410,9 +410,10 @@ test("the single floor: separate suites around a spine and its ribs, packed, the
       assert.ok(new Set(layout.rooms.map((room) => room.x)).size >= 2, `${label}: more than one column`);
       assert.ok(new Set(layout.rooms.map((room) => room.y)).size >= 2, `${label}: more than one row`);
     }
-    // Packed: rooms and corridors take most of the floor's box, the garden (the shadow strips between the rows)
-    // fills only the rest: about 60 % for a usual home, under 50 % only for a home of one or two rooms.
-    assert.ok(usedShare(layout) >= 0.4, `${label}: ${Math.round(usedShare(layout) * 100)} % of the box used`);
+    // Packed: rooms and corridors take most of the floor's box, the garden (the shadow strips between the rows,
+    // four cells deep for the signboards) fills only the rest: about 55 % for a usual home, under 45 % only for a
+    // home of one or two rooms.
+    assert.ok(usedShare(layout) >= 0.35, `${label}: ${Math.round(usedShare(layout) * 100)} % of the box used`);
     const taken = new Set([...layout.hall].map(([cx, cy]) => `${cx},${cy}`));
     for (const [cx, cy] of layout.garden) {
       assert.ok(!taken.has(`${cx},${cy}`), `${label}: the garden is not on the hall`);

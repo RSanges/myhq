@@ -14,14 +14,17 @@ import { assembleLayout, boundsOf, type BuildRoom, type RoomLayout } from "./roo
 // off the spine to the left. Every row of suites, right-aligned on the spine,
 // stands on a rib and opens downwards (+y) onto it: the front row on the main
 // corridor, with the lobby at its right end and the reception's room beside
-// it. Each suite is a cutaway room like the floors of one room: back walls at
-// full height on its -x and -y sides, with windows, a low rim in front.
+// it, and the user's own office between them. Each suite is a cutaway room
+// like the floors of one room: back walls at full height on its -x and -y
+// sides, with windows, a low rim in front, and a signboard on its back wall
+// along x.
 //
-// A back wall hides about four cells behind it. So a corridor always runs
-// along the front of the suites it serves and keeps four cells and a half from
-// any other back wall: between a rib and the back walls of the row in front
-// of it lies the shadow of those walls (three cells), and two suites side by
-// side keep four cells between them. No block hides another, no corridor runs behind a wall, and what is
+// A back wall hides about four cells behind it, its signboard five. So a
+// corridor always runs along the front of the suites it serves and keeps five
+// cells and a half from any other back wall: between a rib and the back walls
+// of the row in front of it lies the shadow of those walls and their signs
+// (four cells), and two suites side by side keep four cells between them (a
+// sign hides nothing beside its room). No block hides another, no corridor runs behind a wall, and what is
 // left between the blocks, under the walls' shadow, is a garden; on screen it
 // is mostly covered by the walls themselves. The arrangement chosen is the
 // most compact one (the screen spans x + y cells of the floor).
@@ -36,12 +39,14 @@ import { assembleLayout, boundsOf, type BuildRoom, type RoomLayout } from "./roo
 export const ROOM_DEPTH = 6;
 /** Width of a corridor. */
 export const CORRIDOR_WIDTH = 2;
-/** The shadow of a back wall: cells a corridor keeps clear of it, after its own two. */
-export const SHADOW = 3;
+/** The shadow of a back wall and its signboard: cells a corridor keeps clear of it, after its own two. */
+export const SHADOW = 4;
 /** From the front of a block to the back wall of the next one across a corridor. */
 export const GAP = CORRIDOR_WIDTH + SHADOW;
-/** Between two blocks side by side, with no corridor between them. */
-export const BESIDE = SHADOW + 1;
+/** Between two blocks side by side, with no corridor between them: the shadow of a side wall (it has no sign). */
+export const BESIDE = 4;
+/** The user's own office, a block beside the lobby: its length along the main corridor (its depth is a suite's). */
+export const OFFICE_LENGTH = 6;
 /** The lobby block, square. */
 export const LOBBY_SIZE = 8;
 /** Agents seated in one room at most; the others are listed under the floor without a desk. */
@@ -54,8 +59,8 @@ const RIB_STEP = ROOM_DEPTH + GAP;
 /** Where the lobby opens onto the main corridor, from its side wall. */
 const LOBBY_DOOR = 6;
 
-/** Furniture tall enough to hide a window (a window never stands behind one). */
-const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
+/** Furniture tall enough to hide a window, or hung on the wall (a window never stands behind one). */
+const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner", "floor-lamp", "wall-calendar"]);
 /** Furniture two cells long at turn 0; the rest is one cell (rugs are flat and never matter here). */
 const LONG = new Set(["bookshelf", "whiteboard", "coffee-corner", "sofa", "workstation"]);
 
@@ -257,14 +262,60 @@ function lobbyRoom(x: number, y: number): { spec: RoomSpec; owner: DeskSpec; cou
   };
 }
 
+/**
+ * The user's own office, OFFICE_LENGTH by ROOM_DEPTH, in the look of the
+ * desk's scene (the hub): a wooden floor, the desk against the back wall with
+ * its chair, the wall calendar beside it, the floor lamp, the filing cabinet
+ * of the tray, a bookshelf, a rug and plants. Nobody works there; a click
+ * opens the desk. It opens downwards (+y) onto the main corridor.
+ */
+function ownerOffice(x: number, y: number): BuildRoom {
+  const piece = (name: string, turn: 0 | 1, at: Cell): PieceSpec => ({ name, turn, at });
+  const door = OFFICE_LENGTH - 1;
+  const spec: RoomSpec = {
+    kind: "owner",
+    x,
+    y,
+    w: OFFICE_LENGTH,
+    d: ROOM_DEPTH,
+    floor: "wood",
+    back: {
+      y: ["plain", "plain", "window", "window", "plain", "plain"],
+      x: ["plain", "window", "plain", "plain", "window", "plain"],
+    },
+    open: { y: [door] },
+    pieces: [
+      piece("plant-tall", 0, [0, 0]),
+      piece("wall-calendar", 0, [1, 0]),
+      piece("floor-lamp", 0, [4, 0]),
+      piece("bookshelf", 1, [0, 2]),
+      piece("rug", 0, [1, 3]),
+      piece("plant-small", 0, [0, 5]),
+      piece("plant-small", 0, [4, 5]),
+    ],
+    aisles: [
+      [
+        [2, 2],
+        [door, 2],
+      ],
+      [
+        [door, 2],
+        [door, ROOM_DEPTH],
+      ],
+    ],
+  };
+  return { spec, project: null, color: null, keys: [], sign: true, office: { desk: { turn: 0, at: [2, 0], stand: [2, 2] }, tray: [door, 0] } };
+}
+
 type Arrangement = {
   /** Rows of rooms along the ribs, from the front (the main corridor, the lobby's row) back, each listed from the spine leftwards. */
   rows: FloorRoomInput[][];
 };
 
 const lengthOf = (room: FloorRoomInput): number => roomLength(room.keys.length);
+/** The front row starts with the lobby and the user's office beside it. */
 const rowWidth = (row: FloorRoomInput[], front: boolean): number =>
-  row.reduce((total, room) => total + lengthOf(room) + BESIDE, front ? LOBBY_SIZE : -BESIDE);
+  row.reduce((total, room) => total + lengthOf(room) + BESIDE, front ? LOBBY_SIZE + BESIDE + OFFICE_LENGTH : -BESIDE);
 
 /** The box of the floor (cells along x and y) for an arrangement. */
 function extentOf({ rows }: Arrangement): { x: number; y: number } {
@@ -324,11 +375,13 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
   const hall: CellRect[] = [];
   const suite = (room: FloorRoomInput, x: number, y: number): Cell => {
     const placed = placeSuite(suitePlan(room.keys.length), x, y);
-    built.push({ spec: placed.spec, project: room.name, color: room.color, keys: room.keys.slice(0, MAX_ROOM_AGENTS), owner: placed.owner });
+    built.push({ spec: placed.spec, project: room.name, color: room.color, keys: room.keys.slice(0, MAX_ROOM_AGENTS), owner: placed.owner, sign: true });
     return placed.door;
   };
 
   let back = main;
+  // The user's office: beside the lobby on the front row, listed after the suites (their order is the home's).
+  let office: BuildRoom | null = null;
   rows.forEach((row, index) => {
     // Rib 0 runs along the front; the next keeps clear of the lobby's back wall, the others of the suites'.
     const rib = index === 0 ? main : main - LOBBY_SIZE - GAP - (index - 1) * RIB_STEP;
@@ -336,9 +389,11 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
     let leftmost = spine;
     if (index === 0) {
       const lobby = lobbyRoom(spine - LOBBY_SIZE, rib - LOBBY_SIZE);
-      built.push({ spec: lobby.spec, project: RECEPTION_ROOM, color: null, keys: [], owner: lobby.owner, counter: lobby.counter });
+      built.push({ spec: lobby.spec, project: RECEPTION_ROOM, color: null, keys: [], owner: lobby.owner, counter: lobby.counter, sign: true });
       right = spine - LOBBY_SIZE - BESIDE;
-      leftmost = lobby.door[0];
+      office = ownerOffice(right - OFFICE_LENGTH, rib - ROOM_DEPTH);
+      right -= OFFICE_LENGTH + BESIDE;
+      leftmost = office.spec.x + (office.spec.open.y?.[0] ?? 0);
     }
     for (const room of row) {
       const x = right - lengthOf(room);
@@ -352,6 +407,8 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
     ]);
     back = Math.min(back, rib);
   });
+
+  if (office) built.push(office);
 
   // The spine climbs from the lobby's corner to the back-most rib.
   hall.push({ x: spine, y: back, w: CORRIDOR_WIDTH, d: main + CORRIDOR_WIDTH - back });

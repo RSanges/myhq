@@ -32,6 +32,8 @@ export type { Cell, CellRect, Direction, RoomKind, TileKind, WallKind };
 export const CELL = 16;
 /** Height of a back wall in voxels (floor.json `wall.height`). */
 export const WALL_HEIGHT = 64;
+/** The top of a signboard on a back wall, in voxels (floor.json `sign.top`, scripts/iso/furniture.mjs). */
+export const SIGN_TOP = 79;
 
 export type Point = { x: number; y: number };
 
@@ -59,6 +61,8 @@ export type PlacedRoom = {
   project: string | null;
   /** Its own colour on a single floor (a normalized hex); null: the colour of the floor shown, or neutral. */
   color: string | null;
+  /** A signboard stands on its back wall along x (single floor): it rises to SIGN_TOP. */
+  sign: boolean;
 };
 
 /** The user's own desk in a room of a single floor: empty, with the pile of what that room waits for. */
@@ -118,6 +122,12 @@ export type RoomLayout = {
   } | null;
   /** The user's desk of each room of a single floor; none on the floor of one room. */
   owners: OwnerDesk[];
+  /**
+   * The user's own office (the single floor): its room, its desk and chair,
+   * the filing cabinet of its tray, its lamp and calendar; null elsewhere
+   * (the floor of one room has the user's desk of its lobby, `user`).
+   */
+  office: { room: number; desk: number; chair: number; tray: number } | null;
   /** The whiteboard of the meeting room and the coffee corner (pieces), when the floor has them. */
   board: number | null;
   coffee: number | null;
@@ -266,6 +276,10 @@ export type BuildRoom = {
   owner?: DeskSpec;
   /** The reception counter of the lobby of a single floor, drawn with the receptionist on request. */
   counter?: { at: Cell; staff: Cell; stand: Cell; faces: Direction; turn: 0 | 1 };
+  /** The user's own office (single floor): its desk and the filing cabinet of its tray. */
+  office?: { desk: DeskSpec; tray: Cell };
+  /** A signboard on its back wall (single floor). */
+  sign?: boolean;
 };
 
 /** A floor to assemble: its rooms, the hall around them (cells) and the lanes of the hall (absolute cells). */
@@ -292,6 +306,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
   const offices: PendingOffice[] = [];
   const owners: Omit<OwnerDesk, "standNode">[] = [];
   const found: { reception: { counter: number; office: PendingOffice } | null; user: UserSpot | null } = { reception: null, user: null };
+  let office: RoomLayout["office"] = null;
   let board: number | null = null;
   let coffee: number | null = null;
 
@@ -346,6 +361,10 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
       owners.push({ room: build.project, roomIndex: index, desk: desk.chair - 1, chair: desk.chair, stand, faces: desk.faces });
     }
     if (build.counter && options.reception) placeCounter(spec, index, build.counter);
+    if (build.office) {
+      const desk = placeDesk(spec, index, build.office.desk);
+      office = { room: index, desk: desk.chair - 1, chair: desk.chair, tray: place(spec, index, "filing-cabinet", 0, build.office.tray) };
+    }
     if (spec.lobby) {
       const { user: own, tray, reception: counter, instead } = spec.lobby;
       const desk = placeDesk(spec, index, own);
@@ -375,6 +394,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
       vacant: (spec.desks?.length ?? 0) > 0 && seated === 0,
       project: build.project,
       color: build.color,
+      sign: build.sign ?? false,
     });
   });
 
@@ -407,6 +427,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
     reception: reception ? { counter: reception.counter, office: withNode(reception.office) } : null,
     user: user ? { ...user, standNode: node(user.stand) } : null,
     owners: owners.map((owner) => ({ ...owner, standNode: node(owner.stand) })),
+    office,
     board,
     coffee,
     bounds: boundsOf(rooms, hall),
@@ -448,9 +469,10 @@ export function boundsOf(rooms: PlacedRoom[], hall: Cell[]): RoomLayout["bounds"
     maxY = Math.max(maxY, p.y);
   };
   for (const room of rooms) {
-    // The back walls rise from the back edges (with their top); the rim adds a few pixels around the front.
-    take(room.x, room.y, 2 * WALL_HEIGHT + 12);
-    take(room.x + room.w, room.y, 2 * WALL_HEIGHT + 12);
+    // The back walls rise from the back edges (with their top), a signboard higher; the rim adds a few pixels around the front.
+    const top = 2 * (room.sign ? SIGN_TOP : WALL_HEIGHT) + 12;
+    take(room.x, room.y, top);
+    take(room.x + room.w, room.y, top);
     take(room.x, room.y + room.d, 2 * WALL_HEIGHT + 12);
     take(room.x + room.w, room.y + room.d, 0);
   }

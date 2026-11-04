@@ -11,6 +11,7 @@ import { selectAgents, selectHistory, selectPending, selectUnseen } from "./mode
 import { RECEPTION_ROOM } from "./reception";
 import type { Approval, DeskObject } from "./schemas";
 import { strings } from "./strings";
+import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote } from "./ui";
 import { useDeepLink } from "./use-deep-link";
 import { useDesk } from "./use-desk";
@@ -70,7 +71,7 @@ export function DeskModulePage({ id }: { id: string }) {
   if (object?.object === "phone" && coreSources(object).includes("chat")) {
     return (
       <div className="flex min-h-dvh flex-col">
-        <ChatPanel open onClose={() => router.push("/")} subscribe={hq.subscribeChat} agents={agents} narrow={!wide} page />
+        <ChatPanel open onClose={() => router.push("/bureau")} subscribe={hq.subscribeChat} agents={agents} narrow={!wide} page />
       </div>
     );
   }
@@ -79,17 +80,8 @@ export function DeskModulePage({ id }: { id: string }) {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
+        <SiteNav current="desk" />
         <div className="flex min-w-0 items-center gap-3">
-          <Link
-            href="/"
-            aria-label={t.backLabel}
-            className="inline-flex min-h-10 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-soft hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12"
-          >
-            <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M10 3L5 8l5 5" />
-            </svg>
-            {t.back}
-          </Link>
           <h1 className="min-w-0 truncate text-xl font-semibold">{object?.label ?? strings.app.title}</h1>
           {object && object.count > 0 && (
             <span className="rounded-full bg-accent-soft px-2 py-0.5 text-sm font-semibold text-accent">{object.count}</span>

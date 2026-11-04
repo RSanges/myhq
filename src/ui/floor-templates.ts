@@ -22,9 +22,9 @@
 export type Cell = [number, number];
 export type CellRect = { x: number; y: number; w: number; d: number };
 export type WallKind = "plain" | "window" | "door";
-export type TileKind = "carpet-room" | "tiles-room";
+export type TileKind = "carpet-room" | "tiles-room" | "wood";
 export type Direction = "NE" | "SE" | "SW" | "NW";
-export type RoomKind = "lobby" | "office" | "meeting" | "kitchen";
+export type RoomKind = "lobby" | "office" | "meeting" | "kitchen" | "owner";
 
 /** A piece of furniture of the floor set (`furniture` of floor.json), its turn and its first cell in the room. */
 export type PieceSpec = { name: string; turn: 0 | 1 | 2 | 3; at: Cell };

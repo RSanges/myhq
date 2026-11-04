@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo } from "react";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { Desk } from "./desk";
@@ -8,6 +7,7 @@ import { Feed } from "./feed";
 import { DeskHub } from "./hub";
 import { Meter } from "./meter";
 import { RoutineJournal } from "./routine-journal";
+import { SiteNav } from "./site-nav";
 import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
 import { strings } from "./strings";
 import { Team } from "./team";
@@ -29,7 +29,7 @@ export function Dashboard() {
   const agents = useMemo(() => selectAgents(model), [model]);
 
   useEffect(() => {
-    document.title = pendingTitle(strings.app.title, pending.length, unseen.length);
+    document.title = pendingTitle(strings.desk.pageTitle, pending.length, unseen.length);
   }, [pending.length, unseen.length]);
 
   const connectionTone =
@@ -42,24 +42,7 @@ export function Dashboard() {
       <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <h1 className="text-xl font-semibold">{strings.app.title}</h1>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link
-            href="/room"
-            className="text-sm whitespace-nowrap text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            {strings.app.roomLink}
-          </Link>
-          <Link
-            href="/roadmap"
-            className="text-sm whitespace-nowrap text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            {strings.app.roadmapLink}
-          </Link>
-          <Link
-            href="/reglages"
-            className="text-sm whitespace-nowrap text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            {strings.app.settingsLink}
-          </Link>
+          <SiteNav current="desk" />
           <p role="status" className="flex items-center gap-2 text-sm text-muted">
             <span aria-hidden className={`inline-block size-2 rounded-full ${connectionTone}`} />
             {strings.app.connection[connection]}

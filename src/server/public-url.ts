@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { MESSAGE_LIMIT } from "../assistant/text";
-import { approvalHash, runHash } from "../ui/deep-link";
+import { approvalHash, DESK_PATH, runHash } from "../ui/deep-link";
 import { strings } from "../ui/strings";
 import type { Env } from "./config";
 
@@ -22,22 +22,22 @@ export function publicUrl(env: Env = process.env): string | null {
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
-/** « Ouvrir : <url>/#approval-<id> », or null without HQ_PUBLIC_URL. */
+/** « Ouvrir : <url>/bureau#approval-<id> » (the item on the desk page), or null without HQ_PUBLIC_URL. */
 export function approvalLinkLine(id: number, env: Env = process.env): string | null {
   const base = publicUrl(env);
-  return base ? strings.notify.open(`${base}/${approvalHash(id)}`) : null;
+  return base ? strings.notify.open(`${base}${DESK_PATH}${approvalHash(id)}`) : null;
 }
 
-/** « Ouvrir : <url>/#run-<id> », or null without HQ_PUBLIC_URL. */
+/** « Ouvrir : <url>/bureau#run-<id> », or null without HQ_PUBLIC_URL. */
 export function runLinkLine(id: number, env: Env = process.env): string | null {
   const base = publicUrl(env);
-  return base ? strings.notify.open(`${base}/${runHash(id)}`) : null;
+  return base ? strings.notify.open(`${base}${DESK_PATH}${runHash(id)}`) : null;
 }
 
-/** « Bureau : <url> », or null without HQ_PUBLIC_URL. */
+/** « Bureau : <url>/bureau » (the desk page), or null without HQ_PUBLIC_URL. */
 export function deskLinkLine(env: Env = process.env): string | null {
   const base = publicUrl(env);
-  return base ? strings.notify.desk(base) : null;
+  return base ? strings.notify.desk(`${base}${DESK_PATH}`) : null;
 }
 
 /** `text` followed by a line (a blank line between), or `text` itself when there is no line. */

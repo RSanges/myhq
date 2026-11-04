@@ -1,4 +1,4 @@
-// How /room draws the home (myhq.json `floor.layout`, docs/home-layout.md):
+// How the floor (the home page) draws the home (myhq.json `floor.layout`, docs/home-layout.md):
 // one floor per room of the home, chosen with the buttons at the top (each a
 // hand-designed template, room-layout.ts), or a single floor where each room
 // of the home is one room of the floor (floor-plan.ts). Pure: shared by the
@@ -15,5 +15,5 @@ export const DEFAULT_FLOOR_LAYOUT: FloorLayoutMode = "floor-per-project";
  */
 export function pileHref(objects: readonly { id: string; source: string }[] | null, room: string): string {
   const pile = objects?.find((object) => object.source.split("+").includes("approvals"));
-  return pile ? `/bureau/${pile.id}?room=${encodeURIComponent(room)}` : "/";
+  return pile ? `/bureau/${pile.id}?room=${encodeURIComponent(room)}` : "/bureau";
 }

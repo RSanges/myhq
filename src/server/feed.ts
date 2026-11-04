@@ -18,6 +18,7 @@ import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routine
 import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
+import { logoUrl } from "./logos";
 import type { FloorLayoutMode } from "../ui/floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
@@ -220,6 +221,8 @@ export type StateDto = {
     targetRepo: string;
     /** Hex colour of the room (room.json), or null for the neutral look. */
     color: string | null;
+    /** URL of the logo of its project (room.json `logo`), or null. */
+    logo: string | null;
     agents: {
       id: string;
       name: string;
@@ -250,7 +253,7 @@ export type StateDto = {
    * sets one, and its latest runs, newest first.
    */
   reception: { room: string | null; sprite: string | null; runs: RunDto[] };
-  /** How /room draws the home (myhq.json `floor.layout`): a floor per room, or one floor with a room per project. */
+  /** How the floor draws the home (myhq.json `floor.layout`): a floor per room, or one floor with a room per project. */
   floor: { layout: FloorLayoutMode };
   scheduler: SchedulerInfo;
   firings: FiringDto[];
@@ -303,6 +306,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
       name: room.name,
       targetRepo: toPosix(path.relative(home.root, room.targetRepo)),
       color: room.color,
+      logo: logoUrl(room),
       agents: room.agents.map((agent) => {
         const row = lastRun.get(room.name, agent.id) as RunRow | undefined;
         const state: AgentState =

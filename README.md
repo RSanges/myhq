@@ -12,9 +12,11 @@ approval buttons, conversation, voice notes, files, extensions from the home),
 and the third slice on the MyHQ side: routines with an armed state and a
 journal, generic role templates, `npm run init`, onboarding a project through
 the approval queue, and a daily export. The fourth slice adds the animated
-floor (`/room`): a small agency in isometric pixel art, with its lobby, offices,
-meeting room and kitchen, where agents type,
-think, walk to a colleague's desk or to your tray as their runs happen.
+floor, the home page (`/`): a small agency in isometric pixel art, with its
+lobby, your own office, offices, meeting room and kitchen, where agents type,
+think, walk to a colleague's desk or to your tray as their runs happen. Your
+desk (the items to decide, the team, the feed) is a click on your office away,
+at `/bureau`.
 
 ## Concepts
 
@@ -87,7 +89,7 @@ have one reader: switch off any other program that reads the same bot first.
 ## Stack
 
 Next.js 16, TypeScript (strict), Tailwind, SQLite via `better-sqlite3`, zod, the
-official MCP SDK, and PixiJS for the room view (loaded on `/room` only). No ORM
+official MCP SDK, and PixiJS for the floor (loaded on `/` only). No ORM
 and no UI library. It must run unchanged on Windows,
 macOS and Linux, and it is meant to stay up as a service (pm2) on port 4242.
 
@@ -118,7 +120,7 @@ described in [docs/api.md](docs/api.md). The raw output of each run is kept in
 
 ## Trying the room without a real run
 
-`/room` animates the agents from the real event stream. To see it move without
+The floor (`/`) animates the agents from the real event stream. To see it move without
 spending a run, `scripts/replay-fixture.ts` plays a recorded run (the files of
 `test/fixtures/*.jsonl`) into a **throwaway** home, one event per second, and
 a MyHQ pointed at that home streams it like a real one:
@@ -129,7 +131,7 @@ npx tsx scripts/replay-fixture.ts test/fixtures/stream-json-onboarding.jsonl
 
 # terminal 2: an app on another port, on that home, never on your real one
 MYHQ_HOME=<the folder the script printed> HQ_TELEGRAM_POLLING=false HQ_TELEGRAM_BOT_TOKEN= HQ_TELEGRAM_CHAT_ID= npm run dev -- -p 4343
-# then open http://127.0.0.1:4343/room before the wait is over
+# then open http://127.0.0.1:4343/ before the wait is over
 ```
 
 The onboarding fixture has reads and an `hq_submit` (the agent walks to your
@@ -212,9 +214,9 @@ the app over HTTPS on that network. Nothing is exposed to the Internet.
    HQ_PUBLIC_URL=https://<machine>.<tailnet>.ts.net
    ```
 
-   Every Telegram alert about an item then ends with « Ouvrir : <url>/#approval-<id> »,
-   a failed run links to `/#run-<id>`, and a brief or a summary ends with
-   « Bureau : <url> ». The link opens the desk on that item: the right tab, the
+   Every Telegram alert about an item then ends with « Ouvrir : <url>/bureau#approval-<id> »,
+   a failed run links to `/bureau#run-<id>`, and a brief or a summary ends with
+   « Bureau : <url>/bureau ». The link opens the desk on that item: the right tab, the
    body open, the item highlighted for a moment. Without `HQ_PUBLIC_URL`,
    alerts are unchanged.
 5. Open the address on the phone or the Mac (or follow a link of an alert).

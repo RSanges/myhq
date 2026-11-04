@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CELL, screenOf, type Cell, type Direction, type RoomLayout } from "./room-layout";
+import { CELL, screenOf, SIGN_TOP, type Cell, type Direction, type RoomLayout } from "./room-layout";
 
 // The isometric floor set (public/iso/floor/floor.json, see
 // scripts/iso/README.md) as the room view reads it, and the scene of a floor
@@ -31,6 +31,35 @@ const turnSchema = z.object({
 });
 export type Turn = z.infer<typeof turnSchema>;
 
+/** A part of a signboard: its sprite and masks, and for each of its pixel columns from `face.x` the face's top row and height (null outside it). */
+const signPartSchema = z.object({
+  sprite: refSchema,
+  masks: z.array(maskSchema),
+  face: z.object({ x: z.number().int(), cols: z.array(z.tuple([z.number().int(), z.number().int().positive()]).nullable()) }),
+});
+export type SignPart = z.infer<typeof signPartSchema>;
+
+const signSchema = z.object({
+  end: z.number().int().positive(),
+  segment: z.number().int().positive(),
+  post: z.number().int().nonnegative(),
+  bottom: z.number().int().positive(),
+  top: z.number().int().positive(),
+  period: z.tuple([z.number().int(), z.number().int()]),
+  left: signPartSchema,
+  middle: signPartSchema,
+  right: signPartSchema,
+});
+export type SignSet = z.infer<typeof signSchema>;
+
+/** The pixel font of the signboards: glyph rows of "#" (ink) and "." (`font` of floor.json). */
+const fontSchema = z.object({
+  height: z.number().int().positive(),
+  spacing: z.number().int().nonnegative(),
+  glyphs: z.record(z.string(), z.array(z.string())),
+});
+export type SignFont = z.infer<typeof fontSchema>;
+
 export const floorSetSchema = z.object({
   version: z.literal(1),
   cell: z.object({ voxels: z.literal(CELL), w: z.number(), h: z.number() }),
@@ -46,6 +75,8 @@ export const floorSetSchema = z.object({
     "rim-corner": z.object({ sprite: refSchema }),
   }),
   furniture: z.record(z.string(), z.object({ turns: z.record(z.string(), turnSchema) })),
+  sign: signSchema,
+  font: fontSchema,
 });
 export type FloorSet = z.infer<typeof floorSetSchema>;
 
@@ -205,7 +236,7 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
   if (set.tiles.grass) for (const cell of layout.garden) tile(cell, "grass", -1);
   layout.rooms.forEach((room, index) => {
     const colored = typeof tinted === "function" ? tinted(index) : tinted;
-    const kind = colored ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";
+    const kind = colored || room.floor === "wood" ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";
     for (let cx = room.x; cx < room.x + room.w; cx += 1) for (let cy = room.y; cy < room.y + room.d; cy += 1) tile([cx, cy], kind, index);
   });
   tiles.sort((a, b) => a.cell[0] + a.cell[1] - (b.cell[0] + b.cell[1]) || a.cell[0] - b.cell[0]);
@@ -272,7 +303,9 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
 /**
  * Whether a point of the floor (voxels) is hidden by a back wall of a room it
  * is not in: behind the wall's line and inside the wall's shape on the screen.
- * The floor plans are checked with it (no room and no lane behind a wall).
+ * A room with a signboard counts its back wall along x up to the top of the
+ * sign, along all its length. The floor plans are checked with it (no room
+ * and no lane behind a wall).
  */
 export function hiddenByWalls(layout: RoomLayout, x: number, y: number, height = 64): boolean {
   const p = screenOf(x, y);
@@ -286,7 +319,7 @@ export function hiddenByWalls(layout: RoomLayout, x: number, y: number, height =
     if (y < Y0 && room.back.y.length > 0) {
       const wx = p.x / 2 + Y0;
       const z = (wx + Y0 - p.y) / 2;
-      if (wx >= X0 && wx <= X1 && z >= 0 && z <= height) return true;
+      if (wx >= X0 && wx <= X1 && z >= 0 && z <= (room.sign ? Math.max(height, SIGN_TOP) : height)) return true;
     }
     // The wall along -x: ground points (X0, wy).
     if (x < X0 && room.back.x.length > 0) {

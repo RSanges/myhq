@@ -16,14 +16,20 @@ export const strings = {
       reconnecting: "Reconnexion...",
     },
     invalidRoomsTitle: "Salles invalides",
-    roadmapLink: "Feuille de route",
-    roomLink: "L'étage",
-    settingsLink: "Réglages",
     /** In the tab title, after the number of items to validate. */
     watchCount: (count: number) => `${count} à regarder`,
   },
+  /** The navigation between the pages, the same in the header of every page. */
+  nav: {
+    label: "Pages de MyHQ",
+    floor: "L'étage",
+    desk: "Le bureau",
+    roadmap: "Feuille de route",
+    settings: "Réglages",
+  },
   desk: {
     title: "Le bureau",
+    pageTitle: "Le bureau | MyHQ",
     tabsLabel: "Items du bureau",
     pendingTab: (count: number) => `À valider (${count})`,
     historyTab: "Historique",
@@ -132,7 +138,6 @@ export const strings = {
   settings: {
     pageTitle: "Réglages | MyHQ",
     title: "Réglages",
-    back: "Retour au bureau",
     loading: "Chargement...",
     loadFailed: "Impossible de charger les réglages.",
     retry: "Réessayer",
@@ -374,7 +379,6 @@ export const strings = {
   roadmap: {
     title: "Feuille de route",
     pageTitle: "Feuille de route | MyHQ",
-    back: "Retour au bureau",
     loading: "Chargement...",
     loadFailed: "Impossible de charger la feuille de route.",
     retry: "Réessayer",
@@ -458,13 +462,12 @@ export const strings = {
         "Les routines restent éteintes tant que HQ_SCHEDULER n'est pas à on dans .env.local.",
       ].join("\n"),
   },
-  /** The room view (/room): the animated office, its whiteboard and the sheet of an agent. */
+  /** The floor (/, the home page): the animated office, its whiteboard and the sheet of an agent. */
   room: {
     title: "L'étage",
     pageTitle: "L'étage | MyHQ",
     /** The floor of a project: the room name, first letter in capital. */
     floorTitle: (room: string) => `L'étage ${room.charAt(0).toUpperCase()}${room.slice(1)}`,
-    back: "Retour au bureau",
     roomsLabel: "Salles",
     noAgents: "Aucun agent dans cette salle. Ajoutez-en une depuis le bureau.",
     listTitle: "Les agents",
@@ -490,6 +493,7 @@ export const strings = {
       carrying: (name: string) => `${name} apporte un item à valider.`,
       stuck: (name: string) => `${name} est bloqué.`,
     },
+    /** The user's own desk on the floor (the tag over it, the signboard of the user's office): it opens the desk. */
     userDesk: "Votre bureau",
     /** The receptionist: the onboarding agent at the reception desk of the lobby. */
     reception: {

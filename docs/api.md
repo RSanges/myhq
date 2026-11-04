@@ -245,6 +245,7 @@ restart.
       "name": "demo",
       "targetRepo": "../demo-project",
       "color": null,
+      "logo": null,
       "agents": [
         {
           "id": "scout",
@@ -277,6 +278,7 @@ restart.
 ```
 
 - `role` and `targetRepo` are relative to the home.
+- `logo`: the URL of the logo of the room's project (`GET /api/rooms/[room]/logo`), or `null`.
 - `color`: the room's hex colour from `room.json`, or `null` (a neutral room).
 - `isoSprite`: `/api/sprites/<room>/<agent>?sheet=iso` when the agent declares
   an isometric character sheet (`isoSprite` in `room.json`) and the file
@@ -305,7 +307,7 @@ restart.
   for the repository <path>. »), newest first. The reserved room `_hq` is not
   in `rooms`; its runs, events and approvals still arrive on the stream like
   any other.
-- `floor.layout`: how `/room` draws the home, `floor.layout` of `myhq.json`:
+- `floor.layout`: how the floor (`/`) draws the home, `floor.layout` of `myhq.json`:
   `"floor-per-project"` (the default, also when the block is missing or
   invalid) or `"room-per-project"` (one floor for the whole home). An
   interface that does not know a value takes the default.
@@ -520,7 +522,7 @@ A failing command never fails the route: its object has `status: "error"`.
 
 ### `GET /api/sprites/[room]/[agent]`
 
-The character sheet of an agent for the floor (`/room`): a PNG or WebP image
+The character sheet of an agent for the floor (`/`): a PNG or WebP image
 (see `home-layout.md` for the format). With `?sheet=iso` the file is the one
 declared in the agent's `isoSprite` field of the validated `room.json` (the
 isometric sheet the floor draws); without it, its `sprite` field (the old
@@ -535,6 +537,22 @@ makes the browser revalidate, so a redrawn sheet shows up at the next load
 Errors: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `SPRITE_NOT_FOUND`
 (no sheet declared, file missing, too large or not an image). The floor
 treats any error, and a sheet of the wrong size, as "draw a neutral person".
+
+### `GET /api/rooms/[room]/logo`
+
+The logo of a room's project, drawn on the room's signboard on the floor: the
+file of the `logo` field of the validated `room.json` (never a path of the
+URL), inside the room's directory once symbolic links are resolved, at most
+1 MiB, really a PNG, a WebP or an SVG (`Content-Type` from its first bytes).
+An SVG is served with `Content-Security-Policy: default-src 'none';
+style-src 'unsafe-inline'; sandbox`, so nothing in it runs should it be opened
+alone. `ETag` and `Cache-Control: no-cache` as for the sheets; the state's
+`rooms[].logo` is this URL with `?v=` the modification time, or `null` without
+a logo (or when its file is missing).
+
+Errors: `ROOM_NOT_FOUND`, `LOGO_NOT_FOUND` (no logo declared, file missing,
+outside the room, too large or not an image). The floor then draws the name
+alone.
 
 ### `GET /api/roadmap`
 
@@ -746,7 +764,7 @@ A ChatMessage. `role` is `user`, `assistant` (the chat's reply) or `bot` (a
 message the bot sent on its own); `kind` says which for a bot message (`alert`,
 `notification`, `summary`, `dispatch`: the confirmation of a task sent to an agent)
 and is `null` otherwise. `channel` is where it was exchanged: `telegram` or
-`desk` (the panel of `/` and `/room`); bot messages are the ones Telegram
+`desk` (the panel of `/` and `/bureau`); bot messages are the ones Telegram
 accepted. `to` is `{ "room", "agent" }` for a message the user addressed to an
 agent from the desk, `null` otherwise. `choices` is `[{ "id": string | null, "label": string }]`
 for a reply of the chat that holds a selection list (see `POST /api/chat`), `null`

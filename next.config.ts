@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   // The assistant imports the home's TypeScript extensions at runtime with
   // tsx (esbuild underneath), which must not be bundled.
   serverExternalPackages: ["tsx"],
+  // The floor was /room before it became the home page; the old address (and its bookmarks) lead there.
+  async redirects() {
+    return [{ source: "/room", destination: "/", permanent: false }];
+  },
   turbopack: {
     rules: {
       "*.css": {

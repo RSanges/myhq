@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { Roadmap } from "@/server/roadmap-schema";
 import { formatDateTime } from "./format";
@@ -10,6 +9,7 @@ import { newestFirst, overallKey, overallProgress, updatedKey } from "./roadmap-
 import { flash, statusKey } from "./roadmap-parts";
 import { Stepper } from "./roadmap-stepper";
 import { strings } from "./strings";
+import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote } from "./ui";
 import { useRoadmap } from "./use-roadmap";
 
@@ -29,12 +29,7 @@ export function RoadmapView() {
       <header className="wall-hero">
         <div className="wall-wrap">
           <div className="wall-hero-top">
-            <Link href="/" className="wall-back">
-              <svg viewBox="0 0 20 20" aria-hidden focusable="false">
-                <path d="M12 4 6 10l6 6" />
-              </svg>
-              {t.back}
-            </Link>
+            <SiteNav current="roadmap" />
             <p className="wall-live" role="status" data-connected={connected ? "" : undefined}>
               <span className="wall-live-dot" aria-hidden>
                 {pulse > 0 && <span key={pulse} className="wall-live-ping" />}

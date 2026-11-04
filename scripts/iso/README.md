@@ -155,6 +155,8 @@ floor.json
       staff: { cell, faces }
     } } }
   }
+  sign: { end, segment, post, bottom, top, period: [dx, dy], left, middle, right }
+  font: { height, spacing, glyphs: { <char>: [rows of "#" and "."] } }
 ```
 
 - **Tiles**: one per cell, a voxel thick, no outline so they tile
@@ -179,8 +181,10 @@ floor.json
   pillows), `coffee-corner` 2 x 1, `whiteboard` 2 x 1, `bookshelf` 2 x 1,
   `plant-tall`, `plant-small`, `printer`, `water-cooler`, `filing-cabinet`
   1 x 1, `rug` 3 x 2 (room colour border; `flat: true`: draw it right after the
-  shadows, before sorting, so characters always walk over it), and
-  `reception-counter` 3 x 1 (room colour band).
+  shadows, before sorting, so characters always walk over it),
+  `reception-counter` 3 x 1 (room colour band), and for the user's own office
+  the hub's `floor-lamp` and `wall-calendar` (1 x 1; the calendar hangs on the
+  back wall of its cell, 30 voxels up: never on a window cell).
 - **Desk and chair**: a `workstation` at turn t takes a `desk-chair` at
   turn t in cell `corner + chair.cell`; the sitter faces the screen
   (`NE` at turn 0, `NW` at turn 1). With a sitter, draw the chair's `under`
@@ -193,6 +197,36 @@ floor.json
   box centres. A character is a small box (8 x 8 voxels) around its feet; a
   seated character is drawn inside its chair's slot. `depthSort()` in
   `compose.mjs` is the reference; `composeFloor()` draws a whole floor.
+
+## Signboards and their font (in `floor.json`)
+
+The signboard of a room of the single floor (`signBoard()` in
+`furniture.mjs`): a board facing +y that stands on two short wooden posts on
+top of the back wall along x, its front flush with the wall's front (y = 0),
+from `bottom` (67 voxels) to `top` (79: the wall is 64). Its face takes the
+room colour (`room` mask, level 2: the exact colour) and its frame, one voxel
+proud of the face, a shade darker (level 1). It is built as one long board
+and sliced into three parts, so a board of any length joins without a seam:
+
+- Placement: the anchor is the screen pixel of the board's back left corner
+  on the floor, under its front face (world point (u0, Y, 0) for a board
+  starting at voxel u0 on a wall whose front is at Y). Refs are
+  `[frame, dx, dy]` from the anchor, as everywhere.
+- A board of `n` middle segments (n >= 1, each `segment` voxels long, the
+  ends `end` voxels each: `2 end + n segment` voxels in all) is the `left`
+  part at the anchor, `n - 1` copies of the `middle` part, the k-th shifted
+  by k times `period` (`[2 segment, segment]` pixels: 16 to the right and 8
+  down), and the `right` part shifted by `n - 1` periods.
+  Each part has its `sprite` and its `masks`.
+- `face` of each part: `{ x, cols }`, the face's pixel columns from column
+  `x` (from the anchor): `[top, height]` of the face in each column, or null.
+  The face falls one pixel every two columns (the slope of the wall). The
+  runtime writes the name there with the font below, one font pixel a 2 x 2
+  square on those stairs, and the logo on its left (`src/ui/room-signs.ts`).
+
+`font` is the sign font (`font.mjs`): 7 pixels high, proportional, capitals,
+digits and `-_.'&`, drawn for MyHQ (same licence as the palette). Glyphs are
+rows of `#` (ink) and `.`, `spacing` pixels apart.
 
 ## Characters: `public/sprites/iso-*.png`
 
@@ -231,7 +265,8 @@ own model (a mascot) with the same rig and format by importing these files.
   for extra colours in a private build.
 - `image.mjs`: RGBA images, tint masks, hover rings, atlas packing, contact
   sheets, a tiny font, PNG output. `png.mjs`: the PNG encoder.
-- `props.mjs`: the hub props. `furniture.mjs`: the floor set.
+- `props.mjs`: the hub props. `furniture.mjs`: the floor set, with the
+  signboard. `font.mjs`: the sign font.
   `character.mjs`: the rig, poses and sheets. `compose.mjs`: the floor
   composer (reference for the runtime).
 - `build.mjs`: entry point; `build-hub.mjs`, `build-floor.mjs`,

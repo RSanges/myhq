@@ -47,9 +47,9 @@ test("publicUrl: optional, http(s) only, reduced to origin and path without a tr
 
 test("the link lines carry the deep link of the item or the run, or are null without the address", () => {
   const env = { HQ_PUBLIC_URL: BASE };
-  assert.equal(approvalLinkLine(7, env), `Ouvrir : ${BASE}/#approval-7`);
-  assert.equal(runLinkLine(12, env), `Ouvrir : ${BASE}/#run-12`);
-  assert.equal(deskLinkLine(env), `Bureau : ${BASE}`);
+  assert.equal(approvalLinkLine(7, env), `Ouvrir : ${BASE}/bureau#approval-7`);
+  assert.equal(runLinkLine(12, env), `Ouvrir : ${BASE}/bureau#run-12`);
+  assert.equal(deskLinkLine(env), `Bureau : ${BASE}/bureau`);
   assert.equal(approvalLinkLine(7, {}), null);
   assert.equal(runLinkLine(12, {}), null);
   assert.equal(deskLinkLine({}), null);
@@ -98,8 +98,8 @@ test("approval alerts end with the link when HQ_PUBLIC_URL is set, and are uncha
     assert.equal(sent.length, 2);
     const alert = sent.find((text) => text.includes("Reply to Alice"))!;
     const info = sent.find((text) => text.includes("Invoice due"))!;
-    assert.ok(alert.endsWith(`\n\nOuvrir : ${BASE}/#approval-${withUrl.pending}`), alert);
-    assert.ok(info.endsWith(`Pay before Friday.\n\nOuvrir : ${BASE}/#approval-${withUrl.info}`), info);
+    assert.ok(alert.endsWith(`\n\nOuvrir : ${BASE}/bureau#approval-${withUrl.pending}`), alert);
+    assert.ok(info.endsWith(`Pay before Friday.\n\nOuvrir : ${BASE}/bureau#approval-${withUrl.info}`), info);
     // Apart from the last line, the text is the same as without the address.
     assert.equal(alert.split("\n\nOuvrir")[0], plain.find((text) => text.includes("Reply to Alice"))!);
   } finally {
@@ -126,12 +126,12 @@ test("a failed run links to #run-<id>, and a summary ends with the desk address"
     const failed = startRun({ room: "demo", agent: "scout" }, { ...deps, engine: ending("failed", "boom") });
     await waitForRun(db, failed.id);
     await fake.waitFor(() => fake.sent().length === 1);
-    assert.ok(fake.sent()[0]!.endsWith(`a échoué\nboom\n\nOuvrir : ${BASE}/#run-${failed.id}`), fake.sent()[0]);
+    assert.ok(fake.sent()[0]!.endsWith(`a échoué\nboom\n\nOuvrir : ${BASE}/bureau#run-${failed.id}`), fake.sent()[0]);
 
     const done = startRun({ room: "demo", agent: "scout" }, { ...deps, engine: ending("done", "Brief du matin") });
     await waitForRun(db, done.id);
     await fake.waitFor(() => fake.sent().length === 2);
-    assert.equal(fake.sent()[1], `Brief du matin\n\nBureau : ${BASE}`);
+    assert.equal(fake.sent()[1], `Brief du matin\n\nBureau : ${BASE}/bureau`);
 
     // Without the address, nothing changes.
     const plain = startRun({ room: "demo", agent: "scout" }, { config, send: sender(fake), env: {}, engine: ending("done", "Brief") });

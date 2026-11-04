@@ -135,7 +135,9 @@ export const floorSchema = z.object({ layout: z.enum(FLOOR_LAYOUTS).catch(DEFAUL
 
 export const stateSchema = z.object({
   cursor: z.number().int(),
-  rooms: z.array(z.object({ name: z.string(), color: z.string().nullable().default(null), agents: z.array(agentSchema) })),
+  rooms: z.array(
+    z.object({ name: z.string(), color: z.string().nullable().default(null), logo: z.string().nullish(), agents: z.array(agentSchema) }),
+  ),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
   floor: floorSchema.default({ layout: DEFAULT_FLOOR_LAYOUT }),

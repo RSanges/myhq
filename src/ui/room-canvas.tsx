@@ -28,6 +28,12 @@ export type RoomCanvasProps = {
   onFailure: () => void;
   /** A click on the user's desk of a room of the single floor (the room of the home it serves). */
   onOwnerDesk?: (room: string) => void;
+  /** A click on the user's own office (single floor), or on the user's desk or tray of a lobby: open the desk. */
+  onOffice?: () => void;
+  /** The logo of each room of the home that has one (an image URL), for its signboard. */
+  logos?: Record<string, string>;
+  /** Letters in the tray of the user's own office. */
+  officeTray?: number;
   /** Take the view to this room of the single floor; a new `seq` asks again for the same room. */
   focus?: { room: string; seq: number } | null;
 };
@@ -36,6 +42,12 @@ export type RoomCanvasProps = {
 const FLOOR_URL = "/iso/floor";
 /** A pointer that moves less than this (CSS pixels) between down and up is a click, not a drag. */
 const DRAG_SLOP = 5;
+/** Wheel travel (pixels) for one zoom step: a notch of a mouse wheel is about 100. */
+const WHEEL_STEP = 50;
+/** After a step, the wheel waits this long (ms) before the next one: a flick of the wheel or a trackpad's momentum is not a run of steps. */
+const WHEEL_PAUSE = 90;
+/** A wheel quiet for this long (ms) starts a new gesture. */
+const WHEEL_GESTURE = 250;
 
 /**
  * The whiteboard of the floor: the figures of the day, each one flashing when
@@ -66,10 +78,12 @@ function BoardCard({ title, rows }: { title: string; rows: BoardRow[] }) {
  * The room, drawn on a canvas by PixiJS (loaded here, on the client, when the
  * component mounts). It decorates the page: the canvas is hidden from
  * assistive technology, and the list of agents under it says everything it
- * shows. The floor pans with a drag (or the wheel), zooms with the buttons, a
- * pinch or ctrl and the wheel, by whole steps so the pixel art stays sharp.
- * The loop draws only while the tab is visible and the room is on screen;
- * with reduced motion it draws when something changes.
+ * shows. The floor pans with a drag (a mouse, one finger) and zooms with the
+ * wheel (around the pointer), a pinch or the buttons, by whole steps so the
+ * pixel art stays sharp. A click on a room flies to it, a click on the floor
+ * outside the rooms back to the overview. The loop draws only while the tab
+ * is visible and the room is on screen; with reduced motion it draws when
+ * something changes.
  */
 export function RoomCanvas(props: RoomCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -112,7 +126,24 @@ export function RoomCanvas(props: RoomCanvasProps) {
     canvas.setAttribute("aria-hidden", "true");
     canvas.style.display = "block";
     canvas.style.touchAction = "none";
+    // The canvas is drawn at the device pixel ratio, one canvas pixel per device pixel: should the browser ever
+    // scale it (a size that does not divide, a zoom of the page), it keeps the pixels square instead of smoothing.
+    canvas.style.imageRendering = "pixelated";
     host.insertBefore(canvas, labelHost);
+    // Under a fractional pixel ratio (125 %, 150 %) the page may lay the canvas out between two device pixels,
+    // which the browser then resamples: move it by the fraction, so each canvas pixel lands on one device pixel.
+    const snap = () => {
+      const ratio = window.devicePixelRatio || 1;
+      // Where the canvas starts without its own correction: inside the host's border.
+      const rect = host.getBoundingClientRect();
+      const left = rect.left + host.clientLeft;
+      const top = rect.top + host.clientTop;
+      const fx = left * ratio - Math.round(left * ratio);
+      const fy = top * ratio - Math.round(top * ratio);
+      const transform = Math.abs(fx) < 0.001 && Math.abs(fy) < 0.001 ? "" : `translate(${-fx / ratio}px, ${-fy / ratio}px)`;
+      if (canvas.style.transform !== transform) canvas.style.transform = transform;
+    };
+    window.addEventListener("scroll", snap, { passive: true });
 
     const stop = () => {
       cancelAnimationFrame(raf);
@@ -133,11 +164,20 @@ export function RoomCanvas(props: RoomCanvasProps) {
       if (width > 0 && height > 0 && (width !== sizedFor.width || height !== sizedFor.height)) {
         sizedFor = { width, height };
         renderer.resize(width, height);
+        snap();
         refreshZoom();
       }
       renderer.setSprites(current.sprites, current.strides);
       renderer.draw(
-        { view, labels: current.labels, color: current.color, selected: current.selected, reduced: current.reduced },
+        {
+          view,
+          labels: current.labels,
+          color: current.color,
+          selected: current.selected,
+          reduced: current.reduced,
+          logos: current.logos,
+          officeTray: current.officeTray,
+        },
         now,
       );
       canvas.dataset.frames = String(renderer.frames);
@@ -195,6 +235,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
     function onDensity() {
       renderer?.setResolution(window.devicePixelRatio || 1);
+      snap();
       refreshZoom();
       watchDensity();
       kick();
@@ -208,7 +249,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
     colorScheme.addEventListener("change", onScheme);
 
-    // Pointers: a drag pans, two fingers pinch to zoom, a click without a drag picks a character.
+    // Pointers: a drag pans, two fingers pinch to zoom, a click without a drag picks a character, a desk or a room.
     const pointers = new Map<number, { x: number; y: number }>();
     let start = { x: 0, y: 0 };
     let dragged = false;
@@ -241,8 +282,12 @@ export function RoomCanvas(props: RoomCanvasProps) {
       const point = local(event);
       const before = pointers.get(event.pointerId);
       if (!before) {
-        const over = lastView && renderer ? renderer.agentAt(lastView, point.x, point.y) !== null || renderer.ownerDeskAt(point.x, point.y) !== null : false;
-        canvas.style.cursor = over ? "pointer" : "grab";
+        if (!renderer) return;
+        const opens =
+          (lastView !== null && renderer.agentAt(lastView, point.x, point.y) !== null) ||
+          (latest.current.onOwnerDesk !== undefined && renderer.ownerDeskAt(point.x, point.y) !== null) ||
+          (latest.current.onOffice !== undefined && renderer.officeAt(point.x, point.y));
+        canvas.style.cursor = opens ? "pointer" : renderer.roomAt(point.x, point.y) !== null ? "zoom-in" : "grab";
         return;
       }
       pointers.set(event.pointerId, point);
@@ -272,25 +317,49 @@ export function RoomCanvas(props: RoomCanvasProps) {
       if (pointers.size > 0) return;
       canvas.style.cursor = "grab";
       if (dragged || event.type === "pointercancel") return;
+      if (!renderer) return;
       const point = local(event);
-      const hit = lastView && renderer ? renderer.agentAt(lastView, point.x, point.y) : null;
+      const current = latest.current;
+      const hit = lastView ? renderer.agentAt(lastView, point.x, point.y) : null;
       if (hit) {
-        latest.current.onSelect(hit.key);
+        current.onSelect(hit.key);
         return;
       }
-      const desk = renderer?.ownerDeskAt(point.x, point.y) ?? null;
-      if (desk !== null) latest.current.onOwnerDesk?.(desk);
+      const desk = current.onOwnerDesk ? renderer.ownerDeskAt(point.x, point.y) : null;
+      if (desk !== null) {
+        current.onOwnerDesk?.(desk);
+        return;
+      }
+      if (current.onOffice && renderer.officeAt(point.x, point.y)) {
+        current.onOffice();
+        return;
+      }
+      // A room: fly to it, whole on screen; the floor outside the rooms: back to the overview.
+      const room = renderer.roomAt(point.x, point.y);
+      if (room !== null) renderer.focusIndex(room, !current.reduced);
+      else renderer.fit(!current.reduced);
+      refreshZoom();
+      kick();
     };
+    // The wheel zooms around the pointer, one whole step per notch. A trackpad's two finger scroll cannot be
+    // told apart from a wheel for sure, so it zooms too (a drag pans); its pinch arrives as the wheel with ctrl.
+    let wheelTravel = 0;
+    let wheelLast = 0;
+    let wheelQuietUntil = 0;
     const onWheel = (event: WheelEvent) => {
       if (!renderer) return;
       event.preventDefault();
-      if (event.ctrlKey || event.metaKey) {
-        if (Math.abs(event.deltaY) < 1) return;
-        renderer.zoomBy(event.deltaY < 0 ? 1 : -1, local(event));
-        refreshZoom();
-      } else {
-        renderer.panBy(-event.deltaX, -event.deltaY);
-      }
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? host.clientHeight : 1;
+      const now = performance.now();
+      if (now - wheelLast > WHEEL_GESTURE) wheelTravel = 0;
+      wheelLast = now;
+      if (now < wheelQuietUntil) return;
+      wheelTravel += event.deltaY * unit;
+      if (Math.abs(wheelTravel) < WHEEL_STEP) return;
+      renderer.zoomBy(wheelTravel < 0 ? 1 : -1, local(event));
+      wheelTravel = 0;
+      wheelQuietUntil = now + WHEEL_PAUSE;
+      refreshZoom();
       kick();
     };
     canvas.addEventListener("pointerdown", onDown);
@@ -331,6 +400,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
       observer.disconnect();
       resizer.disconnect();
       colorScheme.removeEventListener("change", onScheme);
+      window.removeEventListener("scroll", snap);
       densityQuery?.removeEventListener("change", onDensity);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
@@ -349,7 +419,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
   const focusRoom = props.focus?.room ?? null;
   useEffect(() => {
     if (focusRoom === null) return;
-    rendererRef.current?.focusRoom(focusRoom);
+    rendererRef.current?.focusRoom(focusRoom, !latest.current.reduced);
     refreshZoom();
     kickRef.current();
   }, [focusRoom, focusSeq]);
@@ -360,7 +430,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     kickRef.current();
   };
   const fit = () => {
-    rendererRef.current?.fit();
+    rendererRef.current?.fit(!props.reduced);
     refreshZoom();
     kickRef.current();
   };

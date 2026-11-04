@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SettingsView } from "@/server/settings-schema";
 import { errorText, fetchSettings, saveSettingsGroup } from "./api";
@@ -9,14 +8,12 @@ import { Notifications } from "./settings-notifications";
 import { Field, FieldError, GroupCard } from "./settings-parts";
 import { RoomsAndAgents } from "./settings-rooms";
 import { strings } from "./strings";
+import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote, fieldClass } from "./ui";
 
 const t = strings.settings;
 
 type GroupProps = { settings: SettingsView; onSaved: (settings: SettingsView) => void };
-
-const linkClass =
-  "text-sm text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /** « Disposition et langue »: floor layout, language of the agents' texts, time zone. */
 function LayoutGroup({ settings, onSaved }: GroupProps) {
@@ -210,9 +207,7 @@ export function SettingsPage() {
     <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6">
       <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h1 className="text-xl font-semibold">{t.title}</h1>
-        <Link href="/" className={linkClass}>
-          {t.back}
-        </Link>
+        <SiteNav current="settings" />
       </header>
       <p className="text-sm text-muted">{t.intro}</p>
 

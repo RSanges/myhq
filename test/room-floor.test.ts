@@ -169,8 +169,8 @@ test("the user's desk of a room leads to the pile of decisions filtered to that 
   assert.equal(pileHref(objects, "alpha"), "/bureau/signer?room=alpha");
   assert.equal(pileHref(objects, RECEPTION_ROOM), "/bureau/signer?room=_hq");
   assert.equal(pileHref([{ id: "pile", source: "approvals+summaries" }], "a b"), "/bureau/pile?room=a%20b");
-  assert.equal(pileHref([{ id: "courrier", source: "watch:mail_alert" }], "alpha"), "/", "no pile: the desk");
-  assert.equal(pileHref(null, "alpha"), "/");
+  assert.equal(pileHref([{ id: "courrier", source: "watch:mail_alert" }], "alpha"), "/bureau", "no pile: the desk");
+  assert.equal(pileHref(null, "alpha"), "/bureau");
 });
 
 test("an item a shared room delivers lands on the pile of the room that ordered it, carried there across the hall", () => {
