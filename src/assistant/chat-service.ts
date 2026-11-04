@@ -15,7 +15,8 @@ import { getDbAt, type Db, type RunRow } from "../server/db";
 import { ZERO_USAGE } from "../server/engine";
 import { HqError } from "../server/errors";
 import type { ApprovalDto } from "../server/feed";
-import { findAgent, startRun as defaultStartRun, type StartRunRequest } from "../server/runner";
+import { proposeAgent } from "../server/agent-need";
+import { findAgent, startRun as defaultStartRun, type RunnerDeps, type StartRunRequest } from "../server/runner";
 import { loadHome } from "../server/rooms";
 import { recordChatTurn } from "../server/usage";
 import { strings } from "../ui/strings";
@@ -67,6 +68,8 @@ export type ChatServiceDeps = {
   chatMaxBudgetUsd: number;
   runChat?: ChatRunner;
   startRun?: (request: StartRunRequest) => RunRow;
+  /** The engine of the receptionist's runs started by `propose_agent` (tests). */
+  agentNeed?: Pick<RunnerDeps, "engine" | "send">;
   log?: (message: string) => void;
   questions?: PendingQuestions;
 };
@@ -389,7 +392,8 @@ export class ChatService {
 
   /**
    * Executes actions the chat asked for, one at a time, with the code of the
-   * buttons and of the commands (`decideApproval`, `startRun`, `setArmed`):
+   * buttons and of the commands (`decideApproval`, `startRun`, `setArmed`,
+   * and `proposeAgent` of `POST /api/agents/propose`):
    * same lock, cap and errors. Returns one French line per action and the
    * items approved, to hand over like a button does.
    */
@@ -412,6 +416,15 @@ export class ChatService {
             const decision = action.action === "reject" ? "rejected" : "revise";
             const approval = this.decide(action.approvalId!, decision, action.note);
             lines.push(t.decided(approval.id, strings.desk.decision[approval.status]));
+            break;
+          }
+          case "propose_agent": {
+            // As a chat request: when the receptionist is busy or the cap is reached, the need waits for its next run.
+            const { run } = proposeAgent(
+              { need: action.need!, ...(action.room ? { room: action.room } : {}) },
+              { config: this.deps.config, queue: true, ...(this.deps.agentNeed ?? {}) },
+            );
+            lines.push(run ? strings.agentProposal.chat.started(run.id) : strings.agentProposal.chat.queued);
             break;
           }
           case "run":

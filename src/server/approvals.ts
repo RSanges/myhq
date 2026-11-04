@@ -6,9 +6,13 @@ import { now, type ApprovalRow, type ApprovalStatus, type Db } from "./db";
 import { HqError } from "./errors";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
+import { AGENT_PROPOSAL, applyAgentProposal } from "./agent-proposal";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
 import { loadHome } from "./rooms";
 import { wakeAgents, type RunnerDeps } from "./runner";
+
+/** The receptionist's items: a rejection, whose note says what to change, relaunches it like a revision. */
+const RECEPTION_TYPES: readonly string[] = [ROOM_PROPOSAL, AGENT_PROPOSAL];
 
 export const decisionSchema = z
   .strictObject({
@@ -70,14 +74,15 @@ function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" |
  * it has. Any other decision on a decided item is `APPROVAL_ALREADY_DECIDED`.
  * A revision wakes the agent at once (`wakeAgents`, reason `revise`) unless it
  * has `onRevise: "queue"`; the wake-up needs `config`, the callers of the app
- * always give it. A `room_proposal` is the onboarding agent's, which is no room
- * agent: a revision, and a rejection too (its note says what to change),
- * gives it the same task and relaunches onboarding on the proposal's
- * repository (see `wakeOnboarding`).
+ * always give it. A `room_proposal` or an `agent_proposal` is the onboarding
+ * agent's (the receptionist), which is no room agent: a revision, and a
+ * rejection too (its note says what to change), gives it the same task and
+ * relaunches it on the proposal's repository or need (see `wakeOnboarding`).
  *
  * Approving a `room_proposal` writes the room in the home first (see
- * proposal.ts): when that fails, the item stays pending and the error is
- * thrown. Approving an item of an agent with `onApproval: "task"` gives that
+ * proposal.ts), approving an `agent_proposal` adds the agent to its room (see
+ * agent-proposal.ts): when that fails, the item stays pending and the error
+ * is thrown. Approving an item of an agent with `onApproval: "task"` gives that
  * agent a task to execute it, and wakes it (`wakeAgents`; with `"queue"` the
  * task waits for its next run): the agent acts, through its own tools, never
  * MyHQ. No other type is acted on: the item keeps its payload, and publishing
@@ -97,6 +102,9 @@ export function decideApproval(
     const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
     if (row?.status === "pending" && row.type === ROOM_PROPOSAL) {
       applyRoomProposal(config ?? getConfig(), db, JSON.parse(row.payload) as unknown);
+    }
+    if (row?.status === "pending" && row.type === AGENT_PROPOSAL) {
+      applyAgentProposal(config ?? getConfig(), db, JSON.parse(row.payload) as unknown);
     }
     if (row?.status === "pending") {
       const cfg = config ?? getConfig();
@@ -140,8 +148,9 @@ export function decideApproval(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), id);
-      if (decision.decision === "rejected" && row.type === ROOM_PROPOSAL) wakeFor = config ?? null;
-      if (decision.decision === "revise" || (decision.decision === "rejected" && row.type === ROOM_PROPOSAL)) {
+      const reception = RECEPTION_TYPES.includes(row.type);
+      if (decision.decision === "rejected" && reception) wakeFor = config ?? null;
+      if (decision.decision === "revise" || (decision.decision === "rejected" && reception)) {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,

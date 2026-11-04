@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { isAgentModeTask, wakeAgentNeed } from "./agent-need";
 import { getConfig, type HqConfig } from "./config";
 import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
@@ -256,8 +257,9 @@ export type OnboardingDeps = RunnerDeps & {
  * home, or absolute), with the same lock and daily cap as any run. Throws
  * TARGET_NOT_FOUND when the path is not a directory. The run takes the
  * pending tasks of the onboarding agent that are about this repository (the
- * revisions of its proposals) or about none; those about another repository
- * stay in the mailbox for their own run.
+ * revisions of its proposals) or about none; those about another repository,
+ * and those of the agent mode (needs, revisions of agent proposals), stay in
+ * the mailbox for their own run.
  */
 export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps: OnboardingDeps = {}): RunRow {
   const config = deps.config ?? getConfig();
@@ -280,6 +282,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
       .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[]
   )
     .filter((t) => {
+      if (isAgentModeTask(db, t)) return false;
       const about = revisionTarget(config, db, t);
       return about === null || about === target;
     })
@@ -322,15 +325,25 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
  * end of a run, the next decision, the next start of the app) tries again.
  * A revision whose repository is gone is blocked with a note. As for the other
  * agents, a repository is not woken again by a revision older than its last
- * onboarding run, so that a failing run is not retried in a loop.
+ * onboarding run, so that a failing run is not retried in a loop. The agent
+ * mode is woken here too, in the same order: a pending need (a `message`
+ * task, from `hq_suggest_agent` or a request that had to wait) or a revision
+ * of an `agent_proposal` starts an agent-mode run, one per need (see agent-need.ts).
  */
 export function wakeOnboarding(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   const pending = db
-    .prepare("SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND source = 'revise' AND status = 'pending' ORDER BY id")
+    .prepare(
+      "SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND source IN ('revise', 'message') AND status = 'pending' ORDER BY id",
+    )
     .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[];
   const started: RunRow[] = [];
   const done = new Set<string>();
   for (const task of pending) {
+    if (isAgentModeTask(db, task)) {
+      const run = wakeAgentNeed(config, db, task, done, deps);
+      if (run) started.push(run);
+      continue;
+    }
     const target = revisionTarget(config, db, task);
     if (target === null || done.has(target)) continue;
     done.add(target);

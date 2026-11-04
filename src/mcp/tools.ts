@@ -4,7 +4,9 @@ import type { Env } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
 import { now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
+import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
+import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
 export const contextSchema = z.object({
@@ -46,7 +48,7 @@ export function readContext(env: Env): HqContext {
   };
 }
 
-/** Input shapes of the eight tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the nine tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -94,6 +96,11 @@ export const inputs = {
   },
   hq_pending: {},
   hq_rooms: {},
+  hq_suggest_agent: {
+    need: needSchema.describe(
+      "What nobody in the office can do, in a few sentences: the work, the technologies involved, and the order that needs it.",
+    ),
+  },
 } as const;
 
 type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K]>>;
@@ -198,13 +205,32 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       throw new ToolError((error as Error).message);
     }
   }
+  if (parsed.type === AGENT_PROPOSAL) {
+    // The receptionist's alone: a room agent asks for one with hq_suggest_agent.
+    if (ctx.room !== RECEPTION_ROOM) {
+      throw new ToolError("agent_proposal is the receptionist's: use hq_suggest_agent to ask for an agent nobody is.");
+    }
+    try {
+      ({ body, payload } = normalizeAgentProposal(parsed.payload ?? {}, parsed.body));
+    } catch (error) {
+      throw new ToolError((error as Error).message);
+    }
+    const proposal = payload as { room: string; agent: { id: string } };
+    if (!roomInfo(db, proposal.room)) throw new ToolError(`agent_proposal: unknown room "${proposal.room}".`);
+    if (db.prepare("SELECT 1 FROM agents WHERE room = ? AND id = ?").get(proposal.room, proposal.agent.id)) {
+      throw new ToolError(`agent_proposal: room "${proposal.room}" already has an agent "${proposal.agent.id}": pick another id.`);
+    }
+  }
   // An informational type (notifyTypes in myhq.json) is born 'unseen': the app
   // sends it to Telegram in full and the desk keeps it under « À regarder »
   // until the user marks it seen. It never waits for a decision, never
   // triggers onApproval and never wakes an agent. Its agent already knows it,
   // so it counts as read by the agent.
   const informational =
-    parsed.type !== ROOM_PROPOSAL && ctx.home !== undefined && readNotifyTypes(ctx.home).includes(parsed.type);
+    parsed.type !== ROOM_PROPOSAL &&
+    parsed.type !== AGENT_PROPOSAL &&
+    ctx.home !== undefined &&
+    readNotifyTypes(ctx.home).includes(parsed.type);
   const at = now();
   const result = db
     .prepare(
@@ -230,6 +256,48 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
   return {
     approvalId: Number(result.lastInsertRowid),
     status: informational ? ("unseen" as const) : ("pending" as const),
+  };
+}
+
+const SUGGESTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A room agent was given an order nobody in the office can do: the need
+ * becomes a task of the receptionist (a need, with the asking room and
+ * agent), which the app wakes to propose an agent for it (see
+ * `wakeOnboarding`). At most one suggestion per need text (case and spacing
+ * aside) in 24 hours, whatever became of it except a blocked one: a repeat is
+ * answered without queueing anything. Nothing is created until the user
+ * approves the proposal.
+ */
+export function hqSuggestAgent(db: Db, ctx: HqContext, args: Args<"hq_suggest_agent">) {
+  const parsed = z.object(inputs.hq_suggest_agent).parse(args);
+  if (ctx.room === RECEPTION_ROOM) throw new ToolError("The receptionist proposes agents itself: submit an agent_proposal.");
+  const since = new Date(Date.now() - SUGGESTION_WINDOW_MS).toISOString();
+  const recent = db
+    .prepare(
+      "SELECT id, text FROM tasks WHERE room = ? AND agent_id = ? AND source = ? AND status <> 'blocked' AND created_at >= ? ORDER BY id",
+    )
+    .all(RECEPTION_ROOM, RECEPTION_AGENT, NEED_SOURCE, since) as { id: number; text: string }[];
+  const same = recent.find((task) => sameNeed(task.text, parsed.need));
+  if (same) {
+    return {
+      queued: false as const,
+      taskId: same.id,
+      note: "The same need was already suggested in the last 24 hours: the receptionist has it, do not suggest it again.",
+    };
+  }
+  const taskId = queueAgentNeed(db, {
+    room: RECEPTION_ROOM,
+    agent: RECEPTION_AGENT,
+    need: parsed.need,
+    fromRoom: ctx.room,
+    fromAgent: ctx.agentId,
+  });
+  return {
+    queued: true as const,
+    taskId,
+    note: "The receptionist will propose an agent to the user. Tell whoever ordered that nobody can do it yet, then go on with your other tasks.",
   };
 }
 

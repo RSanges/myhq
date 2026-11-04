@@ -30,7 +30,9 @@ Every error has the same shape and an HTTP status:
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
 | `PROPOSAL_INVALID` | 422 | Approving a room proposal that fails validation (payload, paths, target repository). Nothing is written; the item stays pending. |
-| `WORKTREE_FAILED` | 422 | Approving a room proposal whose agent worktree cannot be created. Nothing is written; the item stays pending. |
+| `WORKTREE_FAILED` | 422 | Approving a room proposal, or an agent proposal, whose agent worktree cannot be created. Nothing is written; the item stays pending. |
+| `AGENT_EXISTS` | 409 | Approving an agent proposal whose room already has an agent of that id, or a role file of that name. Nothing is written; the item stays pending. |
+| `AGENT_PROPOSAL_INVALID` | 422 | Approving an agent proposal that fails validation, or that would make its room invalid (for example a working directory outside the home). Nothing is written; the item stays pending. An agent proposal for a room the home no longer has is `ROOM_NOT_FOUND` (422). |
 | `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `INTERNAL` | 500 | Unexpected error. |
@@ -84,6 +86,8 @@ characters. `reason` says why the run was started: the `reason` given to
 `POST /api/runs` (for example `mail`), `approval`, `message`, `revise` or `chat`
 for a run MyHQ started to wake an agent (`onApproval`, `onMessage`,
 `onRevise`, see `home-layout.md`),
+`agent_need` for a run of the receptionist proposing a missing agent
+(`POST /api/agents/propose`, the chat's `propose_agent`, `hq_suggest_agent`),
 `desk` for a task typed in the conversation panel and addressed to an agent
 (`POST /api/chat` with `to`), `null` for a run started from the desk's button,
 `/run` or a routine. `inputTokens` excludes the cache: the total input of a run is
@@ -852,6 +856,23 @@ Response `202`: `{ "run": { "room": "_hq", "agentId": "onboarding", "...": "Run 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `TARGET_NOT_FOUND` (404),
 `AGENT_BUSY` (409), `DAILY_CAP_REACHED` (429).
 
+### `POST /api/agents/propose`
+
+Starts a run of the receptionist in agent mode for a need no agent covers,
+and returns at once; its proposal arrives on the desk as an `agent_proposal`
+approval (`architecture.md`, "Proposing a missing agent"). Same lock as the
+onboarding runs (it is the same agent) and same daily cap as any run. Run
+reason `agent_need`.
+
+Body: `{ "need": "Draw the illustrations of the site.", "room": "demo" }`.
+`need`: 1 to 2000 characters. `room`, optional: the room the need comes from,
+a hint for the receptionist (it must be a room of the home).
+Response `202`: `{ "run": { "room": "_hq", "agentId": "onboarding", "reason": "agent_need", "...": "Run shape" } }`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND` (404), `AGENT_BUSY`
+(409), `DAILY_CAP_REACHED` (429). A refused request keeps nothing: ask again
+later.
+
 ### `POST /api/export`
 
 Writes the daily export of one day now (and replaces its file). The body is
@@ -866,5 +887,5 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `EXPORT_NOT_CONFIGURED` (404).
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its seven tools write to the same
+for each run (see `architecture.md`). Its nine tools write to the same
 database, and their effects reach the interface through `/api/events`.

@@ -62,7 +62,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Eight tools, all validated with zod:
+room) and writes directly to SQLite. Nine tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -74,6 +74,7 @@ room) and writes directly to SQLite. Eight tools, all validated with zod:
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
 | `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, `forRoom`, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
 | `hq_rooms()` | List the shared rooms and their agents (id and name): the studios an agent may order from. Read-only. |
+| `hq_suggest_agent(need)` | For an order nobody in the office can do: the need goes to the receptionist, which proposes a new agent to the user (see "Proposing a missing agent"). At most one per need text in 24 hours. |
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
@@ -274,6 +275,17 @@ The proposal's "HQ agents" block for the project's `CLAUDE.md` is never
 written by MyHQ: the desk shows it with « Copier le bloc », and Telegram sends
 it as a message of its own after the decision.
 
+#### Agent proposals
+
+Approving an `agent_proposal` (see "Proposing a missing agent") writes
+`rooms/<room>/roles/<id>.md` and appends the agent to that room's
+`room.json`, routines disarmed, creates its worktree when it has one, and
+syncs the home: the agent is live without a restart. A room that is not in
+the home (`ROOM_NOT_FOUND`), an id or a role file already taken
+(`AGENT_EXISTS`), or a room that would be invalid (`AGENT_PROPOSAL_INVALID`,
+for example a working directory outside the home) leave the room exactly as
+it was, and the item stays pending with the error, as for a room proposal.
+
 #### Executing an approved item
 
 An agent whose `room.json` sets `onApproval: "task"` acts on its own approved
@@ -357,6 +369,7 @@ last run started, of source:
 | `approval` (an approved item) | `approval` | when `onApproval: "task"` (with `"queue"` the task waits; without the field there is no task) |
 | `chat` (a request of the chat) | `chat` | always |
 | `revise` of a `room_proposal` | `revise` | the onboarding agent, always (see below) |
+| a need (`message` of `_hq/onboarding`), `revise` of an `agent_proposal` | `agent_need`, `revise` | the receptionist, always (see "Proposing a missing agent") |
 
 A task typed to an agent in the conversation panel (`desk`) starts its run
 directly. The run's task is "Handle the pending tasks of your mailbox", and the
@@ -405,7 +418,7 @@ exists. Consequences:
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
 `/run` or a routine): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
-own `approval`, `message`, `revise` and `chat`. It is in the Run shape (API, live stream, daily
+own `approval`, `message`, `revise`, `chat` and `agent_need`. It is in the Run shape (API, live stream, daily
 export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.
@@ -521,6 +534,86 @@ is itself submitted to the user's approval.
    only adds Git's own bookkeeping to the repository. Nothing else lands in the
    project: no `.hq/` directory, no dependency. A project can leave the HQ
    without a trace (`git worktree remove`).
+
+### Proposing a missing agent
+
+When work is needed that no agent covers, the receptionist (the onboarding
+agent, `_hq/onboarding`) proposes one agent for it, in agent mode. As for a
+room, it is a proposal the user approves, never a form.
+
+**Asking.** Three doors, one path:
+
+- `POST /api/agents/propose { need, room? }` (`api.md`), for the desk or a
+  script: a need task and its run at once, or the error (`AGENT_BUSY`,
+  `DAILY_CAP_REACHED`) with nothing kept, as `POST /api/onboarding`.
+- The chat's `propose_agent` action (`home-layout.md`, "Chat actions"), when a
+  request of the owner matches no agent: same, but a busy receptionist or the
+  cap leave the need waiting for its next run, as a chat request.
+- `hq_suggest_agent { need }`, for a room agent given an order nobody can do.
+  The HQ MCP server only writes the need (it cannot start runs); the app
+  starts the run on the tool result, through `wakeOnboarding`. At most one
+  suggestion per need text (case and spacing aside) in 24 hours, whatever
+  became of it unless it was blocked: a repeat answers `queued: false`.
+
+A need is a task of `_hq/onboarding` with source `message` (no agent can
+write to `_hq` with `hq_message`, so every such task is a need): its text is
+the need, `from_room` the room it comes from (or the room the owner names),
+`from_agent` the agent that asked (null for the owner).
+
+**The run.** `startAgentNeedRun` (`src/server/agent-need.ts`) starts a run of
+the receptionist with the same lock and daily cap as any run, reason
+`agent_need`, task « Propose an agent for the need: <need> », taking that one
+task. Its role prompt is `templates/agent-proposal.md`; its working directory
+is the home's `rooms/` folder (every `room.json` and role); its `--add-dir`
+are the role templates and the technology catalogue; its tools are `Read`,
+`Glob` and `Grep` (read-only, not pre-approved) and `hq_submit`,
+`hq_task_update`. The run prompt gives the need and who asked, the rooms and
+their agents (model, tools, routines, role file), the role templates, the
+language of the home and the payload. It also gives the catalogue, summarized
+by `src/server/catalog.ts`: for each target repository of a room, its
+`package.json` (name, description, dependencies, devDependencies, scripts),
+`pyproject.toml` (name, dependencies) and the first lines of its README; then
+each folder of `catalog.dirs` in `myhq.json` (`home-layout.md`), its own
+manifests and each top-level Markdown note with its frontmatter. The role
+asks for one agent that duplicates none (a need already covered is closed
+`blocked` with the agent to ask), in the right room (a shared studio for a
+craft that serves several projects), using the technologies actually present,
+with the minimal tools, a sensible model and budget, and the reason of these
+choices.
+
+**The proposal.** `hq_submit` with type `agent_proposal`, accepted from the
+receptionist only (a room agent is told to use `hq_suggest_agent`):
+
+```json
+{
+  "room": "demo",
+  "agent": { "id": "illustrator", "name": "Illustrator", "model": "sonnet", "allowedTools": ["Read", "mcp__hq__hq_submit"], "maxBudgetUsd": 1 },
+  "rolePrompt": "# Illustrator ...",
+  "reason": "Why this agent, its tools, model and budget.",
+  "need": "The need, as asked.",
+  "requestedBy": "the owner"
+}
+```
+
+It is checked at once, so that the receptionist can fix it in the same run:
+the agent against the agent schema of `room.json` (`role` is MyHQ's and left
+out, `armed` is forced to false), a role prompt with no `{{placeholder}}`, a
+room of the home and an id it does not have yet. Em and en dashes are
+replaced. The body gets, after the receptionist's own text, a readable summary
+(« Agent proposé » : room, agent, model, budget, tools, routine, who asked,
+the need, why), the role prompt and the `room.json` entry: the desk renders it
+like a room proposal (type label « Agent »), and the remarks on passages work
+the same. Approving it writes the agent (see "Agent proposals" in section 1).
+
+**Revising.** A revision, or a rejection with its note, gives the receptionist
+a `revise` task and relaunches it at once on the same need (reason `revise`,
+same task text), through `wakeOnboarding`, as for a room proposal: the prompt
+starts again from the need and adds `REVISION RUN`, the previous proposal and
+the user's remarks; the answer is a new item. A room onboarding run never
+takes the needs or the revisions of agent proposals, and an agent-mode run
+takes only its own task. As for the other agents, a need is not woken again
+by a run that failed after it was created, and a pending need is taken when
+the app starts.
 
 ## 4. Delivery slices
 

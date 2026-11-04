@@ -58,7 +58,7 @@ export const mcpServersSchema = z
 /** A shared resource name: lowercase letters, digits, '-' or '_'. */
 export const resourceSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/, "lowercase letters, digits, '-' or '_' (max 32)");
 
-const agentSchema = z.strictObject({
+export const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
   role: z.string().min(1),

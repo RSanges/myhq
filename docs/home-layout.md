@@ -348,6 +348,13 @@ accounts; B: prepared, then signed and posted by the user; C: the user alone,
 the agent prepares notes) and `{{guardrails}}`. A role written by hand does not
 have to follow them.
 
+An approved `agent_proposal` (`architecture.md`, "Proposing a missing agent")
+is the other way MyHQ writes in a room: it adds `roles/<id>.md` (the role
+prompt the receptionist wrote, in the language of the home) and appends the
+agent to `room.json`, with `"role": "roles/<id>.md"` and `"armed": false`.
+`room.json` is then rewritten as formatted JSON; nothing else of the room
+changes.
+
 ## assistant.json
 
 Configures the assistant on Telegram (see `architecture.md`). It is read when
@@ -391,7 +398,7 @@ assistant runs with its core commands only.
 | `chat.addDirs` | no | Directories the chat may read and write (`--add-dir`). Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
 | `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. A server may add `"untrusted": false` (MyHQ's own flag, never written to the MCP config): every server is untrusted by default (see "Chat actions"). Default: none. |
-| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`); default none. The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`); default none. The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
 | `chat.untrustedTools` | no | More tools whose results count as untrusted for chat actions, by exact name or with a final `*` (`mcp__mail__*`). The web tools and the tools of untrusted servers always count. Default: none. |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
@@ -521,12 +528,14 @@ with a button or a command, by writing a JSON file in the same
 { "action": "run", "agent": "watch", "task": "Optional task." }
 { "action": "arm", "room": "demo", "agent": "watch" }
 { "action": "disarm", "agent": "watch" }
+{ "action": "propose_agent", "need": "Draw the illustrations of the site.", "room": "demo" }
 ```
 
 - Only the actions listed in `chat.requests.actions` are taken; an action
   outside it, or a file that does not match (an unknown action, `reject` or
   `revise` without a `note`, a decision without `id`, which `approvalId` may
-  replace, a `run`, `arm` or `disarm` without `agent`), is moved to
+  replace, a `run`, `arm` or `disarm` without `agent`, a `propose_agent`
+  without `need`), is moved to
   `<dir>/rejected/`, logged, and a line of the reply says so.
 - `room` may be left out when exactly one room has an agent of that id.
 - After a reply that succeeds, the action files are taken in name order (before
@@ -534,7 +543,11 @@ with a button or a command, by writing a JSON file in the same
   the commands: `decideApproval` for `approve`, `reject` and `revise` (an item
   already decided or unknown is refused with the usual error, an approved item
   is handed over like an Approuver button does), `startRun` for `run` (agent
-  lock, daily cap, reason `chat`), the armed state for `arm` and `disarm`. The
+  lock, daily cap, reason `chat`), the armed state for `arm` and `disarm`,
+  and `proposeAgent` for `propose_agent`: the need goes to the receptionist,
+  which proposes a missing agent (`architecture.md`, "Proposing a missing
+  agent"; `room`, optional, is the room the need comes from; a busy
+  receptionist or the cap leave the need waiting for its next run). The
   core appends one French line per action to the chat's reply (« Item #14 :
   Approuvé. », « Tour #7 lancé pour demo / watch. », or the refusal). The
   chat's own text never decides anything.
@@ -635,6 +648,7 @@ without a section, the feature is off. Other keys are ignored.
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
   "reception": { "room": "assistant" },
   "floor": { "layout": "room-per-project" },
+  "catalog": { "dirs": ["../notes/projects"] },
   "onboarding": { "sprite": "sprites/reception.png" },
   "notifyTypes": ["brief", "mail_alert"],
   "desk": {
@@ -653,6 +667,7 @@ without a section, the feature is off. Other keys are ignored.
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
 | `reception.room` | no | The floor (`/room`) that draws the reception desk and the receptionist, the onboarding agent (see `architecture.md`, section 7). Only that floor has the counter in its lobby, the receptionist's chip in the strip under the floor and its sheet (with the « Ajouter une salle » form and the recent onboarding runs); the others keep a plain lobby. Default: the room called `assistant` when the home has one, otherwise the first room. A name that is not a room of the home falls back to the default. |
 | `floor.layout` | no | How `/room` draws the home (see `architecture.md`, section 7). `"floor-per-project"` (the default): a floor per room of the home, chosen with the buttons at the top, each a template of offices, a lobby with your desk and the tray, a meeting room and a kitchen. `"room-per-project"`: one floor for the whole home, where each room is one room sized from its number of agents, with your own empty desk in it (a pile of what that room waits for, a click opens « À signer » filtered to the room), one shared lobby with the reception, and the buttons at the top take the view to a room. Read apart from the rest of the file: a missing or invalid `floor` (an unknown layout) falls back to the default, with the reason in the log, and leaves every other setting as it is. |
+| `catalog.dirs` | no | Extra read-only folders of the technology catalogue the receptionist bases an agent proposal on (`architecture.md`, "Proposing a missing agent"), relative to the home or absolute, 20 at most. Besides the target repositories of the rooms, which are always in it, each folder is summarized in the run prompt (its own `package.json`, `pyproject.toml` and README, then each top-level Markdown note with its YAML frontmatter, for example notes whose `stack:` lists the technologies you use) and given to the run as `--add-dir`, read-only. A folder that does not exist is named as missing. Read apart from the rest of the file: an invalid `catalog` gives no extra folder, with the reason in the log, and leaves every other setting as it is. Default: none. |
 | `onboarding.sprite` | no | Old top-down sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`). Still accepted and served, but **no longer drawn**: the isometric floor always draws the receptionist shipped with MyHQ, `public/sprites/iso-receptionist.png` (headset). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 

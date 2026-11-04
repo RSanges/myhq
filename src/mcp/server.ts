@@ -17,6 +17,7 @@ import {
   hqReadDecisions,
   hqRooms,
   hqSubmit,
+  hqSuggestAgent,
   hqTaskUpdate,
   inputs,
   readContext,
@@ -108,6 +109,15 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_rooms,
     },
     async () => respond(() => hqRooms(db, ctx)),
+  );
+  server.registerTool(
+    "hq_suggest_agent",
+    {
+      description:
+        "Use when you are given an order that neither you nor any agent of the office can do (check hq_rooms first): describe the need, and the receptionist proposes a new agent to the user, who decides. Nothing is created until the user approves. The same need is queued at most once a day. Then tell whoever ordered that nobody can do it yet.",
+      inputSchema: inputs.hq_suggest_agent,
+    },
+    async (args) => respond(() => hqSuggestAgent(db, ctx, args)),
   );
 
   await server.connect(new StdioServerTransport());

@@ -48,6 +48,7 @@ export const strings = {
       pull_request: "Pull request",
       blog_post: "Article",
       room_proposal: "Salle",
+      agent_proposal: "Agent",
     } as Record<string, string>,
     age: {
       now: "à l'instant",
@@ -511,6 +512,8 @@ export const strings = {
       ROOM_EXISTS: "Une salle de ce nom existe déjà : rien n'a été écrit. Refuse la proposition ou demande un autre nom.",
       PROPOSAL_INVALID: "La proposition de salle est invalide : rien n'a été écrit. Le détail est dans le journal.",
       WORKTREE_FAILED: "Le worktree Git de l'agent n'a pas pu être créé : rien n'a été écrit. Le détail est dans le journal.",
+      AGENT_EXISTS: "Cette salle a déjà un agent de cet identifiant : rien n'a été écrit. Refuse la proposition ou demande un autre identifiant.",
+      AGENT_PROPOSAL_INVALID: "La proposition d'agent est invalide : rien n'a été écrit. Le détail est dans le journal.",
       CHAT_NOT_CONFIGURED: "La conversation n'est pas configurée (section chat de assistant.json).",
       EXPORT_NOT_CONFIGURED: "L'export quotidien n'est pas configuré (export.dir dans myhq.json).",
       INTERNAL: "Erreur interne du serveur.",
@@ -851,5 +854,37 @@ export const strings = {
     /** An agent whose work waits for a resource held by another run (« en attente du GPU »). */
     waitingFor: (resources: readonly string[]) =>
       `En attente : ${resources.join(", ")} occupé${resources.length > 1 ? "s" : ""}`,
+  },
+  /** The receptionist's agent proposals (type `agent_proposal`): a missing agent, proposed for a need. */
+  agentProposal: {
+    /** Title of the item: French for a French home, English otherwise. */
+    title: (language: string, agent: string, room: string) =>
+      language.toLowerCase().split("-")[0] === "fr" ? `Proposition d'agent : ${agent} (${room})` : `Agent proposal: ${agent} (${room})`,
+    /** What MyHQ appends to the receptionist's text in the body of the item. */
+    body: {
+      summary: "Agent proposé",
+      room: "Salle",
+      agent: "Agent",
+      model: "modèle",
+      budget: (usd: number) => `budget ${usd} USD par tour`,
+      tools: "Outils",
+      denied: "Interdits",
+      worktree: "Worktree",
+      schedule: "Routine",
+      disarmed: "désarmée",
+      none: "aucun",
+      requestedBy: "Demandé par",
+      need: "Besoin",
+      reason: "Pourquoi",
+      rolePrompt: (file: string) => `Prompt de rôle (${file})`,
+      entry: "Entrée de room.json",
+    },
+    /** The chat action `propose_agent`, as the confirmation question and the results name it. */
+    describe: (need: string, room: string | null) =>
+      `demander à l'accueil un agent pour : ${need}${room ? ` (salle ${room})` : ""}`,
+    chat: {
+      started: (runId: number) => `L'accueil prépare une proposition d'agent (tour #${runId}). Elle arrivera dans À signer.`,
+      queued: "L'accueil est occupé : ta demande d'agent attend son prochain tour.",
+    },
   },
 } as const;

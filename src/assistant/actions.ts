@@ -10,7 +10,7 @@ import { REJECTED_DIR } from "./requests";
  * the directory of `chat.requests` (whitelisted by `chat.requests.actions`).
  * The core executes them with the code of the buttons and of the commands.
  */
-export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm"] as const;
+export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm", "propose_agent"] as const;
 export type ChatActionName = (typeof CHAT_ACTIONS)[number];
 
 const DECISIONS: readonly ChatActionName[] = ["approve", "reject", "revise"];
@@ -28,6 +28,8 @@ const actionFileSchema = z
     note: z.string().trim().min(1).max(5_000).optional(),
     /** The task of a run. */
     task: z.string().trim().min(1).max(20_000).optional(),
+    /** propose_agent: what no agent covers (the room, optional, is where the need comes from). */
+    need: z.string().trim().min(1).max(2_000).optional(),
   })
   .superRefine((file, ctx) => {
     if (file.id !== undefined && file.approvalId !== undefined && file.id !== file.approvalId) {
@@ -40,6 +42,8 @@ const actionFileSchema = z
       if (file.action !== "approve" && !file.note) {
         ctx.addIssue({ code: "custom", message: `${file.action} needs a note`, path: ["note"] });
       }
+    } else if (file.action === "propose_agent") {
+      if (!file.need) ctx.addIssue({ code: "custom", message: "propose_agent needs a need", path: ["need"] });
     } else if (!file.agent) {
       ctx.addIssue({ code: "custom", message: `${file.action} needs an agent`, path: ["agent"] });
     }
@@ -52,6 +56,7 @@ export type ChatAction = {
   agent?: string;
   note?: string;
   task?: string;
+  need?: string;
 };
 
 function describe(error: unknown): string {
@@ -139,6 +144,7 @@ export function takeChatActions(
       ...(file.agent ? { agent: file.agent } : {}),
       ...(file.note ? { note: file.note } : {}),
       ...(file.task ? { task: file.task } : {}),
+      ...(file.need ? { need: file.need } : {}),
     });
   }
   return { actions, refused };
@@ -182,6 +188,8 @@ export function describeAction(action: ChatAction): string {
       return t.arm(who);
     case "disarm":
       return t.disarm(who);
+    case "propose_agent":
+      return strings.agentProposal.describe(action.need ?? "", action.room ?? null);
   }
 }
 
