@@ -80,6 +80,8 @@ export const agentSchema = z.object({
   sprite: z.string().nullable().default(null),
   /** URL of the agent's iso character sheet; null or absent: a neutral person. */
   isoSprite: z.string().nullable().optional(),
+  /** Voxels per walk frame declared next to the iso sheet (`iso.json`); null or absent: the default of 3. */
+  isoStride: z.number().int().positive().nullable().optional(),
   armed: z.boolean().default(false),
   routines: z.array(routineSchema).default([]),
   lastRun: runSchema.nullable(),

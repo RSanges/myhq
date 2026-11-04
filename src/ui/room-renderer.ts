@@ -16,7 +16,7 @@ import {
 } from "./iso-floor";
 import type { LabelLayer } from "./room-labels";
 import { CELL, screenOf, type Point, type RoomLayout } from "./room-layout";
-import type { AgentView, RoomView } from "./room-model";
+import { VOXELS_PER_STEP, walkFrame, type AgentView, type RoomView } from "./room-model";
 import { RECEPTION_KEY } from "./reception";
 
 // The drawing of the floor, behind a small interface (create, draw a state,
@@ -63,8 +63,12 @@ export type RoomScene = {
 };
 
 export type RoomRenderer = {
-  /** Character sheet URL per agent key (a sheet that fails to load falls back to a neutral person). */
-  setSprites(urls: Record<string, string>): void;
+  /**
+   * Character sheet URL per agent key (a sheet that fails to load falls back to a
+   * neutral person), and the voxels per walk frame the sheets declare (a key
+   * without one walks at VOXELS_PER_STEP).
+   */
+  setSprites(urls: Record<string, string>, strides?: Record<string, number>): void;
   setTheme(theme: RoomTheme): void;
   /** The canvas has this CSS size now. */
   resize(cssWidth: number, cssHeight: number): void;
@@ -280,6 +284,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       });
   };
   let wanted: Record<string, string> = {};
+  let wantedStrides: Record<string, number> = {};
 
   // ---- The static floor ----
   let staticKey = "";
@@ -352,6 +357,12 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     return sheets.get(fallback) ?? null;
   };
 
+  /** Voxels per walk frame of the sheet drawn for `key`: its own declared stride, the default for the neutral person standing in. */
+  const strideFor = (key: string): number => {
+    const url = wanted[key];
+    return url && sheets.get(url) ? (wantedStrides[key] ?? VOXELS_PER_STEP) : VOXELS_PER_STEP;
+  };
+
   /** A folder held in front of the character: a few pixels of paper. */
   const drawFolder = (g: Graphics, view: AgentView, feet: Point, height: number) => {
     g.clear();
@@ -382,8 +393,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     get frames() {
       return frames;
     },
-    setSprites(urls) {
+    setSprites(urls, strides = {}) {
       wanted = urls;
+      wantedStrides = strides;
       for (const url of Object.values(urls)) loadSheet(url);
     },
     setTheme(next) {
@@ -489,7 +501,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         const row = sheetRow(agent.direction, agent.animation);
         node.height = sheet?.heights[row] ?? 100;
         node.sprite.visible = sheet !== null;
-        if (sheet) node.sprite.texture = sheet.frames[row]![agent.frame] ?? sheet.frames[row]![0]!;
+        const frame = agent.animation === "walk" && !reduced ? walkFrame(agent.walked, strideFor(agent.key)) : agent.frame;
+        if (sheet) node.sprite.texture = sheet.frames[row]![frame] ?? sheet.frames[row]![0]!;
         node.sprite.position.set(node.feet.x - SHEET.anchor.x, node.feet.y - SHEET.anchor.y);
         node.sprite.alpha = agent.alpha;
         drawFolder(node.folder, agent, node.feet, node.height);

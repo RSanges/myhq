@@ -44,6 +44,28 @@ export function isoSpriteUrl(room: string, agent: Agent): string | null {
   return `/api/sprites/${encodeURIComponent(room)}/${encodeURIComponent(agent.id)}?sheet=iso`;
 }
 
+/** Largest walk stride a sheet may declare (a floor cell is 16 voxels); anything else is ignored. */
+const STRIDE_MAX = 16;
+
+/**
+ * Voxels per walk frame of the agent's iso sheet: `walk.voxelsPerFrame` of the
+ * `iso.json` next to it (the format of scripts/iso/README.md), or null when
+ * there is no sheet, no such file or no sensible value (the floor then walks
+ * at the default stride of the humans).
+ */
+export function isoStrideOf(agent: Agent): number | null {
+  if (!agent.isoSprite || !isFile(agent.isoSprite)) return null;
+  const file = path.join(path.dirname(agent.isoSprite), "iso.json");
+  try {
+    if (fs.statSync(file).size > SPRITE_MAX_BYTES) return null;
+    const json = JSON.parse(fs.readFileSync(file, "utf8")) as { walk?: { voxelsPerFrame?: unknown } };
+    const stride = json.walk?.voxelsPerFrame;
+    return typeof stride === "number" && Number.isInteger(stride) && stride >= 1 && stride <= STRIDE_MAX ? stride : null;
+  } catch {
+    return null;
+  }
+}
+
 /** URL of the receptionist's own sheet (`onboarding.sprite` of myhq.json) when it is set and the file exists, otherwise null (the shipped one). */
 export function receptionSpriteUrl(home: string): string | null {
   const file = readReceptionSprite(home);

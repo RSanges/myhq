@@ -172,3 +172,37 @@ test("an isoSprite path that leaves the home makes the room invalid", () => {
   assert.equal(loadHome(config.home).rooms.length, 0);
   assert.match(loadHome(config.home).invalid[0]!.error, /isoSprite/);
 });
+
+test("the walk stride of an iso sheet is read from the iso.json next to it and exposed in /api/state", () => {
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "x",
+      agents: [
+        { ...agent, isoSprite: "rooms/demo/sprites/iso-scout.png" },
+        { ...agent, id: "writer", name: "Writer", isoSprite: "rooms/demo/other/iso-writer.png" },
+        { ...agent, id: "editor", name: "Editor", isoSprite: "rooms/demo/bad/iso-editor.png" },
+        { ...agent, id: "owl", name: "Owl" },
+      ],
+    },
+  );
+  const put = (file: string, content: Buffer | string) => {
+    const target = path.join(config.home, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  };
+  put("rooms/demo/sprites/iso-scout.png", PNG);
+  put("rooms/demo/sprites/iso.json", JSON.stringify({ walk: { voxelsPerFrame: 2 } }));
+  put("rooms/demo/other/iso-writer.png", PNG); // no iso.json beside it
+  put("rooms/demo/bad/iso-editor.png", PNG);
+  put("rooms/demo/bad/iso.json", JSON.stringify({ walk: { voxelsPerFrame: 0 } }));
+
+  const db = getDbAt(config.dbPath);
+  const scheduler = { enabled: false, running: false, timeZone: "Europe/Paris" };
+  const [scout, writer, editor, owl] = getState(db, loadHome(config.home), scheduler).rooms[0]!.agents;
+  assert.equal(scout!.isoStride, 2);
+  assert.equal(writer!.isoStride, null, "no iso.json: the default stride");
+  assert.equal(editor!.isoStride, null, "a nonsensical stride is ignored");
+  assert.equal(owl!.isoStride, null, "no iso sheet");
+});

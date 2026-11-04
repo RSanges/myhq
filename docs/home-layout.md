@@ -180,8 +180,11 @@ home's own mascot with the same rig:
   animations `idle` (2 frames, standing), `walk` (8 frames) and `type`
   (4 frames, seated, hands on a keyboard at desk height). Unused cells stay
   empty. Directions are drawn, never mirrored.
-- The floor picks the walk frame from the distance walked, 3 voxels per frame
-  (one floor cell is 16 voxels), so the feet do not slide. Sitting, thinking
+- The floor picks the walk frame from the distance walked, so the feet do not
+  slide: 3 voxels per frame by default (one floor cell is 16 voxels), or the
+  `walk.voxelsPerFrame` (1 to 16) of an `iso.json` placed in the same folder as
+  the sheet, in the format of `scripts/iso/README.md`. A mascot with a shorter
+  stride (2 voxels, say) declares it there. Sitting, thinking
   and sleeping hold the first typing frame (a bubble over the head says the
   rest); talking to a colleague and dropping a folder stand (`idle`).
 - The name over the head sits just above the highest opaque pixel of the

@@ -127,6 +127,13 @@ export function RoomPage() {
     }),
     [roomAgents, receptionHere],
   );
+  const strides = useMemo(
+    () =>
+      Object.fromEntries(
+        roomAgents.flatMap((agent) => (agent.isoSprite && agent.isoStride ? [[agent.key, agent.isoStride] as const] : [])),
+      ),
+    [roomAgents],
+  );
   const statusOf = useMemo(
     () => new Map(snapshot?.view.agents.map((agent) => [agent.key, agent]) ?? []),
     [snapshot],
@@ -221,6 +228,7 @@ export function RoomPage() {
                     board={boardForCanvas}
                     labels={{ userDesk: t.userDesk, trayCount: t.trayCount }}
                     sprites={sprites}
+                    strides={strides}
                     color={roomColor}
                     selected={selectedKey}
                     reduced={reduced}

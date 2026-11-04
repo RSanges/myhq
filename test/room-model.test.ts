@@ -34,6 +34,8 @@ import {
   type AgentView,
   type RoomInput,
   type RoomModel,
+  VOXELS_PER_STEP,
+  walkFrame,
   type RoomView,
 } from "../src/ui/room-model";
 
@@ -199,6 +201,7 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.ok(Math.hypot(walker.x - seat.x, walker.y - seat.y) > 1, "it left its chair");
   assert.ok(Math.hypot(walker.x - layout.user.stand.x, walker.y - layout.user.stand.y) > 1, "on its way");
   assert.ok(Math.abs(walker.x % 8) < 0.01 || Math.abs(walker.y % 8) < 0.01, "on a line through cell centres");
+  assert.ok(walker.walked > 0, "it exposes the distance walked, for the renderer to frame the walk");
   assert.equal(walking.pending, 0);
 
   assert.equal(agent(carrying).status.kind, "carrying");
@@ -495,4 +498,14 @@ test("a route is walked at a fraction of its length, facing the way it goes", ()
   assert.equal(pointOnRoute(route, 0.1).direction, "SW", "along +y: towards the lower left");
   assert.equal(pointOnRoute(route, 0.9).direction, "NE", "along -y: away from the viewer");
   assert.equal(pointOnRoute([{ x: 20, y: 0 }, { x: 0, y: 0 }], 0.5).direction, "NW");
+});
+
+test("the walk frame follows the stride of the sheet: 3 voxels by default, 2 for a sheet that declares it", () => {
+  assert.equal(VOXELS_PER_STEP, 3);
+  assert.equal(walkFrame(0), 0);
+  assert.equal(walkFrame(2.9), 0);
+  assert.equal(walkFrame(3), 1, "default stride: a new frame every 3 voxels");
+  assert.equal(walkFrame(6, 2), 3, "stride 2: the same distance is further in the cycle");
+  assert.equal(walkFrame(16, 2), 0, "8 frames of 2 voxels: one floor cell is a full cycle");
+  assert.equal(walkFrame(24), 0, "8 frames of 3 voxels: 24 voxels are a full cycle");
 });

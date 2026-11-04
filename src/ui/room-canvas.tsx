@@ -18,6 +18,8 @@ export type RoomCanvasProps = {
   labels: RoomScene["labels"];
   /** Character sheet URL per agent key (an iso sheet; a neutral person when it fails to load). */
   sprites: Record<string, string>;
+  /** Voxels per walk frame declared by an agent's own sheet; a key without one walks at the default. */
+  strides: Record<string, number>;
   /** Colour of the room (a normalized hex) for carpets, tiles and name tags; null for the neutral look. */
   color: string | null;
   selected: string | null;
@@ -124,7 +126,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
         renderer.resize(width, height);
         refreshZoom();
       }
-      renderer.setSprites(current.sprites);
+      renderer.setSprites(current.sprites, current.strides);
       renderer.draw(
         { view, labels: current.labels, color: current.color, selected: current.selected, reduced: current.reduced },
         now,

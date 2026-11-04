@@ -40,7 +40,10 @@ export const FOLDER_DROP_MS = 700;
 export const ASLEEP_AFTER_MS = 60_000;
 /** Walking speed, in voxels per second (a cell is 16 voxels). */
 export const WALK_SPEED = 48;
-/** Voxels walked per frame of the walk animation (iso-characters.json `walk.voxelsPerFrame`). */
+/**
+ * Voxels walked per frame of the walk animation when a sheet declares no stride
+ * of its own (iso-characters.json `walk.voxelsPerFrame`, the humans' one).
+ */
 export const VOXELS_PER_STEP = 3;
 /** The shortest walk leg, so that a neighbour is not reached in a blink. */
 export const MIN_LEG_MS = 500;
@@ -86,9 +89,9 @@ export function poseFrame(pose: Pose, at: number, phase: number, reduced: boolea
   return Math.floor((at + phase) / ms) % frames;
 }
 
-/** Frame of the walk after `walked` voxels: one frame per step, so the feet stay put on the floor. */
-export function walkFrame(walked: number): number {
-  return Math.floor(walked / VOXELS_PER_STEP) % POSES.walk.frames;
+/** Frame of the walk after `walked` voxels: one frame per `stride` voxels, so the feet stay put on the floor. */
+export function walkFrame(walked: number, stride: number = VOXELS_PER_STEP): number {
+  return Math.floor(walked / stride) % POSES.walk.frames;
 }
 
 // ---- What the model is fed with ---------------------------------------------------
@@ -432,6 +435,8 @@ export type AgentView = {
   /** Animation of the character sheet, and frame in it. */
   animation: Animation;
   frame: number;
+  /** Voxels walked on the current leg (0 unless walking, and with reduced motion): the renderer frames the walk with the sheet's own stride. */
+  walked: number;
   /** At its desk (drawn in its chair, or at its spot behind the counter) rather than walking around. */
   seated: boolean;
   carrying: boolean;
@@ -529,6 +534,7 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
       pose,
       animation: POSES[drawn].animation,
       frame: drawn === "walk" ? (reduced ? 0 : walkFrame(where.walked ?? 0)) : poseFrame(drawn, at, phase, reduced),
+      walked: drawn === "walk" && !reduced ? (where.walked ?? 0) : 0,
       seated,
       carrying: extra.carrying ?? false,
       bubble,

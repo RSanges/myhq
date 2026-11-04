@@ -15,7 +15,7 @@ import type {
 import { NOTIFICATION_NOTE, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { toPosix, type Home } from "./rooms";
-import { isoSpriteUrl, receptionSpriteUrl, spriteUrl } from "./sprites";
+import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
 // Shapes returned by the API (documented in docs/api.md).
@@ -214,6 +214,8 @@ export type StateDto = {
       sprite: string | null;
       /** URL of the iso character sheet of the floor, or null for a neutral person. */
       isoSprite: string | null;
+      /** Voxels per walk frame the iso sheet declares (`iso.json` next to it), or null for the default. */
+      isoStride: number | null;
       /** Armed state of the routines (the database value, or room.json's until changed). */
       armed: boolean;
       routines: { cron: string; task: string | null; nextAt: string | null }[];
@@ -265,6 +267,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           allowedTools: agent.allowedTools,
           sprite: spriteUrl(room.name, agent),
           isoSprite: isoSpriteUrl(room.name, agent),
+          isoStride: isoStrideOf(agent),
           armed: isArmed(db, room.name, agent),
           routines: agent.routines.map((routine) => ({
             cron: routine.cron,

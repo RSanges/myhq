@@ -221,6 +221,7 @@ restart.
           "allowedTools": ["WebSearch", "WebFetch", "mcp__hq__*"],
           "sprite": null,
           "isoSprite": "/api/sprites/demo/scout?sheet=iso",
+          "isoStride": null,
           "armed": false,
           "routines": [{ "cron": "0 7 * * 1-5", "task": null, "nextAt": "2026-11-03T06:00:00.000Z" }],
           "state": "idle",
@@ -245,6 +246,9 @@ restart.
   an isometric character sheet (`isoSprite` in `room.json`) and the file
   exists, `null` otherwise (the floor then draws one of the neutral people
   shipped with the app).
+- `isoStride`: voxels per walk frame of that sheet, read from `walk.voxelsPerFrame`
+  of the `iso.json` next to it; `null` when there is no such file or value (the
+  floor then walks at 3 voxels per frame).
 - `sprite`: `/api/sprites/<room>/<agent>` when the agent declares an old
   top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
   no longer draws it.
