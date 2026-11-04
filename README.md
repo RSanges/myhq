@@ -184,6 +184,46 @@ pm2 startup                  # prints a command to run once with sudo
 pm2 save
 ```
 
+## Accès depuis le téléphone et le Mac (Tailscale)
+
+MyHQ listens on `127.0.0.1` only, and that does not change. To read and
+validate from your phone or your Mac, put the PC and your devices on a private
+[Tailscale](https://tailscale.com/) network (a tailnet) and let Tailscale serve
+the app over HTTPS on that network. Nothing is exposed to the Internet.
+
+1. Install Tailscale on the PC and sign in.
+2. Install it on the phone and on the Mac, and sign in with the **same
+   account**. The three devices now see each other.
+3. On the PC, publish the app on the tailnet:
+
+   ```sh
+   tailscale serve --bg 4242
+   ```
+
+   or, spelled out: `tailscale serve --bg --https=443 http://127.0.0.1:4242`.
+   Tailscale answers on `https://<machine>.<tailnet>.ts.net` with its own
+   certificates (enable HTTPS in the admin console if it asks) and forwards to
+   the local app. Check it with `tailscale serve status`. If you changed
+   `HQ_PORT`, use that port instead of 4242.
+4. In `.env.local`, set the address the alerts will point to, then restart the
+   service (`pm2 restart myhq --update-env`):
+
+   ```sh
+   HQ_PUBLIC_URL=https://<machine>.<tailnet>.ts.net
+   ```
+
+   Every Telegram alert about an item then ends with « Ouvrir : <url>/#approval-<id> »,
+   a failed run links to `/#run-<id>`, and a brief or a summary ends with
+   « Bureau : <url> ». The link opens the desk on that item: the right tab, the
+   body open, the item highlighted for a moment. Without `HQ_PUBLIC_URL`,
+   alerts are unchanged.
+5. Open the address on the phone or the Mac (or follow a link of an alert).
+
+The tailnet is the access control: only the devices signed in to your account
+can reach the address, and MyHQ has no login of its own. Do not use
+`tailscale funnel`, which would open it to the Internet. To undo, run
+`tailscale serve reset` (and unset `HQ_PUBLIC_URL`).
+
 ## Why not the Agent SDK
 
 Claude subscription terms allow using the unmodified Claude Code binary on a

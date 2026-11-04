@@ -604,6 +604,16 @@ of an item that has an http(s) `payload.url` (see the approval cycle);
 ask for the reason or the comment, which the next text message answers.
 Failure alerts stay plain text.
 
+**Links to the desk.** When `HQ_PUBLIC_URL` is set (the address of the desk
+from another device, see the README on Tailscale), an alert about an item and
+a notification end with « Ouvrir : <url>/#approval-<id> », a failure alert
+with « Ouvrir : <url>/#run-<id> », and a brief or summary with
+« Bureau : <url> » (`src/server/public-url.ts`). The desk follows these
+hashes on load and on `hashchange` (`src/ui/deep-link.ts`): the tab of the
+item (pending or history), scrolled into view, body open, ringed for a moment;
+a run scrolls the feed to its start. An unknown id is ignored. Unset, nothing
+changes.
+
 Voice notes and audio files are downloaded to `<home>/data/assistant/voice/`,
 transcribed by the home's `transcribe` command, deleted, then handled as text.
 Photos (largest size) and documents are saved into the home's `dropDir` under a
