@@ -7,7 +7,7 @@ import { Desk } from "./desk";
 import { Feed } from "./feed";
 import { Meter } from "./meter";
 import { RoutineJournal } from "./routine-journal";
-import { pendingTitle, selectAgents, selectHistory, selectPending } from "./model";
+import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
 import { strings } from "./strings";
 import { Team } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
@@ -21,12 +21,13 @@ export function Dashboard() {
   const target = useDeepLink();
   const wide = useMediaQuery("(min-width: 40rem)");
   const pending = useMemo(() => selectPending(model), [model]);
+  const unseen = useMemo(() => selectUnseen(model), [model]);
   const history = useMemo(() => selectHistory(model), [model]);
   const agents = useMemo(() => selectAgents(model), [model]);
 
   useEffect(() => {
-    document.title = pendingTitle(strings.app.title, pending.length);
-  }, [pending.length]);
+    document.title = pendingTitle(strings.app.title, pending.length, unseen.length);
+  }, [pending.length, unseen.length]);
 
   const connectionTone =
     connection === "live" ? "bg-ok" : connection === "reconnecting" ? "bg-warn" : "bg-muted";
@@ -77,7 +78,14 @@ export function Dashboard() {
             <Meter usage={model.usage} failed={usageFailed} />
           </div>
           <div className="order-1 min-w-0">
-            <Desk pending={pending} history={history} dispatch={dispatch} target={target} />
+            <Desk
+              pending={pending}
+              unseen={unseen}
+              history={history}
+              agents={agents}
+              dispatch={dispatch}
+              target={target}
+            />
           </div>
           <div className="order-3 min-w-0 space-y-6">
             <Team agents={agents} invalidRooms={model.invalidRooms} scheduler={model.scheduler} dispatch={dispatch} />

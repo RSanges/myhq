@@ -7,7 +7,12 @@ export type Db = Database.Database;
 export const RUN_STATUSES = ["running", "done", "failed", "cancelled"] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "revise"] as const;
+/**
+ * `pending` waits for a decision (approved, rejected, revise). `unseen` and
+ * `seen` belong to the informational items (`notifyTypes`): they wait for a
+ * look, not a decision, and `seen` is where they end up (see approvals.ts).
+ */
+export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "revise", "unseen", "seen"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
 export const TASK_STATUSES = ["pending", "in_progress", "done", "blocked"] as const;
@@ -209,7 +214,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL CHECK (status IN (${list(APPROVAL_STATUSES)})),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'revise')),
   decision_note TEXT,
   decided_at TEXT,
   seen_by_agent_at TEXT,
@@ -395,6 +400,45 @@ ALTER TABLE approvals ADD COLUMN annotations TEXT NOT NULL DEFAULT '[]';
 -- decision it had is kept here, a JSON array of { decision, note, annotations,
 -- decidedAt }, oldest first.
 ALTER TABLE approvals ADD COLUMN decision_history TEXT NOT NULL DEFAULT '[]';
+`,
+  },
+  {
+    version: 11,
+    sql: `
+-- Informational items (notifyTypes) no longer vanish: they wait on the desk as
+-- 'unseen' until the user marks them 'seen'. SQLite cannot widen a CHECK
+-- constraint, so the table is rebuilt with the same rows (the items that were
+-- born approved keep their status), then its indexes and triggers come back.
+CREATE TABLE approvals_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  run_id INTEGER REFERENCES runs(id),
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL CHECK (status IN (${list(APPROVAL_STATUSES)})),
+  decision_note TEXT,
+  decided_at TEXT,
+  seen_by_agent_at TEXT,
+  notified_at TEXT,
+  created_at TEXT NOT NULL,
+  annotations TEXT NOT NULL DEFAULT '[]',
+  decision_history TEXT NOT NULL DEFAULT '[]'
+);
+INSERT INTO approvals_new (id, room, agent_id, run_id, type, title, body, payload, status, decision_note, decided_at,
+    seen_by_agent_at, notified_at, created_at, annotations, decision_history)
+  SELECT id, room, agent_id, run_id, type, title, body, payload, status, decision_note, decided_at,
+    seen_by_agent_at, notified_at, created_at, annotations, decision_history FROM approvals;
+DROP TABLE approvals;
+ALTER TABLE approvals_new RENAME TO approvals;
+CREATE INDEX IF NOT EXISTS approvals_status ON approvals (status);
+CREATE INDEX IF NOT EXISTS approvals_agent ON approvals (room, agent_id);
+CREATE TRIGGER IF NOT EXISTS approvals_changed_insert AFTER INSERT ON approvals
+BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
+CREATE TRIGGER IF NOT EXISTS approvals_changed_update AFTER UPDATE OF status ON approvals
+BEGIN INSERT INTO changes (entity, entity_id) VALUES ('approval', NEW.id); END;
 `,
   },
 ];

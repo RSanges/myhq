@@ -64,3 +64,21 @@ export const formatCost = (value: number): string => usd.format(value);
 export function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max).trimEnd()}...` : text;
 }
+
+/**
+ * How long ago `iso` was, as « il y a 2 h »: minutes under an hour, hours
+ * under a day, days under two weeks, then the date. An unreadable date is
+ * returned as is, a future one counts as « à l'instant ».
+ */
+export function formatAge(iso: string, at: number = Date.now()): string {
+  const date = toDate(iso);
+  if (!date) return iso;
+  const minutes = Math.floor((at - date.getTime()) / 60_000);
+  const t = strings.desk.age;
+  if (minutes < 1) return t.now;
+  if (minutes < 60) return t.minutes(minutes);
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t.hours(hours);
+  const days = Math.floor(hours / 24);
+  return days < 14 ? t.days(days) : shortDay.format(date);
+}

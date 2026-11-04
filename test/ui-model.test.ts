@@ -117,6 +117,7 @@ const baseState = (over: Partial<State> = {}): State => ({
   firings: [],
   approvals: {
     pending: [approval({ id: 2 })],
+    unseen: [],
     history: [approval({ id: 1, status: "approved", decidedAt: "2026-11-02T11:00:00.000Z" })],
   },
   recent: { events: [event()], messages: [message()] },

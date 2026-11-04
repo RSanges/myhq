@@ -96,7 +96,7 @@ const stateWith = (rooms: string[], reception: State["reception"]): State =>
     reception,
     scheduler: { enabled: false, running: false, timeZone: "UTC" },
     firings: [],
-    approvals: { pending: [], history: [] },
+    approvals: { pending: [], unseen: [], history: [] },
     recent: { events: [], messages: [] },
   }) as unknown as State;
 

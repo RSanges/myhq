@@ -1,4 +1,4 @@
-import { approvalKeyboard } from "../assistant/approval-buttons";
+import { approvalKeyboard, seenKeyboard } from "../assistant/approval-buttons";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
@@ -13,6 +13,8 @@ type Fetch = typeof fetch;
 export type SendOptions = {
   /** The alert is about this pending approval: it gets the decision buttons. */
   approvalId?: number;
+  /** The alert is about this informational item (« À regarder »): it gets the one « Vu » button. */
+  seenId?: number;
 };
 
 /** Sends an alert. Resolves to false when nothing was sent; never throws. */
@@ -20,9 +22,9 @@ export type Send = (text: string, options?: SendOptions) => Promise<boolean>;
 
 /**
  * Sends a plain text Telegram message through the Bot API. A pending-approval
- * alert carries Approve, Reject and Revise buttons, but only when MyHQ reads
- * the bot's updates (HQ_TELEGRAM_POLLING=true): otherwise nobody would receive
- * the button presses. Does nothing when HQ_TELEGRAM_BOT_TOKEN or
+ * alert carries Approve, Reject and Revise buttons, an informational one a
+ * single « Vu » button, but only when MyHQ reads the bot's updates
+ * (HQ_TELEGRAM_POLLING=true): otherwise nobody would receive the button presses. Does nothing when HQ_TELEGRAM_BOT_TOKEN or
  * HQ_TELEGRAM_CHAT_ID is missing, and never throws. The token is never logged.
  */
 export async function notify(
@@ -35,7 +37,13 @@ export async function notify(
   const chatId = env.HQ_TELEGRAM_CHAT_ID?.trim();
   if (!token || !chatId) return false;
   const apiBase = (env.HQ_TELEGRAM_API_BASE?.trim() || DEFAULT_TELEGRAM_API_BASE).replace(/\/+$/, "");
-  const buttons = options.approvalId !== undefined && pollingEnabled(env);
+  const keyboard = !pollingEnabled(env)
+    ? null
+    : options.approvalId !== undefined
+      ? approvalKeyboard(options.approvalId)
+      : options.seenId !== undefined
+        ? seenKeyboard(options.seenId)
+        : null;
   try {
     const response = await fetchImpl(`${apiBase}/bot${token}/sendMessage`, {
       method: "POST",
@@ -44,7 +52,7 @@ export async function notify(
         chat_id: chatId,
         text: text.slice(0, 4000),
         disable_web_page_preview: true,
-        ...(buttons ? { reply_markup: approvalKeyboard(options.approvalId!) } : {}),
+        ...(keyboard ? { reply_markup: keyboard } : {}),
       }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -64,20 +72,22 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
 
 /**
  * Notifies every pending approval not notified yet, and every informational
- * item (a type of `notifyTypes`, born approved by hq_submit). Approvals are
+ * item (a type of `notifyTypes`, born `unseen` by hq_submit; the ones stored
+ * as approved before that status existed are swept the same way). Approvals are
  * created by the HQ MCP server, which runs without the Telegram variables, so
  * the app process sweeps them (during and after each run). A pending item gets
  * the short alert with the buttons; an informational one is sent in full, its
- * alert line then its body as is, cut in messages of 4000 characters, with no
- * buttons. When HQ_PUBLIC_URL is set (read from `env`), each one ends with the
- * line « Ouvrir : <url>/#approval-<id> ».
+ * alert line then its body as is, cut in messages of 4000 characters, with a
+ * single « Vu » button on the last one when it is still unseen. When
+ * HQ_PUBLIC_URL is set (read from `env`), each one ends with the line
+ * « Ouvrir : <url>/#approval-<id> ».
  */
 export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env: Env = process.env): Promise<void> {
   const rows = db
     .prepare(
       `SELECT a.id, a.room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
        FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
-       WHERE a.notified_at IS NULL AND (a.status = 'pending'
+       WHERE a.notified_at IS NULL AND (a.status IN ('pending', 'unseen')
          OR (a.status = 'approved' AND a.decision_note = ? AND a.decided_at = a.created_at))
        ORDER BY a.id`,
     )
@@ -102,7 +112,11 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env
     const link = approvalLinkLine(row.id, env);
     const full = `${strings.notify.notification(row)}\n\n${row.body}`;
     let sent = false;
-    for (const part of appendLine(splitMessage(full), link)) sent = (await send(part)) || sent;
+    const parts = appendLine(splitMessage(full), link);
+    for (const [index, part] of parts.entries()) {
+      const last = index === parts.length - 1;
+      sent = (await send(part, row.status === "unseen" && last ? { seenId: row.id } : undefined)) || sent;
+    }
     if (sent) recordBotMessage(db, withLine(full, link), "notification");
   }
 }

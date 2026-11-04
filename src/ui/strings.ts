@@ -18,6 +18,8 @@ export const strings = {
     invalidRoomsTitle: "Salles invalides",
     roadmapLink: "Feuille de route",
     roomLink: "L'étage",
+    /** In the tab title, after the number of items to validate. */
+    watchCount: (count: number) => `${count} à regarder`,
   },
   desk: {
     title: "Le bureau",
@@ -25,6 +27,34 @@ export const strings = {
     pendingTab: (count: number) => `À valider (${count})`,
     historyTab: "Historique",
     emptyPending: "Rien n'attend votre validation.",
+    /** The section of the informational items (notifyTypes): alerts and briefs that stay until they are looked at. */
+    watchTitle: (count: number) => `À regarder (${count})`,
+    watchHint: "Rien à décider : marque chaque item comme vu quand tu l'as lu.",
+    seen: "Vu",
+    askAssistant: (name: string) => `Demander à ${name}`,
+    askLabel: (name: string) => `Ta demande pour ${name}`,
+    /** What the request to the assistant says until the user edits it. */
+    askDefault: "Prépare une réponse à ce mail",
+    askSend: "Envoyer la demande",
+    expandAll: "Tout déplier",
+    collapseAll: "Tout replier",
+    /** A folded item says what it is: the room, the agent, the type, the title. */
+    itemSummary: (p: { title: string; agent: string; type: string }) => `${p.title}, ${p.agent}, ${p.type}`,
+    typeLabels: {
+      mail_alert: "Alerte mail",
+      mail_reply: "Réponse mail",
+      community_reply: "Réponse au fil",
+      brief: "Brief",
+      pull_request: "Pull request",
+      blog_post: "Article",
+      room_proposal: "Salle",
+    } as Record<string, string>,
+    age: {
+      now: "à l'instant",
+      minutes: (n: number) => `il y a ${n} min`,
+      hours: (n: number) => `il y a ${n} h`,
+      days: (n: number) => `il y a ${n} j`,
+    },
     emptyHistory: "Aucun item traité pour l'instant.",
     submittedBy: (agent: string, room: string) => `Apporté par ${agent} (${room})`,
     emptyBody: "(sans contenu)",
@@ -67,6 +97,8 @@ export const strings = {
       rejected: "Refusé",
       revise: "À retravailler",
       pending: "À valider",
+      unseen: "À regarder",
+      seen: "Vu",
     },
     guard: {
       pending: (count: number) =>
@@ -87,7 +119,6 @@ export const strings = {
     submittedOn: (date: string) => `Soumis le ${date}`,
     /** Title of a room proposal on the desk, whatever title the agent gave it. */
     roomProposalTitle: (room: string) => `Proposition de salle : ${room}`,
-    openContent: "Voir le contenu",
   },
   /** What the onboarding run asks its agent to write, per language of the home. */
   onboarding: {
@@ -450,6 +481,8 @@ export const strings = {
       ROOM_INVALID: "La configuration de la salle est invalide.",
       AGENT_BUSY: "Cet agent a déjà un tour en cours. Réessayez quand il aura fini.",
       APPROVAL_ALREADY_DECIDED: "Cet item a déjà été traité.",
+      APPROVAL_NOT_DECIDABLE: "Cet item n'attend aucune décision : marque-le comme vu.",
+      APPROVAL_NOT_WATCHABLE: "Cet item n'est pas à regarder : il attend une décision ou a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
       ROADMAP_NOT_FOUND: "Aucune feuille de route valide.",
       TARGET_NOT_FOUND: "Aucun dossier à ce chemin.",
@@ -514,6 +547,13 @@ export const strings = {
     yes: "Oui",
     no: "Non",
     failedTurn: "Pas de réponse",
+    /** What the chat reads when the user asks about an item of « À regarder »: the request, then the item. */
+    itemContext: (p: { request: string; id: number; type: string; title: string; agent: string; room: string; body: string }) =>
+      [
+        p.request,
+        `Contexte : item #${p.id} (${p.type}) « ${p.title} », apporté par ${p.agent} (${p.room}).`,
+        p.body,
+      ].join("\n\n"),
     dispatched: (agent: string, runId: number) => `Tâche transmise à ${agent}, tour n° ${runId} lancé`,
     selectionTitle: "Ta sélection",
     selectionSend: "Envoyer la sélection",
@@ -567,6 +607,8 @@ export const strings = {
       `#${p.id} ${p.room} / ${p.agent} : ${p.title}`,
     decided: (id: number, label: string) => `Item #${id} : ${label}.`,
     alertDecided: (text: string, label: string) => `${text}\n\nDécision : ${label}`,
+    /** An informational alert after « Vu »: the text as it was, then the mark (the button goes). */
+    alertSeen: (text: string, label: string) => `${text}\n\n${label}`,
     branchHandover: (branch: string, sha: string | null) =>
       `Branche ${branch}${sha ? ` (commit ${sha.slice(0, 10)})` : ""}. L'agent ne pousse pas : depuis le dépôt cible, lance les commandes du message suivant.`,
     askReject: (id: number) =>

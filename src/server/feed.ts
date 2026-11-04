@@ -76,7 +76,11 @@ export type ApprovalDto = {
   decisionHistory: DecisionRecord[];
   /** The task that executes the item once approved (`onApproval: "task"`) has run: the action happened. */
   actionDone: boolean;
-  /** An informational item (`notifyTypes`), born approved: nothing to revise. */
+  /**
+   * An informational item (`notifyTypes`): nothing to decide or revise. It is
+   * `unseen` then `seen`; the ones stored before that status existed were
+   * born `approved`, with a note, and read the same way.
+   */
   informational: boolean;
   decidedAt: string | null;
   createdAt: string;
@@ -142,7 +146,10 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
   annotations: parseAnnotations(r.annotations),
   decisionHistory: parseDecisionHistory(r.decision_history),
   actionDone: r.action_done === 1,
-  informational: r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at,
+  informational:
+    r.status === "unseen" ||
+    r.status === "seen" ||
+    (r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at),
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });
@@ -221,7 +228,8 @@ export type StateDto = {
   reception: { room: string | null; sprite: string | null; runs: RunDto[] };
   scheduler: SchedulerInfo;
   firings: FiringDto[];
-  approvals: { pending: ApprovalDto[]; history: ApprovalDto[] };
+  /** `pending` waits for a decision, `unseen` (« À regarder ») for a look, `history` is the rest. */
+  approvals: { pending: ApprovalDto[]; unseen: ApprovalDto[]; history: ApprovalDto[] };
   recent: { events: EventDto[]; messages: MessageDto[] };
 };
 
@@ -284,9 +292,12 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
       pending: (
         db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'pending' ORDER BY a.id`).all() as ApprovalRowWithAction[]
       ).map(toApproval),
+      unseen: (
+        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'unseen' ORDER BY a.id`).all() as ApprovalRowWithAction[]
+      ).map(toApproval),
       history: (
         db
-          .prepare(`${APPROVAL_SELECT} WHERE a.status <> 'pending' ORDER BY a.decided_at DESC, a.id DESC LIMIT 100`)
+          .prepare(`${APPROVAL_SELECT} WHERE a.status NOT IN ('pending', 'unseen') ORDER BY a.decided_at DESC, a.id DESC LIMIT 100`)
           .all() as ApprovalRowWithAction[]
       ).map(toApproval),
     },

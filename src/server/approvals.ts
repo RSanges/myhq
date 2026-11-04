@@ -2,7 +2,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { annotationsSchema, decisionText, parseAnnotations, type Annotation } from "./annotations";
 import { getConfig, type HqConfig } from "./config";
-import { now, type ApprovalRow, type Db } from "./db";
+import { now, type ApprovalRow, type ApprovalStatus, type Db } from "./db";
 import { HqError } from "./errors";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
@@ -113,6 +113,9 @@ export function decideApproval(
       const note = decision.note || null;
       const annotations = decision.annotations ?? [];
       let history = parseDecisionHistory(row.decision_history);
+      if (isWatchStatus(row.status)) {
+        throw new HqError("APPROVAL_NOT_DECIDABLE", 409, `Approval #${id} is informational: mark it seen, there is nothing to decide.`);
+      }
       if (row.status !== "pending") {
         if (decision.decision !== "revise") {
           throw new HqError("APPROVAL_ALREADY_DECIDED", 409, `Approval #${id} is already ${row.status}.`);
@@ -170,4 +173,31 @@ export function decideApproval(
     }
   }
   return approval;
+}
+
+/** Whether an item is informational (`unseen` or `seen`): it waits for a look, never for a decision. */
+export function isWatchStatus(status: ApprovalStatus): status is "unseen" | "seen" {
+  return status === "unseen" || status === "seen";
+}
+
+/**
+ * « Vu »: an informational item (`notifyTypes`, status `unseen`) leaves the
+ * desk's « À regarder » section and stays in the history. Idempotent, since
+ * the desk and the Telegram button may both press it: a `seen` item is
+ * returned as is. Any other item is not concerned (`APPROVAL_NOT_WATCHABLE`).
+ * Nothing wakes: no task is written, and the agent never reads it back.
+ */
+export function markApprovalSeen(db: Db, id: number): ApprovalDto {
+  return db
+    .transaction(() => {
+      const row = db.prepare("SELECT status FROM approvals WHERE id = ?").get(id) as { status: ApprovalStatus } | undefined;
+      if (!row) throw new HqError("APPROVAL_NOT_FOUND", 404, `No approval #${id}.`);
+      if (row.status === "unseen") {
+        db.prepare("UPDATE approvals SET status = 'seen', decided_at = ? WHERE id = ?").run(now(), id);
+      } else if (row.status !== "seen") {
+        throw new HqError("APPROVAL_NOT_WATCHABLE", 409, `Approval #${id} is not an informational item to look at.`);
+      }
+      return toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
+    })
+    .immediate();
 }

@@ -92,7 +92,7 @@ export function reducer(model: Model, action: Action): Model {
         invalidRooms: state.invalidRooms,
         reception: state.reception,
         latestRuns,
-        approvals: indexApprovals([state.approvals.pending, state.approvals.history]),
+        approvals: indexApprovals([state.approvals.pending, state.approvals.unseen, state.approvals.history]),
         events: state.recent.events,
         messages: state.recent.messages,
         scheduler: state.scheduler,
@@ -163,10 +163,17 @@ export function selectPending(model: Model): Approval[] {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
 }
 
-/** Decided items, most recently decided first. */
+/** Informational items waiting for a look (« À regarder »), oldest first. */
+export function selectUnseen(model: Model): Approval[] {
+  return Object.values(model.approvals)
+    .filter((approval) => approval.status === "unseen")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+}
+
+/** Handled items, most recently handled first. */
 export function selectHistory(model: Model): Approval[] {
   return Object.values(model.approvals)
-    .filter((approval) => approval.status !== "pending")
+    .filter((approval) => approval.status !== "pending" && approval.status !== "unseen")
     .sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? "") || b.id - a.id)
     .slice(0, MAX_HISTORY);
 }
@@ -280,8 +287,15 @@ export function roleFileName(role: string): string {
   return role.split("/").pop() ?? role;
 }
 
-export function pendingTitle(base: string, pending: number): string {
-  return pending > 0 ? `(${pending}) ${base}` : base;
+/** The tab title: the items to validate and the items to look at are counted apart. */
+export function pendingTitle(base: string, pending: number, unseen = 0): string {
+  const counts = [pending > 0 ? `(${pending})` : null, unseen > 0 ? `(${strings.app.watchCount(unseen)})` : null];
+  return [...counts.filter((count) => count !== null), base].join(" ");
+}
+
+/** The label of an item type: the French one when the type is known, else the type with spaces. */
+export function typeLabel(type: string): string {
+  return strings.desk.typeLabels[type] ?? type.replace(/_/g, " ");
 }
 
 /** Item types whose payload may carry a local branch to push (a dev agent never pushes). */

@@ -23,13 +23,15 @@ export const runAnchor = (id: number): string => `run-${id}`;
 export const approvalHash = (id: number): string => `#${approvalAnchor(id)}`;
 export const runHash = (id: number): string => `#${runAnchor(id)}`;
 
-export const tabOf = (status: string): DeskTab => (status === "pending" ? "pending" : "history");
+/** The tab of an item. An unseen one is in its own section above the tabs: the current tab is kept. */
+export const tabOf = (status: string): DeskTab | null =>
+  status === "pending" ? "pending" : status === "unseen" ? null : "history";
 
 /** The tab and id to show for an approval link, or null when it is not an approval link or the item is unknown. */
 export function resolveApprovalLink(
   link: DeepLink | null,
   items: readonly { id: number; status: string }[],
-): { id: number; tab: DeskTab } | null {
+): { id: number; tab: DeskTab | null } | null {
   if (!link || link.kind !== "approval") return null;
   const item = items.find((each) => each.id === link.id);
   return item ? { id: item.id, tab: tabOf(item.status) } : null;

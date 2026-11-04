@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { AnnotatedBody } from "./annotated-body";
 import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
-import { decideApproval, errorText } from "./api";
+import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
 import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
-import { formatDateTime } from "./format";
-import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, type Action } from "./model";
+import { excerpt } from "./excerpt";
+import { formatAge, formatDateTime } from "./format";
+import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, typeLabel, type Action, type TeamAgent } from "./model";
+import { chipStyle } from "./room-color";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
@@ -17,18 +19,137 @@ import type { DeepLinkTarget } from "./use-deep-link";
 type Dispatch = (action: Action) => void;
 type NoteMode = "rejected" | "revise";
 
-const decisionTone = { approved: "ok", rejected: "danger", revise: "warn", pending: "neutral" } as const;
+const decisionTone = {
+  approved: "ok",
+  rejected: "danger",
+  revise: "warn",
+  pending: "neutral",
+  unseen: "accent",
+  seen: "neutral",
+} as const;
 
+/** Who brought an item, as the folded line shows it: the agent's name and the colour of its room. */
+type Who = { name: string; color: string | null };
+
+/** How often the ages (« il y a 2 h ») are refreshed. */
+const AGE_REFRESH_MS = 60_000;
+
+/** The time of day, refreshed once a minute, for the ages of the folded lines. */
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), AGE_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+/** Who submitted it and when: the title and the type are on the folded line above. */
 function ApprovalHeader({ approval }: { approval: Approval }) {
   return (
-    <header className="space-y-1">
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-        <Badge tone="neutral">{approval.type}</Badge>
-        <span>{strings.desk.submittedBy(approval.agentId, approval.room)}</span>
-        <span>{strings.desk.submittedOn(formatDateTime(approval.createdAt))}</span>
-      </p>
-      <h3 className="break-words text-base font-semibold">{approvalTitle(approval)}</h3>
-    </header>
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+      <span>{strings.desk.submittedBy(approval.agentId, approval.room)}</span>
+      <span>{strings.desk.submittedOn(formatDateTime(approval.createdAt))}</span>
+    </p>
+  );
+}
+
+/** What every card of the desk gets to draw its folded line and its fold state. */
+type ItemProps = {
+  open: boolean;
+  onToggle: () => void;
+  /** Folds the item: it was handled, and would otherwise reappear unfolded in the history. */
+  fold: () => void;
+  /** Reached by a deep link: ringed for a moment. */
+  flash: boolean;
+  who: Who;
+  now: number;
+};
+
+/**
+ * An item of the desk: one compact line (the room colour, the agent, the type,
+ * the title, the first line of the body, the age) that is a real button, and
+ * under it the whole item when unfolded. Whether it is unfolded is the desk's
+ * to say, so that a refresh of the data, a tab switch or « Tout déplier » all
+ * agree. Once unfolded, the body stays mounted (hidden when folded again), so
+ * a note being typed is not lost by folding.
+ */
+function DeskItem({
+  approval,
+  open,
+  onToggle,
+  flash,
+  who,
+  now,
+  children,
+}: {
+  approval: Approval;
+  open: boolean;
+  onToggle: () => void;
+  /** Reached by a deep link: ringed for a moment. */
+  flash: boolean;
+  who: Who;
+  now: number;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(open);
+  if (open && !mounted) setMounted(true);
+  const tint = chipStyle(who.color);
+  const panelId = `item-${approval.id}`;
+  const waiting = approval.status === "pending" || approval.status === "unseen";
+  const age = formatAge(waiting ? approval.createdAt : (approval.decidedAt ?? approval.createdAt), now);
+  const title = approvalTitle(approval);
+  const line = useMemo(() => (open ? "" : excerpt(approval.body, title)), [open, approval.body, title]);
+  return (
+    <li
+      id={approvalAnchor(approval.id)}
+      style={tint ?? undefined}
+      className={`deep-target rounded-lg border border-line bg-card ${tint ? "border-l-4 border-l-[var(--room-color)]" : ""} ${flash ? "deep-flash" : ""}`}
+    >
+      <h3 className="text-sm">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={mounted ? panelId : undefined}
+          onClick={onToggle}
+          className="flex min-h-12 w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg px-3 py-2 text-left hover:bg-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-14 sm:flex-nowrap"
+        >
+          <span
+            aria-hidden
+            title={approval.room}
+            className={`size-2.5 shrink-0 rounded-full ${tint ? "bg-[var(--room-color)]" : "bg-line"}`}
+          />
+          <span className="max-w-[40%] shrink-0 truncate text-xs text-muted sm:max-w-40">{who.name}</span>
+          <Badge tone="neutral">{typeLabel(approval.type)}</Badge>
+          <span className="order-1 flex min-w-0 basis-full gap-x-1.5 sm:order-none sm:basis-0 sm:flex-1">
+            <span
+              className={`min-w-0 font-semibold ${open ? "break-words" : "max-w-[60%] shrink-0 truncate"}`}
+            >
+              {title}
+            </span>
+            {line !== "" && <span className="min-w-0 flex-1 truncate text-muted">{line}</span>}
+          </span>
+          <span className="ml-auto shrink-0 text-xs text-muted sm:ml-0">{age}</span>
+          <svg
+            aria-hidden
+            viewBox="0 0 16 16"
+            className={`size-4 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M6 3l5 5-5 5" />
+          </svg>
+        </button>
+      </h3>
+      {mounted && (
+        <div id={panelId} hidden={!open} className="space-y-3 border-t border-line p-4">
+          {children}
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -62,13 +183,12 @@ function PendingCard({
   onApproved,
   annotations,
   onAnnotations,
-  flash,
+  item,
 }: {
   approval: Approval;
   dispatch: Dispatch;
   onApproved: (approval: Approval) => void;
-  /** Reached by a deep link: ringed for a moment. */
-  flash: boolean;
+  item: ItemProps;
   /** The remarks made on the body so far: kept by the desk until the decision is sent. */
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
@@ -84,6 +204,9 @@ function PendingCard({
     setError(null);
     try {
       const decided = await decideApproval(approval.id, decision);
+      // An item handed over (a thread to open, a branch to push) stays unfolded in the history, with its copy buttons.
+      const handover = decided.status === "approved" && (payloadUrl(decided.payload) || branchHandover(decided) || claudeMdHandover(decided));
+      if (!handover) item.fold();
       dispatch({ type: "approval", approval: decided });
       // The remarks were sent with the decision, or dropped by it: no draft is left.
       onAnnotations([]);
@@ -143,10 +266,7 @@ function PendingCard({
   const fieldId = `note-${approval.id}`;
 
   return (
-    <li
-      id={approvalAnchor(approval.id)}
-      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${flash ? "deep-flash" : ""}`}
-    >
+    <DeskItem approval={approval} {...item}>
       <ApprovalHeader approval={approval} />
       <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
       {mode === null ? (
@@ -227,7 +347,7 @@ function PendingCard({
         </div>
       )}
       {error && <ErrorNote>{error}</ErrorNote>}
-    </li>
+    </DeskItem>
   );
 }
 
@@ -314,31 +434,18 @@ function HistoryCard({
   dispatch,
   annotations,
   onAnnotations,
-  flash,
-  expandNonce,
+  item,
 }: {
   approval: Approval;
   dispatch: Dispatch;
   /** The remarks drafted for a revision of this item, kept by the desk until sent. */
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
-  /** Reached by a deep link: ringed for a moment. */
-  flash: boolean;
-  /** Changes each time a deep link asks for the body to be opened. */
-  expandNonce: number;
+  item: ItemProps;
 }) {
   const [revising, setRevising] = useState(false);
-  const [open, setOpen] = useState(expandNonce > 0);
-  const [seenNonce, setSeenNonce] = useState(expandNonce);
-  if (seenNonce !== expandNonce) {
-    setSeenNonce(expandNonce);
-    setOpen(true);
-  }
   return (
-    <li
-      id={approvalAnchor(approval.id)}
-      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${flash ? "deep-flash" : ""}`}
-    >
+    <DeskItem approval={approval} {...item}>
       <ApprovalHeader approval={approval} />
       <p className="flex flex-wrap items-center gap-2 text-sm">
         <Badge tone={decisionTone[approval.status]}>{strings.desk.decision[approval.status]}</Badge>
@@ -382,19 +489,110 @@ function HistoryCard({
               {strings.desk.requestRevision}
             </button>
           )}
-          <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-            <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
-            <div className="mt-2 space-y-3">
-              <ApprovalContent
-                approval={approval}
-                showControls={approval.status !== "approved"}
-                annotations={approval.annotations}
-              />
-            </div>
-          </details>
+          <ApprovalContent
+            approval={approval}
+            showControls={approval.status !== "approved"}
+            annotations={approval.annotations}
+          />
         </>
       )}
-    </li>
+    </DeskItem>
+  );
+}
+
+/** An item of the watch section: nothing to decide. "Vu", or a request to the assistant with the item as context. */
+function WatchCard({ approval, dispatch, item }: { approval: Approval; dispatch: Dispatch; item: ItemProps }) {
+  const assistant = strings.chat.assistantName;
+  const [asking, setAsking] = useState(false);
+  const [text, setText] = useState<string>(strings.desk.askDefault);
+  const [busy, setBusy] = useState<"seen" | "ask" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fieldId = `ask-${approval.id}`;
+
+  const markAsSeen = async () => {
+    setBusy("seen");
+    setError(null);
+    try {
+      const seen = await markSeen(approval.id);
+      item.fold();
+      dispatch({ type: "approval", approval: seen });
+    } catch (failure) {
+      setError(errorText(failure));
+      setBusy(null);
+    }
+  };
+
+  const ask = async () => {
+    if (text.trim() === "") {
+      setError(strings.desk.noteRequired);
+      return;
+    }
+    setBusy("ask");
+    setError(null);
+    try {
+      const answer = await askAboutItem(approval.id, text.trim());
+      // The chat did not answer (budget, timeout): the item stays, and the reason is shown.
+      if (!answer.ok) {
+        setError(answer.reply);
+        setBusy(null);
+        return;
+      }
+      item.fold();
+      dispatch({ type: "approval", approval: answer.approval });
+    } catch (failure) {
+      setError(errorText(failure));
+      setBusy(null);
+    }
+  };
+
+  return (
+    <DeskItem approval={approval} {...item}>
+      <ApprovalHeader approval={approval} />
+      <ApprovalContent approval={approval} annotations={approval.annotations} />
+      {asking ? (
+        <div className="space-y-2">
+          <label htmlFor={fieldId} className="block text-sm font-medium">
+            {strings.desk.askLabel(assistant)}
+          </label>
+          <textarea
+            id={fieldId}
+            className={fieldClass}
+            rows={3}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            maxLength={2000}
+            required
+            autoFocus
+          />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={buttonClass("primary")} disabled={busy !== null} onClick={() => void ask()}>
+              {busy === "ask" ? strings.desk.sending : strings.desk.askSend}
+            </button>
+            <button
+              type="button"
+              className={buttonClass()}
+              disabled={busy !== null}
+              onClick={() => {
+                setAsking(false);
+                setError(null);
+              }}
+            >
+              {strings.desk.cancel}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={buttonClass("primary")} disabled={busy !== null} onClick={() => void markAsSeen()}>
+            {busy === "seen" ? strings.desk.sending : strings.desk.seen}
+          </button>
+          <button type="button" className={buttonClass()} disabled={busy !== null} onClick={() => setAsking(true)}>
+            {strings.desk.askAssistant(assistant)}
+          </button>
+        </div>
+      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </DeskItem>
   );
 }
 
@@ -407,29 +605,53 @@ const NO_ANNOTATIONS: Annotation[] = [];
 
 export function Desk({
   pending,
+  unseen,
   history,
+  agents,
   dispatch,
   target,
 }: {
   pending: Approval[];
+  /** The informational items waiting for a look: their own section, above the tabs. */
+  unseen: Approval[];
   history: Approval[];
+  /** To give each folded line the name of its agent and the colour of its room. */
+  agents: readonly TeamAgent[];
   dispatch: Dispatch;
   /** The deep link of the address bar, if any (#approval-<id>). */
   target: DeepLinkTarget | null;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
   const [flash, setFlash] = useState<{ id: number; nonce: number } | null>(null);
-  const [expand, setExpand] = useState({ id: 0, nonce: 0 });
+  // Every item is folded until the user (or a deep link) opens it. Kept here, by id, so that a refresh of the data,
+  // a switch of tab or a decision elsewhere never folds an item the user opened.
+  const [openIds, setOpenIds] = useState<ReadonlySet<number>>(new Set());
   const [handled, setHandled] = useState<number | null>(null);
-  // A deep link is followed once, as soon as the desk holds the data: the right tab, the item opened and ringed.
+  const now = useNow();
+  const whoById = useMemo(() => {
+    const byAgent = new Map(agents.map((agent) => [`${agent.room}/${agent.id}`, agent]));
+    return (approval: Approval): Who => {
+      const agent = byAgent.get(`${approval.room}/${approval.agentId}`);
+      return { name: agent?.name ?? approval.agentId, color: agent?.color ?? null };
+    };
+  }, [agents]);
+  const setOpen = (id: number, open: boolean) =>
+    setOpenIds((current) => {
+      if (current.has(id) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  // A deep link is followed once, as soon as the desk holds the data: the right tab, the item unfolded and ringed.
   // An id the desk does not know is ignored. The hash stays in the address, so later refreshes of the data change nothing.
   if (target && handled !== target.nonce) {
     setHandled(target.nonce);
-    const hit = resolveApprovalLink(target.link, [...pending, ...history]);
+    const hit = resolveApprovalLink(target.link, [...pending, ...unseen, ...history]);
     if (hit) {
-      setTab(hit.tab);
+      if (hit.tab) setTab(hit.tab);
       setFlash({ id: hit.id, nonce: target.nonce });
-      setExpand((current) => ({ id: hit.id, nonce: current.nonce + 1 }));
+      setOpen(hit.id, true);
     }
   }
   useEffect(() => {
@@ -452,8 +674,52 @@ export function Desk({
       active ? "bg-soft" : "text-muted hover:bg-soft"
     }`;
 
+  const itemProps = (approval: Approval): ItemProps => ({
+    open: openIds.has(approval.id),
+    onToggle: () => setOpen(approval.id, !openIds.has(approval.id)),
+    fold: () => setOpen(approval.id, false),
+    flash: flash?.id === approval.id,
+    who: whoById(approval),
+    now,
+  });
+
+  // « Tout déplier / Tout replier » acts on what is on screen: the watch section and the tab shown.
+  const shown = tab === "pending" ? [...unseen, ...pending] : [...unseen, ...history];
+  const allOpen = shown.length > 0 && shown.every((approval) => openIds.has(approval.id));
+  const toggleAll = () =>
+    setOpenIds((current) => {
+      const next = new Set(current);
+      for (const approval of shown) {
+        if (allOpen) next.delete(approval.id);
+        else next.add(approval.id);
+      }
+      return next;
+    });
+
   return (
-    <Section title={strings.desk.title}>
+    <Section
+      title={strings.desk.title}
+      aside={
+        shown.length > 0 ? (
+          <button type="button" className={buttonClass()} aria-pressed={allOpen} onClick={toggleAll}>
+            {allOpen ? strings.desk.collapseAll : strings.desk.expandAll}
+          </button>
+        ) : undefined
+      }
+    >
+      {unseen.length > 0 && (
+        <section aria-labelledby="desk-watch" className="space-y-2">
+          <h3 id="desk-watch" className="text-sm font-semibold">
+            {strings.desk.watchTitle(unseen.length)}
+          </h3>
+          <p className="text-xs text-muted">{strings.desk.watchHint}</p>
+          <ul className="space-y-2">
+            {unseen.map((approval) => (
+              <WatchCard key={approval.id} approval={approval} dispatch={dispatch} item={itemProps(approval)} />
+            ))}
+          </ul>
+        </section>
+      )}
       <div role="tablist" aria-label={strings.desk.tabsLabel} className="flex gap-1">
         <button
           type="button"
@@ -483,7 +749,7 @@ export function Desk({
           pending.length === 0 ? (
             <p className="text-sm text-muted">{strings.desk.emptyPending}</p>
           ) : (
-            <ul className="space-y-3">
+            <ul className="space-y-2">
               {pending.map((approval) => (
                 <PendingCard
                   key={approval.id}
@@ -492,7 +758,7 @@ export function Desk({
                   onApproved={showHandover}
                   annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
                   onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
-                  flash={flash?.id === approval.id}
+                  item={itemProps(approval)}
                 />
               ))}
             </ul>
@@ -500,7 +766,7 @@ export function Desk({
         ) : history.length === 0 ? (
           <p className="text-sm text-muted">{strings.desk.emptyHistory}</p>
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-2">
             {history.map((approval) => (
               <HistoryCard
                 key={approval.id}
@@ -508,8 +774,7 @@ export function Desk({
                 dispatch={dispatch}
                 annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
                 onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
-                flash={flash?.id === approval.id}
-                expandNonce={expand.id === approval.id ? expand.nonce : 0}
+                item={itemProps(approval)}
               />
             ))}
           </ul>

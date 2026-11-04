@@ -72,7 +72,7 @@ test("the HQ MCP server finds the home from HQ_DB_PATH", () => {
   assert.equal(elsewhere.home, undefined);
 });
 
-test("hq_submit: an informational type is born approved with the note, seen, and off the pending list", () => {
+test("hq_submit: an informational type is born unseen, read by its agent, off the pending list and on the watch list", () => {
   const config = informationalHome();
   const db = getDbAt(config.dbPath);
   const ctx: HqContext = { dbPath: config.dbPath, runId: 1, agentId: "mailer", room: "demo", home: config.home };
@@ -81,27 +81,27 @@ test("hq_submit: an informational type is born approved with the note, seen, and
   ).run(new Date().toISOString());
 
   const info = hqSubmit(db, ctx, { type: "mail_alert", title: "Invoice due", body: "Pay before Friday." });
-  assert.equal(info.status, "approved");
+  assert.equal(info.status, "unseen");
   const row = approval(db, info.approvalId);
-  assert.equal(row.status, "approved");
-  assert.equal(row.decision_note, "notification");
-  assert.ok(row.decided_at);
-  assert.equal(row.decided_at, row.created_at);
+  assert.equal(row.status, "unseen");
+  assert.equal(row.decision_note, null);
+  assert.equal(row.decided_at, null, "nobody decided anything");
   assert.ok(row.seen_by_agent_at, "its agent does not read it back as a decision");
 
   const reply = hqSubmit(db, ctx, { type: "mail_reply", title: "Reply to Alice", body: "Hello Alice." });
   assert.equal(reply.status, "pending");
   assert.equal(approval(db, reply.approvalId).decision_note, null);
 
-  // Desk: history only. No task for the onApproval agent, nothing to read back.
+  // Desk: its own section, neither pending nor history. No task for the onApproval agent, nothing to read back.
   const state = getState(db, loadHome(config.home), schedulerInfo(config));
   assert.deepEqual(state.approvals.pending.map((a) => a.id), [reply.approvalId]);
-  assert.ok(state.approvals.history.some((a) => a.id === info.approvalId && a.decisionNote === "notification"));
+  assert.deepEqual(state.approvals.unseen.map((a) => [a.id, a.status, a.informational]), [[info.approvalId, "unseen", true]]);
+  assert.deepEqual(state.approvals.history, []);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE source = 'approval'").get() as { n: number }).n, 0);
   assert.deepEqual(hqReadDecisions(db, ctx).decisions, []);
 });
 
-test("an informational item goes out in full, cut at 4000, without buttons; a pending one keeps the alert and buttons", async () => {
+test("an informational item goes out in full, cut at 4000, with a single Vu button; a pending one keeps the alert and buttons", async () => {
   const fake = await startFakeTelegram(TOKEN);
   try {
     const config = informationalHome();
@@ -123,7 +123,11 @@ test("an informational item goes out in full, cut at 4000, without buttons; a pe
     assert.match(String(parts[0]!.text), /\n\nThree mails need you:/);
     assert.match(String(parts.at(-1)!.text), /End\.$/);
     assert.ok(String(parts[1]!.text).includes("kept as **is**"), "the body is sent as is");
-    assert.ok(parts.every((p) => !("reply_markup" in p)), "no buttons on an informational item");
+    // One « Vu » button, on the last part only (the one that carries the link).
+    assert.ok(parts.slice(0, -1).every((p) => !("reply_markup" in p)), "no button on the first parts");
+    assert.deepEqual((parts.at(-1)!.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] }).inline_keyboard, [
+      [{ text: "Vu", callback_data: `hq:w:${info}` }],
+    ]);
 
     const alert = calls.find((c) => String(c.text).includes(`(#${pending})`))!;
     assert.match(String(alert.text), /un item attend ta validation/);

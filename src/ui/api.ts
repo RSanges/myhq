@@ -9,6 +9,7 @@ import {
   chatReplySchema,
   clearedSchema,
   errorBodySchema,
+  itemAskResponseSchema,
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
@@ -112,3 +113,12 @@ export type Decision =
 export async function decideApproval(id: number, decision: Decision): Promise<Approval> {
   return (await request(`/api/approvals/${id}`, approvalResponseSchema, jsonInit("PATCH", decision))).approval;
 }
+
+/** « Vu »: the item leaves « À regarder » and stays in the history. */
+export async function markSeen(id: number): Promise<Approval> {
+  return (await request(`/api/approvals/${id}/seen`, approvalResponseSchema, { method: "POST" })).approval;
+}
+
+/** « Demander à Rom2 »: the request goes to the chat with the item as context; the item is seen once the chat answered. */
+export const askAboutItem = (id: number, text: string) =>
+  request(`/api/approvals/${id}/ask`, itemAskResponseSchema, jsonInit("POST", { text }));

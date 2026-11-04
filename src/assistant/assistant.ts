@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Env, HqConfig } from "../server/config";
+import { markApprovalSeen } from "../server/approvals";
 import type { Db, RunRow } from "../server/db";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
@@ -475,14 +476,14 @@ export class Assistant {
   }
 
   /** Shows the decision on the alert and removes its buttons. */
-  private async markAlert(alert: DecisionQuestion["alert"], label: string): Promise<void> {
+  private async markAlert(
+    alert: DecisionQuestion["alert"],
+    label: string,
+    format: (text: string, label: string) => string = strings.assistant.alertDecided,
+  ): Promise<void> {
     if (!alert) return;
     try {
-      await this.deps.telegram.editMessageText(
-        this.deps.chatId,
-        alert.messageId,
-        strings.assistant.alertDecided(alert.text, label),
-      );
+      await this.deps.telegram.editMessageText(this.deps.chatId, alert.messageId, format(alert.text, label));
     } catch (error) {
       this.log(`alert not updated: ${describe(error)}`);
     }
@@ -508,6 +509,18 @@ export class Assistant {
       | undefined;
     if (!row) {
       await tg.answerCallbackQuery(query.id, strings.errors.byCode.APPROVAL_NOT_FOUND);
+      return;
+    }
+    if (button.action === "seen") {
+      // « Vu » on an informational alert: same code path as the desk's button.
+      try {
+        markApprovalSeen(this.deps.db, button.approvalId);
+      } catch (error) {
+        await tg.answerCallbackQuery(query.id, this.errorText(error));
+        return;
+      }
+      await tg.answerCallbackQuery(query.id, strings.desk.decision.seen);
+      await this.markAlert(alert, strings.desk.decision.seen, strings.assistant.alertSeen);
       return;
     }
     if (row.status !== "pending") {

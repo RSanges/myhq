@@ -30,7 +30,7 @@ test("the state carries each room's colour to its agents (null by default)", () 
       { name: "plain", agents: [agent] },
     ],
     invalidRooms: [],
-    approvals: { pending: [], history: [] },
+    approvals: { pending: [], unseen: [], history: [] },
     recent: { events: [], messages: [] },
   });
   const agents = selectAgents(reducer(initialModel, { type: "state", state }));

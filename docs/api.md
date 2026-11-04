@@ -162,7 +162,10 @@ item is sent back for a revision after it was decided (see `PATCH
 /api/approvals/[id]`). `actionDone` is `true` when the item's agent has
 `onApproval: "task"` and the task that executes the approved item is done (the
 action, for example a sent mail, already happened). `informational` is `true`
-for an item of `notifyTypes`, born approved, which is not sent back.
+for an item of `notifyTypes`, which is not decided nor sent back. `status` is then
+`unseen` (it waits under « À regarder ») or `seen` (it was marked, see `POST
+/api/approvals/[id]/seen`); the items stored before these statuses existed are
+`approved` with the note `notification`, still `informational`.
 
 Payloads the interface and the assistant act on:
 
@@ -229,7 +232,7 @@ restart.
   "reception": { "room": "demo", "sprite": null, "runs": [] },
   "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
   "firings": [],
-  "approvals": { "pending": [], "history": [] },
+  "approvals": { "pending": [], "unseen": [], "history": [] },
   "recent": { "events": [], "messages": [] },
   "assistant": { "polling": false }
 }
@@ -258,8 +261,10 @@ restart.
   routines (another MyHQ process on the same home may hold them);
   `timeZone`: `HQ_TIMEZONE` or the machine's zone.
 - `firings`: the 50 most recent routine firings (Firing shape), newest first.
-- `approvals.pending`: every pending item, oldest first. `approvals.history`:
-  the 100 most recently decided items, newest first.
+- `approvals.pending`: every pending item, oldest first. `approvals.unseen`:
+  every informational item not yet seen (« À regarder »), oldest first.
+  `approvals.history`: the 100 most recently handled items (decided, or seen),
+  newest first.
 - `recent.events` (last 200) and `recent.messages` (last 100), oldest first.
 - `assistant.polling`: true while this process reads the Telegram bot's updates
   (`HQ_TELEGRAM_POLLING=true`, lock taken, polling loop running).
@@ -493,6 +498,39 @@ merging stay the user's. When the item's agent has `onApproval: "task"`,
 approving also gives it the task « Exécute l'item approuvé n° <id> : <title> »
 and starts its run at once (`reason` `approval`) when its lock is free and the
 cap allows; otherwise the task waits. The decision never fails because of it.
+
+### `POST /api/approvals/[id]/seen`
+
+« Vu »: an informational item (`unseen`) becomes `seen`, leaves the desk's
+« À regarder » section and stays in the history. No body. Idempotent (a `seen`
+item is returned as is). Nothing wakes and no task is created.
+
+Response `200`: `{ "approval": { ...Approval shape, "status": "seen" } }`.
+
+Errors: `INVALID_INPUT` (id not a positive integer), `APPROVAL_NOT_FOUND` (404),
+`APPROVAL_NOT_WATCHABLE` (409) for an item that is pending or was decided.
+`PATCH /api/approvals/[id]` on an `unseen` or `seen` item is
+`APPROVAL_NOT_DECIDABLE` (409).
+
+### `POST /api/approvals/[id]/ask`
+
+« Demander à Rom2 » about an `unseen` item. The text goes through the same
+service as `POST /api/chat` (one turn at a time, channel `desk`, recorded in the
+conversation and published as `chat` events), preceded by nothing and followed by
+the item as context. When the chat answers, the item is marked seen.
+
+Body: `{ "text": "Prépare une réponse à ce mail" }` (trimmed, 1 to 2000
+characters). The message the chat receives is the text, then
+`Contexte : item #<id> (<type>) « <title> », apporté par <agent> (<room>).`, then
+the item's body (cut at 8000 characters).
+
+Response `200`: `{ "ok": true, "reply": "...", "approval": {...}, "messages": [...] }`
+(`messages`: the user's message and the reply, as in `POST /api/chat`). When the
+chat did not answer (budget, timeout, error), `ok` is `false`, `reply` says why and
+`approval` is still `unseen`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `APPROVAL_NOT_FOUND` (404),
+`APPROVAL_NOT_WATCHABLE` (409, the item is not `unseen`), `CHAT_NOT_CONFIGURED` (404).
 
 ### `GET /api/usage`
 

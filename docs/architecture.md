@@ -67,7 +67,7 @@ room) and writes directly to SQLite. Seven tools, all validated with zod:
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text)` | Send a message to another agent. |
-| `hq_submit(type, title, body, payload)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored already approved, see section 5). |
+| `hq_submit(type, title, body, payload)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -148,6 +148,29 @@ approval's effects: when the agent already executed the item (`onApproval:
 "task"`, its task done), the desk says so (`actionDone`) and warns that the
 action, a sent mail for example, cannot be undone.
 
+**Informational items.** An item of a `notifyTypes` type (a mail alert, a brief)
+asks for no decision, but it must not vanish either, so it has its own
+life cycle: `hq_submit` stores it `unseen` (marked as read by its agent, no
+`decided_at`), and « Vu » moves it to `seen`, where it stays in the history.
+It is never `pending`: `decideApproval` refuses it (`APPROVAL_NOT_DECIDABLE`),
+`hq_pending`, `/pending`, the preamble and the `À valider` count do not see it,
+`hq_read_decisions` never returns it, and since no task is written for it, no
+wake-up (`wakeAgents`) is ever triggered by it or by « Vu ». Migration 11
+widened the `status` constraint of `approvals` (a table rebuild, as for `tasks`)
+to add `unseen` and `seen`; the items stored before it, born `approved` with the
+note « notification » (and `decided_at = created_at`), stay as they are, read as
+`informational` and shown in the history. The desk shows the `unseen` ones in a
+section « À regarder (n) » above the tabs, the tab title counts them apart
+(« (2) (1 à regarder) MyHQ »), and each one has two actions: **Vu**
+(`POST /api/approvals/[id]/seen`, `markApprovalSeen`, idempotent) and
+**Demander à Rom2**, a small box pre-filled with « Prépare une réponse à ce
+mail » that sends the request to the chat (`POST /api/approvals/[id]/ask`, the
+same `ChatService.ask` as `POST /api/chat`, channel `desk`, the reply lands in the
+conversation panel) with the item's id, type, title, agent, room and body
+(cut at 8000 characters) as context, then marks the item seen. A chat that does
+not answer (budget, timeout) leaves the item in « À regarder » and the reason is
+shown.
+
 On the desk, the history items have « Demander une révision », which opens the
 annotation list (the drafts kept for that item) and the general note.
 Approving an item that still has draft remarks asks first (« Tu as N remarques
@@ -173,6 +196,25 @@ The same decision can be taken from Telegram, with the same effect as in the
 office, except that annotations are not available there: a decision taken from
 Telegram carries its note only, and a revise with annotations made on the desk
 changes nothing on Telegram.
+
+#### Folded items on the desk
+
+Every item of the desk (the `À regarder` ones, the pending ones and the history)
+is folded by default into one compact line, which is a real button
+(`aria-expanded`, so Enter and Space work): the colour chip of its room, the
+agent, a type label, the title, a one-line excerpt and the age (« il y a 2 h »,
+refreshed each minute; the date of the decision for a history item). The excerpt
+(`src/ui/excerpt.ts`) is the first meaningful line of the body read from the same
+Markdown tree the body is rendered from (Markdown stripped, first non-empty
+heading, paragraph, list item, quote, code or table line), cut at about 120
+characters on a word. On a phone the line wraps in two (who, type and age, then
+title and excerpt). Clicking it unfolds the whole item as it always was (body,
+annotations, the Approuver guard, « Demander une révision », every action); an
+unfolded body stays mounted when folded again, so a note being typed is kept.
+Which items are unfolded is held by the desk by id, so a refresh from the live
+stream, a switch of tab or a decision elsewhere never folds an item the user
+opened. A deep link `#approval-<id>` unfolds its item and scrolls to it, and
+« Tout déplier / Tout replier » acts on what is on screen.
 
 #### Acting on an approved item
 
@@ -609,12 +651,14 @@ two channels meet in the same place:
 of the home send text on their own, in both modes:
 
 - `notifyTypes` in `myhq.json`: informational items. `hq_submit` stores an
-  item of a listed type already `approved`, with the note « notification »
-  (and marked seen by its agent); the app sends it in full, an alert line then
-  its body as is, cut in messages of 4000 characters, without buttons. It is
-  in the desk's history, never in the pending list, `/pending` or
-  `hq_pending`, and it never triggers `onApproval`. For a mail alert: the user
-  reads it, there is nothing to decide. The MCP server finds the home's
+  item of a listed type `unseen` (and marked read by its agent); the app sends
+  it in full, an alert line then its body as is, cut in messages of 4000
+  characters, with a single **Vu** button on the last message (polling mode
+  only, like the decision buttons; callback `hq:w:<id>`) that does what the
+  desk's « Vu » does and edits the alert to add « Vu ». It stays on the desk
+  under « À regarder » until seen, is never in the pending list, `/pending` or
+  `hq_pending`, and never triggers `onApproval` nor wakes an agent. For a mail
+  alert: the user reads it, there is nothing to decide. The MCP server finds the home's
   `myhq.json` from `HQ_DB_PATH` (`<home>/data/hq.db`).
 - `notifyRuns: "summary"` on an agent in `room.json`: when its run ends
   `done`, its summary is sent as a plain message (Markdown marks removed, cut
@@ -638,7 +682,8 @@ a notification end with « Ouvrir : <url>/#approval-<id> », a failure alert
 with « Ouvrir : <url>/#run-<id> », and a brief or summary with
 « Bureau : <url> » (`src/server/public-url.ts`). The desk follows these
 hashes on load and on `hashchange` (`src/ui/deep-link.ts`): the tab of the
-item (pending or history), scrolled into view, body open, ringed for a moment;
+item (pending or history; an « À regarder » item sits above the tabs), unfolded,
+scrolled into view and ringed for a moment;
 a run scrolls the feed to its start. An unknown id is ignored. Unset, nothing
 changes.
 

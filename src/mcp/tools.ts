@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Env } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
 import { now, type ApprovalRow, type Db } from "../server/db";
-import { NOTIFICATION_NOTE, readNotifyTypes } from "../server/home-settings";
+import { readNotifyTypes } from "../server/home-settings";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
@@ -118,9 +118,11 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       throw new ToolError((error as Error).message);
     }
   }
-  // An informational type (notifyTypes in myhq.json) is born approved: the
-  // app sends it to Telegram in full, it never waits for a decision and never
-  // triggers onApproval. Its agent already knows it, so it is marked seen.
+  // An informational type (notifyTypes in myhq.json) is born 'unseen': the app
+  // sends it to Telegram in full and the desk keeps it under « À regarder »
+  // until the user marks it seen. It never waits for a decision, never
+  // triggers onApproval and never wakes an agent. Its agent already knows it,
+  // so it counts as read by the agent.
   const informational =
     parsed.type !== ROOM_PROPOSAL && ctx.home !== undefined && readNotifyTypes(ctx.home).includes(parsed.type);
   const at = now();
@@ -138,15 +140,15 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
       parsed.title,
       body,
       JSON.stringify(payload ?? {}),
-      informational ? "approved" : "pending",
-      informational ? NOTIFICATION_NOTE : null,
-      informational ? at : null,
+      informational ? "unseen" : "pending",
+      null,
+      null,
       informational ? at : null,
       at,
     );
   return {
     approvalId: Number(result.lastInsertRowid),
-    status: informational ? ("approved" as const) : ("pending" as const),
+    status: informational ? ("unseen" as const) : ("pending" as const),
   };
 }
 
@@ -165,8 +167,8 @@ export function hqReadDecisions(db: Db, ctx: HqContext) {
   return db.transaction(() => {
     const rows = db
       .prepare(
-        `SELECT * FROM approvals WHERE room = ? AND agent_id = ? AND status <> 'pending'
-         AND seen_by_agent_at IS NULL ORDER BY decided_at, id`,
+        `SELECT * FROM approvals WHERE room = ? AND agent_id = ?
+         AND status NOT IN ('pending', 'unseen', 'seen') AND seen_by_agent_at IS NULL ORDER BY decided_at, id`,
       )
       .all(ctx.room, ctx.agentId) as ApprovalRow[];
     const markSeen = db.prepare("UPDATE approvals SET seen_by_agent_at = ? WHERE id = ?");

@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     "hq_submit",
     {
       description:
-        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and comes back already approved.",
+        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and stays on the desk under « À regarder » until they have seen it: it never waits for a decision, so it comes back with the status unseen and nothing to read back.",
       inputSchema: inputs.hq_submit,
     },
     async (args) => respond(() => hqSubmit(db, ctx, args)),

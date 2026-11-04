@@ -5,7 +5,7 @@ import { decisionRecordSchema } from "@/server/decision-history";
 // Shapes received from the HTTP API (docs/api.md), validated before use.
 
 export const runStatusSchema = z.enum(["running", "done", "failed", "cancelled"]);
-export const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "revise"]);
+export const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "revise", "unseen", "seen"]);
 
 export const runSchema = z.object({
   id: z.number().int(),
@@ -109,7 +109,11 @@ export const stateSchema = z.object({
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
   scheduler: schedulerSchema.default(schedulerOff),
   firings: z.array(firingSchema).default([]),
-  approvals: z.object({ pending: z.array(approvalSchema), history: z.array(approvalSchema) }),
+  approvals: z.object({
+    pending: z.array(approvalSchema),
+    unseen: z.array(approvalSchema).default([]),
+    history: z.array(approvalSchema),
+  }),
   recent: z.object({ events: z.array(eventSchema), messages: z.array(messageSchema) }),
 });
 
@@ -148,6 +152,12 @@ export const armResponseSchema = z.object({ agent: z.object({ room: z.string(), 
 export const errorBodySchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 export const runResponseSchema = z.object({ run: runSchema });
 export const approvalResponseSchema = z.object({ approval: approvalSchema });
+/** The answer to « Demander à Rom2 »: the chat's reply (or why it did not answer), and the item as it is now. */
+export const itemAskResponseSchema = z.object({
+  ok: z.boolean(),
+  reply: z.string(),
+  approval: approvalSchema,
+});
 /** An item of a selection list (a task list in a reply of the chat). */
 const choiceSchema = z.object({ id: z.string().nullable(), label: z.string() });
 export const chatMessageSchema = z.object({
