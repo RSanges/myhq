@@ -379,31 +379,84 @@ test("a revision of a room proposal relaunches onboarding on the same repository
   );
 });
 
-test("a rejection of a room proposal, with its note, relaunches onboarding too; other items do not", async () => {
+test("a rejection of a room proposal ends the matter: no task, no run; only a revision relaunches onboarding", async () => {
   const { config, db, targetRepo, ctx } = setup();
   const seen: RunInput[] = [];
   const id = submitProposal(ctx, db, targetRepo);
-  decideApproval(db, id, { decision: "rejected", note: "Too many agents." }, config, {
+  const rejected = decideApproval(db, id, { decision: "rejected", note: "Later." }, config, {
+    engine: submittingEngine(db, proposal(targetRepo), seen),
+    send,
+  });
+  assert.equal(rejected.status, "rejected");
+  assert.equal(reviseTasks(db).length, 0);
+  assert.equal(revisionRuns(db).length, 0);
+  // Nothing wakes it later either (the next wake-up, the next start of the app).
+  assert.deepEqual(wakeOnboarding(config, db, { engine: submittingEngine(db, proposal(targetRepo), seen), send }), []);
+  assert.equal(seen.length, 0);
+  const runs = db.prepare("SELECT COUNT(*) AS n FROM runs WHERE room = ? AND id <> ?").get(ONBOARDING_ROOM, ctx.runId) as { n: number };
+  assert.equal(runs.n, 0);
+
+  // A revision after a rejection still sends it back.
+  const second = submitProposal(ctx, db, targetRepo);
+  decideApproval(db, second, { decision: "revise", note: "Fewer agents." }, config, {
     engine: submittingEngine(db, proposal(targetRepo), seen),
     send,
   });
   const [run] = revisionRuns(db);
   assert.ok(run);
   await waitForRun(db, run.id);
-  assert.match(seen[0]!.prompt, /which the user rejected/);
-  assert.match(seen[0]!.prompt, /\(rejected\)/);
-  assert.match(seen[0]!.prompt, /Too many agents\./);
+  assert.doesNotMatch(seen[0]!.prompt, /which the user rejected/);
+  assert.match(seen[0]!.prompt, /Fewer agents\./);
+});
 
-  const other = Number(
-    db
-      .prepare(
-        "INSERT INTO approvals (room, agent_id, type, title, body, status, created_at) VALUES ('demo', 'scout', 'mail_reply', 't', 'b', 'pending', ?)",
-      )
-      .run(new Date().toISOString()).lastInsertRowid,
-  );
-  decideApproval(db, other, { decision: "rejected", note: "No." }, config, { send });
-  assert.equal(revisionRuns(db).length, 1);
-  assert.equal(reviseTasks(db).length, 1);
+test("a stale revision task (its item is not in revise any more) is ignored by wakeOnboarding and by a run", async () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const seen: RunInput[] = [];
+  const id = submitProposal(ctx, db, targetRepo);
+  // Decided without a config: the revision task waits.
+  decideApproval(db, id, { decision: "revise", note: "Change it." });
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending"]);
+  // The item was rejected since (or the task dates from the time a rejection relaunched it).
+  db.prepare("UPDATE approvals SET status = 'rejected' WHERE id = ?").run(id);
+  const engine = submittingEngine(db, proposal(targetRepo), seen);
+  assert.deepEqual(wakeOnboarding(config, db, { engine, send }), []);
+  assert.equal(seen.length, 0);
+
+  // A run the owner starts by hand does not take it either.
+  const run = startOnboarding({ path: targetRepo }, { config, engine: { name: "claude", async *run(input) { seen.push(input); yield endEvent("done"); } }, send });
+  await waitForRun(db, run.id);
+  assert.doesNotMatch(seen[0]!.prompt, /Change it\./);
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending"]);
+});
+
+test("the receptionist never submits a new room proposal for a repository whose latest one was rejected, unless the owner started the run", () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const other = path.relative(config.home, makeRepo()).split(path.sep).join("/");
+  const id = submitProposal(ctx, db, targetRepo);
+  decideApproval(db, id, { decision: "rejected", note: "Later." }, config);
+  const runWith = (reason: string | null) =>
+    Number(
+      db
+        .prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason) VALUES (?, ?, 'claude', 't', 'running', ?, ?)")
+        .run(ONBOARDING_ROOM, ONBOARDING_AGENT, new Date().toISOString(), reason).lastInsertRowid,
+    );
+  const submitAs = (runId: number, repo: string, name: string) => submitProposal({ ...ctx, runId }, db, repo, name);
+
+  // A run woken by MyHQ is refused, and nothing is stored.
+  const before = (db.prepare("SELECT COUNT(*) AS n FROM approvals").get() as { n: number }).n;
+  assert.throws(() => submitAs(runWith("revise"), targetRepo, "again"), (e: unknown) => e instanceof ToolError && /rejected/.test(e.message));
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM approvals").get() as { n: number }).n, before);
+  // Another repository is not concerned.
+  assert.ok(submitAs(runWith("revise"), other, "elsewhere"));
+  // The owner started this run by hand: allowed.
+  const again = submitAs(runWith(null), targetRepo, "again");
+  assert.ok(again);
+  // The latest proposal of the repository is now pending: the guard no longer applies.
+  assert.ok(submitAs(runWith("revise"), targetRepo, "third"));
+  // Rejecting that one closes the repository again.
+  const latest = (db.prepare("SELECT MAX(id) AS id FROM approvals").get() as { id: number }).id;
+  decideApproval(db, latest, { decision: "rejected", note: "No." }, config);
+  assert.throws(() => submitAs(runWith("revise"), targetRepo, "fourth"), ToolError);
 });
 
 test("a revision while onboarding is busy waits, and runs when the busy run ends", async () => {

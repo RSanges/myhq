@@ -20,7 +20,7 @@ import { listRoleTemplates, roleTemplatesDir } from "./templates";
  * a run of the receptionist reads the home (its rooms, agents and role prompts), the role
  * templates and the technology catalogue (see catalog.ts), and submits one
  * `agent_proposal`. Same agent, so same lock and daily cap as the room
- * proposals; a revision or a rejection with a note relaunches it.
+ * proposals; a revision relaunches it, a rejection does not.
  */
 
 /** Run reason of an agent-mode run started for a need (a revision run has `revise`). */
@@ -49,6 +49,18 @@ export function requestedByOf(task: Pick<TaskRow, "from_room" | "from_agent">): 
 function approvalOf(db: Db, task: TaskRow): ApprovalRow | null {
   if (task.source !== "revise" || task.ref_id === null) return null;
   return (db.prepare("SELECT * FROM approvals WHERE id = ?").get(task.ref_id) as ApprovalRow | undefined) ?? null;
+}
+
+/**
+ * Whether a pending revision task no longer matches its item: the item is not
+ * in `revise` any more (it was rejected or approved since, or the task dates
+ * from the time a rejection also relaunched the receptionist). Such a task
+ * wakes nothing and no run takes it.
+ */
+export function isStaleRevision(db: Db, task: TaskRow): boolean {
+  if (task.source !== "revise" || task.ref_id === null) return false;
+  const row = approvalOf(db, task);
+  return row !== null && row.status !== "revise";
 }
 
 /** Whether a task of the receptionist is about an agent proposal (a need, or the revision of one), not a room. */

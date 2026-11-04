@@ -11,9 +11,6 @@ import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
 import { loadHome } from "./rooms";
 import { wakeAgents, type RunnerDeps } from "./runner";
 
-/** The receptionist's items: a rejection, whose note says what to change, relaunches it like a revision. */
-const RECEPTION_TYPES: readonly string[] = [ROOM_PROPOSAL, AGENT_PROPOSAL];
-
 export const decisionSchema = z
   .strictObject({
     decision: z.enum(["approved", "rejected", "revise"]),
@@ -44,10 +41,8 @@ export function revisionTaskText(
   type: string,
   note: string | null,
   annotations: readonly Annotation[],
-  /** The item was rejected, not sent back: the user's note still tells what to change. */
-  rejected = false,
 ): string {
-  const head = `Revise your submission #${id} "${title}" (${type})${rejected ? ", which the user rejected" : ""}.`;
+  const head = `Revise your submission #${id} "${title}" (${type}).`;
   if (annotations.length === 0) return `${head} User's note: ${note}`;
   return `${head} User's remarks:
 ${decisionText(note, annotations)}`;
@@ -75,9 +70,10 @@ function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" |
  * A revision wakes the agent at once (`wakeAgents`, reason `revise`) unless it
  * has `onRevise: "queue"`; the wake-up needs `config`, the callers of the app
  * always give it. A `room_proposal` or an `agent_proposal` is the onboarding
- * agent's (the receptionist), which is no room agent: a revision, and a
- * rejection too (its note says what to change), gives it the same task and
- * relaunches it on the proposal's repository or need (see `wakeOnboarding`).
+ * agent's (the receptionist), which is no room agent: a revision gives it the
+ * same task and relaunches it on the proposal's repository or need (see
+ * `wakeOnboarding`). A rejection ends the matter, for these items as for any
+ * other: no task, no wake-up.
  *
  * Approving a `room_proposal` writes the room in the home first (see
  * proposal.ts), approving an `agent_proposal` adds the agent to its room (see
@@ -148,9 +144,7 @@ export function decideApproval(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), id);
-      const reception = RECEPTION_TYPES.includes(row.type);
-      if (decision.decision === "rejected" && reception) wakeFor = config ?? null;
-      if (decision.decision === "revise" || (decision.decision === "rejected" && reception)) {
+      if (decision.decision === "revise") {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,
@@ -158,7 +152,7 @@ export function decideApproval(
           row.room,
           row.agent_id,
           id,
-          revisionTaskText(id, row.title, row.type, note, annotations, decision.decision === "rejected"),
+          revisionTaskText(id, row.title, row.type, note, annotations),
           at,
           at,
         );

@@ -392,12 +392,12 @@ each run. Consequences:
 The onboarding agent (`_hq/onboarding`) is in no room of the home and runs
 only for a path (`POST /api/onboarding`), so the wake-up above does not know
 it. `wakeOnboarding` (`src/server/onboarding.ts`), called by `wakeAgents`,
-covers it. A `revise` decision on a `room_proposal`, or a rejection (its
-note says what to change), creates a `revise` task for `_hq/onboarding`
-(the text is the remarks then the general note, as for any revision) and
-relaunches onboarding at once, with reason `revise`, on the repository of the
-proposal (its `room.targetRepo`, relative to the home). The run prompt starts
-with `REVISION RUN`: it gives the previous proposal (title, room and agents,
+covers it. A `revise` decision on a `room_proposal` creates a `revise` task
+for `_hq/onboarding` (the text is the remarks then the general note, as for
+any revision) and relaunches onboarding at once, with reason `revise`, on the
+repository of the proposal (its `room.targetRepo`, relative to the home). The
+run prompt starts with
+`REVISION RUN`: it gives the previous proposal (title, room and agents,
 the text its agent wrote) and the user's revision, and asks for a new
 `room_proposal` that answers each remark. The new proposal is a new item
 (the old one stays sent back), and approving it still refuses a room name that
@@ -412,6 +412,12 @@ exists. Consequences:
   process), so a revision decided while the app was down or busy runs after the
   next restart without manual action.
 - A revision whose repository is gone is blocked, with a note.
+- A rejection ends the matter: no task, no run. A pending revision task whose
+  item is no longer in `revise` (rejected or approved since) is stale and
+  ignored, by `wakeOnboarding` and by any run. `hq_submit` also refuses a new
+  `room_proposal` for a repository whose latest room proposal was rejected,
+  unless the run was started by the owner (`POST /api/onboarding` or the chat:
+  a run without a `reason`).
 
 ### Why a run started
 
@@ -522,8 +528,8 @@ is itself submitted to the user's approval.
    (never over an existing room), loads it back, creates the worktree of each
    agent that has one (`git worktree add`, branch `hq/<agent>`), and syncs the
    home: the room is live without a restart. Rejection and revision work as
-   for any item (a revision or a rejection with a note relaunches onboarding at
-   once on the same repository, see "Revising a room proposal").
+   for any item (a revision relaunches onboarding at once on the same
+   repository, see "Revising a room proposal"; a rejection ends the matter).
 3. **Initialize the target project (minimal and standard).** The same
    onboarding item proposes a short "HQ agents" block for the project's
    `CLAUDE.md`: how to run the tests, where the docs live, what is forbidden
@@ -605,12 +611,12 @@ the need, why), the role prompt and the `room.json` entry: the desk renders it
 like a room proposal (type label « Agent »), and the remarks on passages work
 the same. Approving it writes the agent (see "Agent proposals" in section 1).
 
-**Revising.** A revision, or a rejection with its note, gives the receptionist
-a `revise` task and relaunches it at once on the same need (reason `revise`,
-same task text), through `wakeOnboarding`, as for a room proposal: the prompt
-starts again from the need and adds `REVISION RUN`, the previous proposal and
-the user's remarks; the answer is a new item. A room onboarding run never
-takes the needs or the revisions of agent proposals, and an agent-mode run
+**Revising.** A revision gives the receptionist a `revise` task and relaunches
+it at once on the same need (reason `revise`, same task text), through
+`wakeOnboarding`, as for a room proposal: the prompt starts again from the need
+and adds `REVISION RUN`, the previous proposal and the user's remarks; the
+answer is a new item. A rejection relaunches nothing. A room onboarding run
+never takes the needs or the revisions of agent proposals, and an agent-mode run
 takes only its own task. As for the other agents, a need is not woken again
 by a run that failed after it was created, and a pending need is taken when
 the app starts.

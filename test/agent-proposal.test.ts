@@ -21,7 +21,7 @@ import { getDbAt, type ApprovalRow, type Db, type RunRow, type TaskRow } from ".
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
 import { readHomeLanguage } from "../src/server/export";
-import { ONBOARDING_AGENT, ONBOARDING_ROOM, startOnboarding, wakeOnboarding } from "../src/server/onboarding";
+import { ONBOARDING_AGENT, ONBOARDING_ROOM, wakeOnboarding } from "../src/server/onboarding";
 import { loadHome, syncHome } from "../src/server/rooms";
 import { roleTemplatesDir } from "../src/server/templates";
 import { chatConfig, makeHome, makeRepo, waitForRun } from "./helpers";
@@ -245,29 +245,24 @@ test("a revision relaunches the receptionist on the same need, with the previous
   assert.deepEqual(items.map((i) => i.status), ["revise", "pending"]);
 });
 
-test("a rejection with its note relaunches the receptionist too, and a room onboarding never takes agent tasks", async () => {
+test("a rejection of an agent proposal ends the matter: no task, no run; a stale revision is ignored", async () => {
   const { config, db, ctx } = setup();
-  const id = submit(db, ctx);
-  // Decided without a config: the task waits.
-  decideApproval(db, id, { decision: "rejected", note: "Not this one." });
-  const repo = makeRepo();
   const seen: RunInput[] = [];
-  const engine: Engine = {
-    name: "claude",
-    async *run(input) {
-      seen.push(input);
-      yield endEvent("done");
-    },
-  };
-  const onboarding = startOnboarding({ path: path.relative(config.home, repo) }, { config, engine, send });
-  await waitForRun(db, onboarding.id);
-  assert.doesNotMatch(seen[0]!.prompt, /Not this one/, "the room run left the agent revision alone");
-  await until(() => receptionRuns(db).length === 1);
-  const [run] = receptionRuns(db);
-  assert.equal(run!.reason, "revise");
-  await waitForRun(db, run!.id);
-  assert.match(seen[1]!.prompt, /\(rejected\)/);
-  assert.match(seen[1]!.prompt, /Not this one\./);
+  const id = submit(db, ctx);
+  decideApproval(db, id, { decision: "rejected", note: "Not this one." }, config, { engine: submittingEngine(db, seen), send });
+  assert.equal(row(db, id).status, "rejected");
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE source = 'revise'").get() as { n: number }).n, 0);
+  assert.equal(receptionRuns(db).length, 0);
+  assert.deepEqual(wakeOnboarding(config, db, { engine: submittingEngine(db, seen), send }), []);
+  assert.equal(seen.length, 0);
+
+  // A revision task whose item was rejected since is stale: nothing wakes for it.
+  const second = submit(db, ctx);
+  decideApproval(db, second, { decision: "revise", note: "Cheaper." });
+  db.prepare("UPDATE approvals SET status = 'rejected' WHERE id = ?").run(second);
+  assert.deepEqual(wakeOnboarding(config, db, { engine: submittingEngine(db, seen), send }), []);
+  assert.equal(seen.length, 0);
+  assert.equal(receptionRuns(db).length, 0);
 });
 
 // --- Triggers -----------------------------------------------------------------

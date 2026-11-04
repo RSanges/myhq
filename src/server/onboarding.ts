@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { isAgentModeTask, wakeAgentNeed } from "./agent-need";
+import { isAgentModeTask, isStaleRevision, wakeAgentNeed } from "./agent-need";
 import { getConfig, type HqConfig } from "./config";
 import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
@@ -147,7 +147,7 @@ export type PreviousProposal = {
   taskId: number;
   approvalId: number;
   title: string;
-  /** The state of the item (`revise` or `rejected`). */
+  /** The state of the item (`revise`). */
   status: string;
   /** The room and agents it proposed, or null when its payload is unreadable. */
   proposed: string | null;
@@ -282,7 +282,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
       .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[]
   )
     .filter((t) => {
-      if (isAgentModeTask(db, t)) return false;
+      if (isStaleRevision(db, t) || isAgentModeTask(db, t)) return false;
       const about = revisionTarget(config, db, t);
       return about === null || about === target;
     })
@@ -316,15 +316,15 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
 
 /**
  * Starts the onboarding runs that pending revisions ask for. The onboarding
- * agent is not a room agent (wakeAgents does not know it): a revision (or a
- * rejection with a note) of a `room_proposal` gives it a task, and this
- * function runs it, at once, on the repository of that proposal, with reason
- * `revise`. One run per repository, the oldest revision first; it takes the
+ * agent is not a room agent (wakeAgents does not know it): a revision of a
+ * `room_proposal` gives it a task, and this function runs it, at once, on the
+ * repository of that proposal, with reason `revise`. One run per repository, the oldest revision first; it takes the
  * revisions of that repository together. Same lock and daily cap as any run:
  * a busy agent or the cap leave the task pending, and the next wake-up (the
  * end of a run, the next decision, the next start of the app) tries again.
- * A revision whose repository is gone is blocked with a note. As for the other
- * agents, a repository is not woken again by a revision older than its last
+ * A revision whose item is no longer in `revise` (rejected or approved since)
+ * is stale and ignored: a rejection ends the matter. A revision whose
+ * repository is gone is blocked with a note. As for the other agents, a repository is not woken again by a revision older than its last
  * onboarding run, so that a failing run is not retried in a loop. The agent
  * mode is woken here too, in the same order: a pending need (a `message`
  * task, from `hq_suggest_agent` or a request that had to wait) or a revision
@@ -339,6 +339,7 @@ export function wakeOnboarding(config: HqConfig, db: Db, deps: RunnerDeps = {}):
   const started: RunRow[] = [];
   const done = new Set<string>();
   for (const task of pending) {
+    if (isStaleRevision(db, task)) continue;
     if (isAgentModeTask(db, task)) {
       const run = wakeAgentNeed(config, db, task, done, deps);
       if (run) started.push(run);

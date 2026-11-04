@@ -184,6 +184,44 @@ export function hqRooms(db: Db, ctx: HqContext) {
   };
 }
 
+/** The repository a stored or submitted room proposal is about, as an absolute path, or null when unreadable. */
+function proposalRepo(home: string | undefined, payload: unknown): string | null {
+  const targetRepo = (payload as { room?: { targetRepo?: unknown } } | null)?.room?.targetRepo;
+  return typeof targetRepo === "string" ? path.resolve(home ?? ".", targetRepo) : null;
+}
+
+/**
+ * A rejection ends the matter: the receptionist never submits a new room
+ * proposal for a repository whose latest room proposal the owner rejected,
+ * unless the owner started this run by hand (`POST /api/onboarding`, the chat:
+ * a run without a `reason`; a run woken by MyHQ has one).
+ */
+function assertNotRejected(db: Db, ctx: HqContext, payload: unknown): void {
+  if (ctx.room !== RECEPTION_ROOM) return;
+  const run = db.prepare("SELECT reason FROM runs WHERE id = ?").get(ctx.runId) as { reason: string | null } | undefined;
+  if (!run || run.reason === null) return;
+  const repo = proposalRepo(ctx.home, payload);
+  if (repo === null) return;
+  const earlier = db
+    .prepare("SELECT status, payload FROM approvals WHERE type = ? ORDER BY id DESC")
+    .all(ROOM_PROPOSAL) as { status: string; payload: string }[];
+  for (const item of earlier) {
+    let stored: unknown;
+    try {
+      stored = JSON.parse(item.payload);
+    } catch {
+      continue;
+    }
+    if (proposalRepo(ctx.home, stored) !== repo) continue;
+    if (item.status === "rejected") {
+      throw new ToolError(
+        "The owner rejected your latest room proposal for this repository: it is closed, do not propose it again. Call hq_task_update with done.",
+      );
+    }
+    return;
+  }
+}
+
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
   const parsed = z.object(inputs.hq_submit).parse(args);
   let { body, payload } = parsed;
@@ -204,6 +242,7 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
     } catch (error) {
       throw new ToolError((error as Error).message);
     }
+    assertNotRejected(db, ctx, payload);
   }
   if (parsed.type === AGENT_PROPOSAL) {
     // The receptionist's alone: a room agent asks for one with hq_suggest_agent.
