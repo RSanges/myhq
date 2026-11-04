@@ -800,12 +800,18 @@ empty. A back wall hides about four cells behind it, so the rooms are laid out
 so that none hides another: the back row climbs like a staircase (an office to
 the +x of the lobby and entirely behind it, which reads as a row across the
 screen), a second office follows four cells away on the same line, and the
-front row stands four cells away from the lanes. `layoutRoom`
+front row stands four cells away from the lanes and is entered by a door in
+its back wall from the hall behind it. Walls make sense: a door or an opening
+of a rim always leads onto the hall, never outside; a window only looks
+outside, never onto the hall or another room; nothing tall (a bookshelf, the
+whiteboard, a cabinet, a tall plant) stands in front of a window, and nothing
+in front of a door. `layoutRoom`
 (`room-layout.ts`) turns the template into pieces, offices (chair, seat, the
 way the agent faces, the aisle cell next to it) and a graph of the aisles and
 lanes. Tests check that no cell of a room and no point of a route is behind
 another room's wall, that no route goes through a wall or a piece of
-furniture, and that pieces never share a cell. More than 12 agents are listed
+furniture, that pieces never share a cell, that the walls follow the rules
+above and that the hall is in one piece. More than 12 agents are listed
 under the floor but have no office on it.
 
 **The reception.** Onboarding is an agent too (section 3), and it is

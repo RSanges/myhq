@@ -158,6 +158,86 @@ test("routes walk the aisles and lanes only: axis-aligned, through openings, aro
   }
 });
 
+/** Furniture tall enough to stand in front of a window: it never does. */
+const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
+
+/**
+ * The cells of a room's walls with what lies beyond each: the back walls (-y,
+ * -x, their kind) and the front rim (+y, +x, open or not), each with the cell
+ * just inside and the cell on the other side.
+ */
+function wallCells(room: RoomLayout["rooms"][number]) {
+  const cells: { side: string; kind: string; inside: [number, number]; beyond: [number, number] }[] = [];
+  room.back.y.forEach((kind, i) => cells.push({ side: "-y", kind, inside: [room.x + i, room.y], beyond: [room.x + i, room.y - 1] }));
+  room.back.x.forEach((kind, j) => cells.push({ side: "-x", kind, inside: [room.x, room.y + j], beyond: [room.x - 1, room.y + j] }));
+  for (let i = 0; i < room.w; i += 1) {
+    const inside: [number, number] = [room.x + i, room.y + room.d - 1];
+    cells.push({ side: "+y", kind: room.open.y.includes(i) ? "opening" : "rim", inside, beyond: [room.x + i, room.y + room.d] });
+  }
+  for (let j = 0; j < room.d; j += 1) {
+    const inside: [number, number] = [room.x + room.w - 1, room.y + j];
+    cells.push({ side: "+x", kind: room.open.x.includes(j) ? "opening" : "rim", inside, beyond: [room.x + room.w, room.y + j] });
+  }
+  return cells;
+}
+
+test("walls make sense: doors and openings lead onto the hall, windows look outside, nothing tall hides a window, nothing blocks a door", () => {
+  for (const layout of layouts()) {
+    const hall = new Set(layout.hall.map(([cx, cy]) => `${cx},${cy}`));
+    const inRoom = (cx: number, cy: number) =>
+      layout.rooms.some((room) => cx >= room.x && cx < room.x + room.w && cy >= room.y && cy < room.y + room.d);
+    const pieceAt = new Map<string, string>();
+    for (const piece of layout.pieces) {
+      const turn = turnOf(floorSet, piece.name, piece.turn);
+      if (turn.flat) continue;
+      for (let i = 0; i < turn.cells[0]; i += 1) for (let j = 0; j < turn.cells[1]; j += 1) pieceAt.set(`${piece.cell[0] + i},${piece.cell[1] + j}`, piece.name);
+    }
+    for (const room of layout.rooms) {
+      let ways = 0;
+      for (const { side, kind, inside, beyond } of wallCells(room)) {
+        const label = `${layout.template}: ${room.kind} at ${room.x},${room.y}, ${side} wall by ${inside.join(",")}`;
+        const id = beyond.join(",");
+        const here = pieceAt.get(inside.join(","));
+        if (kind === "door" || kind === "opening") {
+          ways += 1;
+          assert.ok(hall.has(id), `${label}: the ${kind} leads onto the hall, not outside or into a room`);
+          assert.equal(here, undefined, `${label}: the ${kind} is not blocked by a ${here}`);
+        }
+        if (kind === "window") {
+          assert.ok(!hall.has(id) && !inRoom(beyond[0], beyond[1]), `${label}: the window looks outside, not onto the hall or a room`);
+          assert.ok(!here || !TALL.has(here), `${label}: a ${here} stands in front of the window`);
+        }
+      }
+      assert.ok(ways >= 1, `${layout.template}: ${room.kind} has a way in`);
+    }
+  }
+});
+
+test("the hall is one piece: every cell of it reaches every other", () => {
+  for (const layout of layouts()) {
+    const cells = new Set(layout.hall.map(([cx, cy]) => `${cx},${cy}`));
+    const start = layout.hall[0]!;
+    const seen = new Set([`${start[0]},${start[1]}`]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const [cx, cy] = queue.shift()!;
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const id = `${cx + dx},${cy + dy}`;
+        if (cells.has(id) && !seen.has(id)) {
+          seen.add(id);
+          queue.push([cx + dx, cy + dy]);
+        }
+      }
+    }
+    assert.equal(seen.size, cells.size, `${layout.template}: the hall is connected`);
+  }
+});
+
 test("a template by size, agents in the desks in order, the counter on request only", () => {
   const expected = (count: number) => (count <= 3 ? "small" : count <= 6 ? "medium" : "large");
   for (let count = 1; count <= 12; count += 1) {

@@ -12,8 +12,12 @@
 // back wall stands along the -x and -y edges of a room and hides about four
 // cells behind it, so a room sits either beside another one (to its +x and
 // entirely behind it on y, a step of the staircase) or four cells away from
-// its back walls: no room ever hides another, and no lane runs behind a wall
-// (checked by the tests). Agents fill the desks in order, room after room.
+// its back walls: no room ever hides another, and no lane runs behind a wall.
+// Walls make sense: a door or an opening of the rim always leads onto the
+// hall (never outside), a window only looks outside (never onto the hall or
+// another room), nothing tall stands in front of a window and nothing at all
+// in front of a door. The tests check all of it for every template. Agents
+// fill the desks in order, room after room.
 
 export type Cell = [number, number];
 export type CellRect = { x: number; y: number; w: number; d: number };
@@ -79,7 +83,7 @@ function lobby(x: number, y: number): RoomSpec {
     w: 7,
     d: 6,
     floor: "tiles-room",
-    back: { y: ["window", "plain", "plain", "window", "plain", "window", "door"], x: ["plain", "window", "plain", "plain", "window", "plain"] },
+    back: { y: ["window", "plain", "plain", "plain", "window", "plain", "window"], x: ["plain", "window", "plain", "plain", "window", "plain"] },
     open: { y: [2] },
     pieces: [
       piece("bookshelf", 0, [2, 0]),
@@ -117,7 +121,7 @@ function office6(x: number, y: number): RoomSpec {
     d: 7,
     floor: "carpet-room",
     back: {
-      y: ["plain", "window", "plain", "plain", "window", "plain", "plain", "window"],
+      y: ["plain", "window", "plain", "window", "plain", "window", "plain", "plain"],
       x: ["plain", "window", "plain", "plain", "window", "plain", "plain"],
     },
     open: { y: [6] },
@@ -181,8 +185,14 @@ function office3(x: number, y: number): RoomSpec {
   };
 }
 
-/** The meeting room: the whiteboard, the table and its chairs; with `coffee`, a coffee corner too (the small floor has no kitchen). 7 by 5. */
-function meeting(x: number, y: number, coffee = false): RoomSpec {
+/**
+ * The meeting room of the front row: the whiteboard, the table and its chairs;
+ * with `coffee`, a coffee corner too (the small floor has no kitchen). 7 by 5.
+ * Its front faces outside, so it is entered by a door in its back wall from
+ * the hall behind it; `back` says which cells of that wall look onto the hall
+ * (plain, the door) and which look outside (windows allowed).
+ */
+function meeting(x: number, y: number, back: WallKind[], coffee = false): RoomSpec {
   return {
     kind: "meeting",
     x,
@@ -190,8 +200,8 @@ function meeting(x: number, y: number, coffee = false): RoomSpec {
     w: 7,
     d: 5,
     floor: "carpet-room",
-    back: { y: ["plain", "plain", "window", "plain", "plain", "window", "plain"], x: ["plain", "window", "plain", "window", "plain"] },
-    open: { y: [1] },
+    back: { y: back, x: ["plain", "window", "plain", "window", "plain"] },
+    open: {},
     pieces: [
       piece("whiteboard", 0, [0, 0]),
       ...(coffee ? [piece("coffee-corner", 0, [3, 0])] : [piece("plant-small", 0, [3, 0])]),
@@ -202,7 +212,7 @@ function meeting(x: number, y: number, coffee = false): RoomSpec {
   };
 }
 
-/** The kitchen and lounge: the coffee corner, two sofas around a rug. 6 by 5. */
+/** The kitchen and lounge: the coffee corner, two sofas around a rug. 6 by 5. Its side wall backs onto the hall, with the door; its front faces outside. */
 function kitchen(x: number, y: number): RoomSpec {
   return {
     kind: "kitchen",
@@ -211,8 +221,8 @@ function kitchen(x: number, y: number): RoomSpec {
     w: 6,
     d: 5,
     floor: "tiles-room",
-    back: { y: ["plain", "plain", "window", "plain", "window", "plain"], x: ["plain", "window", "plain", "plain", "door"] },
-    open: { y: [4] },
+    back: { y: ["plain", "plain", "window", "plain", "window", "plain"], x: ["plain", "plain", "plain", "plain", "door"] },
+    open: {},
     pieces: [
       piece("coffee-corner", 0, [0, 0]),
       piece("plant-small", 0, [2, 0]),
@@ -229,14 +239,18 @@ function kitchen(x: number, y: number): RoomSpec {
 // entirely behind it), so it reads as a row across the screen; a second
 // office follows on the same line, four cells away (that gap is behind its
 // wall). The lanes run along the front of the back row; the front row stands
-// four cells away from them, so its back walls hide no lane.
+// four cells away from them, so its back walls hide no lane, and is entered
+// by doors in those back walls from the hall behind it.
 
 const rect = (x: number, y: number, w: number, d: number): CellRect => ({ x, y, w, d });
+
+/** The back wall of a meeting room whose whole back is on the hall: no window, the door in its third cell (clear of the whiteboard). */
+const MEETING_ON_HALL: WallKind[] = ["plain", "plain", "door", "plain", "plain", "plain", "plain"];
 
 /** Large: 7 to 12 agents. Lobby, two offices of six, a meeting room with a coffee corner. */
 const large: FloorTemplate = {
   id: "large",
-  rooms: [lobby(0, 0), office6(9, -7), office6(21, -7), meeting(13, 6, true)],
+  rooms: [lobby(0, 0), office6(9, -7), office6(21, -7), meeting(13, 6, MEETING_ON_HALL, true)],
   hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 21, 2), rect(9, 2, 11, 4)],
   lanes: [
     [
@@ -251,7 +265,7 @@ const large: FloorTemplate = {
 /** Medium: 4 to 6 agents. Lobby, an office of six, meeting room, kitchen. */
 const medium: FloorTemplate = {
   id: "medium",
-  rooms: [lobby(0, 0), office6(9, -7), meeting(13, 6), kitchen(21, -1)],
+  rooms: [lobby(0, 0), office6(9, -7), meeting(13, 6, MEETING_ON_HALL), kitchen(21, -1)],
   hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 12, 2), rect(9, 2, 12, 4), rect(17, -1, 4, 1)],
   lanes: [
     [
@@ -266,8 +280,9 @@ const medium: FloorTemplate = {
 /** Small: 1 to 3 agents. Lobby, an office of three, a meeting room with a coffee corner. */
 const small: FloorTemplate = {
   id: "small",
-  rooms: [lobby(0, 0), office3(9, -5), meeting(13, 6, true)],
-  hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 6, 2), rect(9, 2, 5, 4)],
+  // The hall behind the meeting room reaches its door; the rest of its back wall looks outside.
+  rooms: [lobby(0, 0), office3(9, -5), meeting(13, 6, ["plain", "plain", "door", "plain", "plain", "window", "plain"], true)],
+  hall: [rect(2, 6, 7, 2), rect(7, 0, 2, 8), rect(9, 0, 6, 2), rect(9, 2, 7, 4)],
   lanes: [
     [
       [2, 6],
