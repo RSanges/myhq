@@ -201,6 +201,8 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
     tiles.push({ cell, draws: [placeRef(vx, vy, chosen.sprite, null, room), ...masksOf(vx, vy, chosen.masks, room)] });
   };
   for (const cell of layout.hall) tile(cell, "wood", -1);
+  // The garden between the blocks of the single floor, when the floor set has grass.
+  if (set.tiles.grass) for (const cell of layout.garden) tile(cell, "grass", -1);
   layout.rooms.forEach((room, index) => {
     const colored = typeof tinted === "function" ? tinted(index) : tinted;
     const kind = colored ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";

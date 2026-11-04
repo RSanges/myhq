@@ -135,7 +135,7 @@ floor.json
   wall: { height: 64, thick: 4, rim: 6 }
   seatTop: 14, deskTop: 25, shadowAlpha: 72
   atlas: { file, w, h, frames: [[x, y, w, h], ...] }
-  tiles: { wood | carpet | tiles | carpet-room | tiles-room: [ { sprite, masks } ] }
+  tiles: { wood | carpet | tiles | carpet-room | tiles-room | grass: [ { sprite, masks } ] }
   walls: {
     wall | wall-window | wall-door: { 0: { edge: "-y", sprite }, 1: { edge: "-x", sprite } },
     rim: { 0: { edge: "+y", sprite }, 1: { edge: "+x", sprite } },
@@ -158,8 +158,9 @@ floor.json
 ```
 
 - **Tiles**: one per cell, a voxel thick, no outline so they tile
-  seamlessly. Several variants per kind (`wood`, `carpet`): pick one by a
-  hash of the cell. `carpet-room` and `tiles-room` carry `pastel` masks.
+  seamlessly. Several variants per kind (`wood`, `carpet`, `grass`): pick one
+  by a hash of the cell. `grass` (the leaf ramp, a few lighter blades and
+  darker tufts) is the garden between the suites of the single floor. `carpet-room` and `tiles-room` carry `pastel` masks.
   Draw all tiles first, back to front (by `cx + cy`).
 - **Walls**: `wall*` turn 0 stands behind cell `(cx, cy)` along its `-y`
   edge (the back right wall), turn 1 along its `-x` edge (the back left

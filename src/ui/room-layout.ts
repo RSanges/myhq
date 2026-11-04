@@ -98,6 +98,8 @@ export type RoomLayout = {
   rooms: PlacedRoom[];
   /** Cells of the wooden hall (outside the rooms). */
   hall: Cell[];
+  /** Cells of grass between the blocks of the single floor (the shadow of their walls); none elsewhere. */
+  garden: Cell[];
   pieces: Piece[];
   offices: Office[];
   /** The reception counter (a piece) and the receptionist's spot, on the floor that has it; null elsewhere. */
@@ -399,6 +401,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
     template: floor.template,
     rooms,
     hall,
+    garden: [],
     pieces,
     offices: offices.map(withNode),
     reception: reception ? { counter: reception.counter, office: withNode(reception.office) } : null,
@@ -431,8 +434,8 @@ export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLay
   return assembleLayout({ template: template.id, rooms, hall: template.hall, lanes: template.lanes }, options);
 }
 
-/** The screen box of the floor: every room with its walls, every cell of the hall. */
-function boundsOf(rooms: PlacedRoom[], hall: Cell[]): RoomLayout["bounds"] {
+/** The screen box of the floor: every room with its walls, every cell of the hall (and of a garden). */
+export function boundsOf(rooms: PlacedRoom[], hall: Cell[]): RoomLayout["bounds"] {
   let minX = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;

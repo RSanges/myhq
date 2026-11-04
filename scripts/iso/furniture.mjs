@@ -93,6 +93,17 @@ export function tile(b, { kind = "wood", variant = 0 } = {}) {
         return hash(Math.floor(x * 2), Math.floor(y * 2), variant) < 0.12 ? level - 1 : level;
       },
     },
+    // The garden between the suites of the single floor: short grass, a few lighter blades and darker tufts.
+    grass: {
+      ramp: "leaf", top: 2, left: 1, right: 0, rim: false,
+      paint(face, x, y, z, level) {
+        if (face !== TOP) return level;
+        const h = hash(Math.floor(x), Math.floor(y), variant + 11);
+        if (h < 0.07) return level + 1;
+        if (h > 0.9) return level - 1;
+        return level;
+      },
+    },
     "tiles-room": {
       ramp: "paper", top: 4, left: 3, right: 2,
       paint(face, x, y, z, level) {

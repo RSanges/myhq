@@ -83,9 +83,9 @@ export function buildFloor() {
   };
 
   // Tiles: kind x variant.
-  for (const kind of ["wood", "carpet", "tiles", "carpet-room", "tiles-room"]) {
+  for (const kind of ["wood", "carpet", "tiles", "carpet-room", "tiles-room", "grass"]) {
     json.tiles[kind] = [];
-    for (let variant = 0; variant < (kind.startsWith("wood") || kind.startsWith("carpet") ? 3 : 1); variant++) {
+    for (let variant = 0; variant < (kind.startsWith("wood") || kind.startsWith("carpet") || kind === "grass" ? 3 : 1); variant++) {
       const p = renderPiece({ build: (b) => F.tile(b, { kind, variant }), outline: "none" });
       json.tiles[kind].push({ sprite: addFrame(p.sprite), masks: maskList(p.masks) });
       if (variant === 0) previews.push({ name: kind, p });

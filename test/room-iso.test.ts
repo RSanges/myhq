@@ -14,7 +14,7 @@ import {
   sheetRow,
   turnOf,
 } from "../src/ui/iso-floor";
-import { GAP, layoutFloor, LOBBY_SIZE, MAX_ROOM_AGENTS, roomLength, type FloorRoomInput } from "../src/ui/floor-plan";
+import { BESIDE, layoutFloor, LOBBY_SIZE, MAX_ROOM_AGENTS, roomLength, type FloorRoomInput } from "../src/ui/floor-plan";
 import { FLOOR_TEMPLATES } from "../src/ui/floor-templates";
 import {
   CELL,
@@ -370,52 +370,91 @@ test("the single floor: a room per room of the home, its colour, its agents at i
       assert.ok(!layout.offices.some((office) => office.chair === owners[0]!.chair), `${label}: nobody sits at the user's desk`);
     }
     assert.equal(new Set(layout.offices.map((o) => `${o.seat.x},${o.seat.y}`)).size, layout.offices.length, `${label}: one agent per chair`);
-    // The lobby: in the corner, with the counter, the receptionist and the user's desk of the onboarding room.
+    // The lobby: with the counter, the receptionist and the user's desk of the onboarding room.
     const lobby = layout.rooms[0]!;
-    assert.deepEqual([lobby.kind, lobby.x, lobby.y, lobby.w, lobby.d], ["lobby", 0, 0, LOBBY_SIZE, LOBBY_SIZE]);
+    assert.deepEqual([lobby.kind, lobby.w, lobby.d], ["lobby", LOBBY_SIZE, LOBBY_SIZE]);
     assert.equal(layout.reception?.office.key, RECEPTION_KEY);
     assert.ok(layout.owners.some((owner) => owner.room === RECEPTION_ROOM && owner.roomIndex === 0));
     assert.ok(layout.coffee !== null, `${label}: a coffee corner`);
   }
 });
 
-test("the single floor: separate blocks on a grid in two dimensions, the reception's room next to the lobby, sizes from the agents", () => {
+/** Cells of a floor's box (the rooms, the hall and the garden fill it) taken by rooms or corridors. */
+function usedShare(layout: RoomLayout): number {
+  const cells = new Set(layout.hall.map(([cx, cy]) => `${cx},${cy}`));
+  for (const room of layout.rooms) for (let cx = room.x; cx < room.x + room.w; cx += 1) for (let cy = room.y; cy < room.y + room.d; cy += 1) cells.add(`${cx},${cy}`);
+  return cells.size / (cells.size + layout.garden.length);
+}
+
+test("the single floor: separate suites around a spine and its ribs, packed, the reception's room next to the lobby", () => {
   for (const counts of floorHomes()) {
     const rooms = homeRooms(counts);
     const reception = rooms[rooms.length - 1]!.name;
     const layout = layoutFloor(rooms, { reception, receptionist: false });
     const label = `rooms ${counts.join(",")}`;
     assert.equal(layout.reception, null, `${label}: no counter without the receptionist`);
-    assert.equal(layout.rooms[1]!.project, reception, `${label}: the reception's room comes right after the lobby`);
-    // Blocks stand apart: GAP cells or more between any two, along x or along y.
+    // The reception's room is the first suite placed after the lobby: right above it, or first on the lobby's rib.
+    assert.equal(layout.rooms[1]!.project, reception, `${label}: the reception's room next to the lobby`);
+    // Blocks stand apart (the shadow of a wall between them, or a corridor and that shadow), each with its own walls.
     layout.rooms.forEach((a, i) => {
+      assert.ok(a.back.x.length > 0 && a.back.y.length > 0, `${label}: the block at ${a.x},${a.y} has its walls`);
       layout.rooms.forEach((b, j) => {
         if (j <= i) return;
         const apartX = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w));
         const apartY = Math.max(b.y - (a.y + a.d), a.y - (b.y + b.d));
-        assert.ok(apartX >= GAP || apartY >= GAP, `${label}: blocks at ${a.x},${a.y} and ${b.x},${b.y} stand apart`);
+        assert.ok(apartX >= BESIDE || apartY >= BESIDE, `${label}: blocks at ${a.x},${a.y} and ${b.x},${b.y} stand apart`);
       });
     });
-    // Every block has its own walls: both back walls at full height.
-    for (const room of layout.rooms) assert.ok(room.back.x.length > 0 && room.back.y.length > 0, `${label}: a block at ${room.x},${room.y} with its walls`);
-    if (layout.rooms.length >= 3) {
+    // Not a line: from two rooms on, the blocks spread along x and along y.
+    if (rooms.length >= 2) {
       assert.ok(new Set(layout.rooms.map((room) => room.x)).size >= 2, `${label}: more than one column`);
       assert.ok(new Set(layout.rooms.map((room) => room.y)).size >= 2, `${label}: more than one row`);
+    }
+    // Packed: rooms and corridors take most of the floor's box, the garden (the shadow strips between the rows)
+    // fills only the rest: about 60 % for a usual home, under 50 % only for a home of one or two rooms.
+    assert.ok(usedShare(layout) >= 0.4, `${label}: ${Math.round(usedShare(layout) * 100)} % of the box used`);
+    const taken = new Set([...layout.hall].map(([cx, cy]) => `${cx},${cy}`));
+    for (const [cx, cy] of layout.garden) {
+      assert.ok(!taken.has(`${cx},${cy}`), `${label}: the garden is not on the hall`);
+      assert.ok(!layout.rooms.some((room) => cx >= room.x && cx < room.x + room.w && cy >= room.y && cy < room.y + room.d), `${label}: nor in a room`);
     }
     for (const room of rooms) {
       const placed = layout.rooms.find((each) => each.project === room.name)!;
       const length = placed.open.y.length > 0 ? placed.w : placed.d;
       assert.equal(length, roomLength(room.keys.length), `${label}: ${room.name} sized from its agents`);
     }
-    // Some blocks open downwards, some sideways: the corridors branch.
-    if (layout.rooms.length >= 3) {
-      assert.ok(layout.rooms.some((room) => room.open.x.length > 0), `${label}: a block opens sideways`);
-      assert.ok(layout.rooms.some((room) => room.open.y.length > 0), `${label}: a block opens downwards`);
-    }
   }
   assert.ok(roomLength(1) < roomLength(6) && roomLength(6) < roomLength(12), "a bigger team, a longer room");
   const crowded = layoutFloor(homeRooms([15]), { reception: null });
   assert.equal(crowded.offices.length, MAX_ROOM_AGENTS, "agents beyond the desks of a room have no office");
+});
+
+test("the single floor: the lobby is the entrance, at the front, where the main corridor starts", () => {
+  for (const counts of floorHomes()) {
+    const layout = layoutFloor(homeRooms(counts), { reception: "p0", receptionist: true });
+    const label = `rooms ${counts.join(",")}`;
+    const lobby = layout.rooms[0]!;
+    assert.equal(lobby.kind, "lobby");
+    // At the front: the corner nearest the viewer (the bottom of the screen, the largest x + y) is the lobby's.
+    const front = (room: RoomLayout["rooms"][number]) => room.x + room.w + room.y + room.d;
+    assert.equal(front(lobby), Math.max(...layout.rooms.map(front)), `${label}: the lobby is in front`);
+    // It opens onto the main corridor, and the corridors start there: their front corner (where the main corridor
+    // and the spine meet) is in front of the lobby, nothing of the hall lies further towards the viewer.
+    const door: [number, number] = [lobby.x + lobby.open.y[0]!, lobby.y + lobby.d];
+    const hall = new Set(layout.hall.map(([cx, cy]) => `${cx},${cy}`));
+    assert.ok(hall.has(`${door[0]},${door[1]}`), `${label}: the lobby opens onto the corridor`);
+    const corner = layout.hall.reduce((best, cell) => (cell[0] + cell[1] > best[0] + best[1] ? cell : best));
+    assert.ok(
+      corner[0] >= lobby.x && corner[0] < lobby.x + lobby.w + 2 && corner[1] >= lobby.y + lobby.d && corner[1] < lobby.y + lobby.d + 2,
+      `${label}: the corridors start in front of the lobby, not at ${corner.join(",")}`,
+    );
+    // Every other block is reached from there: the receptionist walks to every desk.
+    const office = layout.reception!.office;
+    for (const other of layout.offices) {
+      const route = routeToOffice(layout, office, other);
+      assert.ok(route.length >= 2, `${label}: a way to ${other.key}`);
+    }
+  }
 });
 
 test("the single floor: an agent brings its folder to the user's desk of its own room", () => {
