@@ -90,7 +90,8 @@ export function expandMcpServers(
  * servers, with their `${NAME}` placeholders expanded from `env` (the app's
  * environment) and from the run's own variables (`hqEnv`: HQ_DB_PATH,
  * HQ_RUN_ID, HQ_AGENT_ID, HQ_ROOM), which win. Throws before writing anything
- * when a variable is missing.
+ * when a variable is missing. The file is readable by its owner only, and the
+ * runner deletes it as soon as the CLI has loaded it (removeMcpConfig).
  */
 export function writeMcpConfig(params: {
   file: string;
@@ -107,7 +108,47 @@ export function writeMcpConfig(params: {
     },
   };
   fs.mkdirSync(path.dirname(params.file), { recursive: true });
-  fs.writeFileSync(params.file, JSON.stringify(config, null, 2));
+  // The file holds expanded secrets: owner-only where the OS has such modes (a no-op on Windows).
+  fs.rmSync(params.file, { force: true });
+  fs.writeFileSync(params.file, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+/**
+ * Deletes a per-run MCP config file. Never throws: a failure (a file still
+ * held open on Windows) is left to the next call, and to the startup sweep.
+ * Returns whether the file is gone.
+ */
+export function removeMcpConfig(file: string): boolean {
+  try {
+    fs.rmSync(file, { force: true });
+    return !fs.existsSync(file);
+  } catch {
+    return false;
+  }
+}
+
+/** Name of a per-run MCP config file: `<run id>.mcp.json`, nothing else. */
+const RUN_MCP_CONFIG = /^\d+\.mcp\.json$/;
+
+/**
+ * Startup sweep: deletes the `<run id>.mcp.json` files that previous versions
+ * (which kept them) or a crash left in the runs directory. Nothing else is
+ * touched (the `.jsonl` logs, the chat's own files). Returns how many were
+ * deleted.
+ */
+export function purgeLeftoverMcpConfigs(runsDir: string): number {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(runsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !RUN_MCP_CONFIG.test(entry.name)) continue;
+    if (removeMcpConfig(path.join(runsDir, entry.name))) removed += 1;
+  }
+  return removed;
 }
 
 /**

@@ -57,6 +57,31 @@ terms allow. There is no Agent SDK.
 `--max-turns` does not exist in CLI 2.1.183: the per-run cap goes through
 `--max-budget-usd`. Check the flags again when the CLI version changes.
 
+**The per-run MCP config does not outlive its start.** The `--mcp-config` file
+(`data/runs/<run id>.mcp.json`) holds the `${NAME}` placeholders already
+expanded, so the mail passwords and other secrets of the home are in it in
+clear. It is written with owner-only permissions where the OS has them (mode
+`0600`; Windows ignores it) and deleted by the runner, never kept:
+
+- as soon as the `system`/`init` event arrives. With blocking MCP startup the
+  CLI emits it after it loaded the file and connected its servers, so nothing
+  reads the file after that (deduced from the startup order, not instrumented);
+- in any case when the run ends (the `finally` of the runner): success,
+  failure, engine error, abort, timeout, or a run that never sent an init
+  event;
+- when the app process exits with runs in progress (the exit hook).
+
+The retry of a run stopped for an MCP server not connected is a new run with
+its own id: it writes its own file and deletes it the same way. A deletion
+that fails (a file still held open) is tried again at the end of the run, and
+the startup sweep catches what remains. At startup the app also deletes every
+`data/runs/<number>.mcp.json` left by earlier versions or by a crash (it logs
+how many); no other file of that folder is touched. The run journal
+(`<run id>.jsonl`, the stream-json lines) and the `events` table hold no
+expanded secret: they carry server names and statuses, not the config. The
+assistant chat per-turn config (`data/assistant/chat/`) gets the same
+owner-only mode and is deleted after its turn.
+
 ### Engines
 
 A run is executed by an engine behind a single interface, roughly

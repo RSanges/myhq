@@ -209,7 +209,7 @@ export function writeChatMcpConfig(chat: ChatConfig, mcp: ChatMcp, turnId: strin
   const servers = expandMcpServers(chat.mcpServers, { ...mcp.appEnv, ...variables });
   const file = path.join(mcp.dir, `${turnId}.mcp.json`);
   fs.mkdirSync(mcp.dir, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2));
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600 });
   return file;
 }
 

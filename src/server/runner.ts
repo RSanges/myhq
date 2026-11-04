@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { strings } from "../ui/strings";
 import { recordBotMessage } from "./chat-history";
-import { ClaudeEngine, writeMcpConfig } from "./claude-engine";
+import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
@@ -79,7 +79,7 @@ function promptLanguage(home: string): string {
   }
 }
 
-type ActiveRun = { controller: AbortController; reason: "timeout" | null };
+type ActiveRun = { controller: AbortController; reason: "timeout" | null; mcpConfigPath: string | null };
 
 const globalForRunner = globalThis as unknown as {
   __myhqRunner?: { active: Map<number, ActiveRun>; dbPath: string | null; exitHook: boolean };
@@ -109,6 +109,7 @@ function installExitHook(dbPath: string): void {
     for (const [runId, run] of state.active) {
       cancel.run(now(), "MyHQ stopped during the run.", runId);
       run.controller.abort();
+      if (run.mcpConfigPath) removeMcpConfig(run.mcpConfigPath);
     }
   });
 }
@@ -427,7 +428,7 @@ function wake(p: ExecuteParams): void {
 async function execute(p: ExecuteParams): Promise<void> {
   const { db, config, engine, room, agent, run } = p;
   const state = runnerState();
-  const active: ActiveRun = { controller: new AbortController(), reason: null };
+  const active: ActiveRun = { controller: new AbortController(), reason: null, mcpConfigPath: null };
   state.active.set(run.id, active);
   const timer = setTimeout(() => {
     active.reason = "timeout";
@@ -436,6 +437,7 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   const logFile = path.join(config.runsDir, `${run.id}.jsonl`);
   const mcpConfigPath = path.join(config.runsDir, `${run.id}.mcp.json`);
+  active.mcpConfigPath = mcpConfigPath;
   const hqEnv = {
     HQ_DB_PATH: config.dbPath,
     HQ_RUN_ID: String(run.id),
@@ -479,6 +481,8 @@ async function execute(p: ExecuteParams): Promise<void> {
     };
     for await (const event of engine.run(input)) {
       if (event.type === "start") {
+        // The init event comes after the CLI connected its servers, so it has read the file: its secrets leave the disk now.
+        removeMcpConfig(mcpConfigPath);
         // A run without the tools of its servers must never deliver: it is stopped before its first turn.
         const down = notConnectedServers(event.mcpServers);
         if (down.length > 0) {
@@ -520,6 +524,8 @@ async function execute(p: ExecuteParams): Promise<void> {
   } finally {
     clearTimeout(timer);
     state.active.delete(run.id);
+    // Whatever the end (no init event, failure, abort, timeout), the config does not outlive the run.
+    removeMcpConfig(mcpConfigPath);
   }
 
   let status: RunStatus = end?.status ?? "failed";

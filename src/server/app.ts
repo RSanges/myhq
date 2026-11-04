@@ -2,6 +2,7 @@ import { getConfig, type HqConfig } from "./config";
 import { getDbAt, type Db } from "./db";
 import { loadHome, syncHome, type Home } from "./rooms";
 import { wakeOnboarding } from "./onboarding";
+import { purgeLeftoverMcpConfigs } from "./claude-engine";
 import { recoverInterruptedRuns } from "./runner";
 
 const globalForApp = globalThis as unknown as { __myhqStarted?: Set<string> };
@@ -19,6 +20,9 @@ export function app(): { config: HqConfig; db: Db } {
     globalForApp.__myhqStarted.add(config.dbPath);
     const recovered = recoverInterruptedRuns(db);
     if (recovered > 0) console.warn(`[myhq] ${recovered} interrupted run(s) marked as failed`);
+    // Earlier versions kept each run's MCP config, with its expanded secrets, on disk.
+    const purged = purgeLeftoverMcpConfigs(config.runsDir);
+    if (purged > 0) console.warn(`[myhq] ${purged} leftover MCP config file(s) deleted from the runs directory`);
     const home = loadAndSyncHome(config, db);
     console.log(`[myhq] home ${config.home}: ${home.rooms.length} room(s)`);
     // Revisions of room proposals asked while the app was down (or busy) run now.

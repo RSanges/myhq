@@ -10,12 +10,16 @@ import { makeHome, waitForRun } from "./helpers";
 
 const usage = { inputTokens: 12, outputTokens: 34, cacheCreationInputTokens: 56, cacheReadInputTokens: 78 };
 
+/** The MCP config of each run as the engine saw it (the runner deletes the file once the run has started). */
+const mcpAtStart = new Map<string, string>();
+
 /** An engine that replays fixed events, optionally waiting for a release first. */
 function fakeEngine(events: RunEvent[], gate?: Promise<void>, seen?: RunInput[]): Engine {
   return {
     name: "claude",
     async *run(input) {
       seen?.push(input);
+      mcpAtStart.set(input.mcpConfigPath, fs.readFileSync(input.mcpConfigPath, "utf8"));
       if (gate) await gate;
       for (const event of events) yield event;
     },
@@ -70,7 +74,7 @@ test("a run records its events, tokens, cost and status", async () => {
   assert.ok(fs.existsSync(input.workDir));
   assert.match(input.prompt, /Find threads\./);
   assert.equal(input.env.HQ_RUN_ID, String(run.id));
-  const mcp = JSON.parse(fs.readFileSync(input.mcpConfigPath, "utf8")) as {
+  const mcp = JSON.parse(mcpAtStart.get(input.mcpConfigPath)!) as {
     mcpServers: { hq: { env: Record<string, string> } };
   };
   assert.equal(mcp.mcpServers.hq.env.HQ_DB_PATH, config.dbPath);
@@ -219,7 +223,7 @@ test("a run fails before launch when an MCP placeholder variable is missing, and
   } finally {
     delete process.env.HQ_EXT_TEST_CLIENT_ID;
   }
-  const mcp = JSON.parse(fs.readFileSync(seen[0]!.mcpConfigPath, "utf8")) as {
+  const mcp = JSON.parse(mcpAtStart.get(seen[0]!.mcpConfigPath)!) as {
     mcpServers: { reddit: { env: Record<string, string> } };
   };
   assert.equal(mcp.mcpServers.reddit.env.CLIENT_ID, "client-123");
@@ -252,7 +256,7 @@ test("an MCP server of the home receives the run's own variables through placeho
   const seen: RunInput[] = [];
   const run = startRun({ room: "demo", agent: "scout" }, { config, engine: fakeEngine(doneEvents, undefined, seen), send: async () => true });
   assert.equal((await waitForRun(getDbAt(config.dbPath), run.id)).status, "done");
-  const mcp = JSON.parse(fs.readFileSync(seen[0]!.mcpConfigPath, "utf8")) as {
+  const mcp = JSON.parse(mcpAtStart.get(seen[0]!.mcpConfigPath)!) as {
     mcpServers: { mail: { args: string[]; env: Record<string, string> } };
   };
   assert.deepEqual(mcp.mcpServers.mail.env, { DB: config.dbPath, RUN: String(run.id), WHO: "demo/scout" });
