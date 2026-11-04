@@ -247,6 +247,7 @@ restart.
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
   "reception": { "room": "demo", "sprite": null, "runs": [] },
+  "floor": { "layout": "floor-per-project" },
   "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
   "firings": [],
   "approvals": { "pending": [], "unseen": [], "history": [] },
@@ -284,6 +285,10 @@ restart.
   for the repository <path>. »), newest first. The reserved room `_hq` is not
   in `rooms`; its runs, events and approvals still arrive on the stream like
   any other.
+- `floor.layout`: how `/room` draws the home, `floor.layout` of `myhq.json`:
+  `"floor-per-project"` (the default, also when the block is missing or
+  invalid) or `"room-per-project"` (one floor for the whole home). An
+  interface that does not know a value takes the default.
 - `armed`: whether the agent's routines may start runs (the database value
   once changed, the `armed` of `room.json` until then). `routines`: one entry
   per cron of the agent, `task` `null` for the routine work of the role,

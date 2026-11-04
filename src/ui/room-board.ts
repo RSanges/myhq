@@ -1,5 +1,5 @@
 import { formatCost, formatDateTime } from "./format";
-import type { TeamAgent } from "./model";
+import { agentKey, type TeamAgent } from "./model";
 import type { Firing, Usage } from "./schemas";
 import { strings } from "./strings";
 
@@ -9,21 +9,22 @@ const t = strings.room.board;
 export type BoardRow = { key: string; label: string; value: string };
 
 /**
- * The whiteboard of a room: the day's runs against the cap, the cost, the
+ * The whiteboard of a room (of every room, with `room` null: the single
+ * floor of the home): the day's runs against the cap, the cost, the
  * share of the weekly budget, and the state of the routines (armed or not,
  * next fire, last firing). Pure: the strings and the formats are the only
  * things it needs.
  */
 export function buildBoard(params: {
-  room: string;
+  room: string | null;
   agents: TeamAgent[];
   usage: Usage | null;
   firings: Firing[];
   schedulerEnabled: boolean;
 }): BoardRow[] {
   const { room, agents, usage, firings, schedulerEnabled } = params;
-  const mine = agents.filter((agent) => agent.room === room);
-  const names = new Map(mine.map((agent) => [agent.id, agent.name]));
+  const mine = room === null ? agents : agents.filter((agent) => agent.room === room);
+  const names = new Map(mine.map((agent) => [agentKey(agent.room, agent.id), agent.name]));
   const rows: BoardRow[] = [];
 
   rows.push({
@@ -58,13 +59,13 @@ export function buildBoard(params: {
     value: !schedulerEnabled ? t.nextOff : next ? t.nextValue(next.agent, formatDateTime(next.at)) : t.nextNone,
   });
 
-  const last = firings.find((firing) => firing.room === room && names.has(firing.agentId));
+  const last = firings.find((firing) => names.has(agentKey(firing.room, firing.agentId)));
   rows.push({
     key: "last",
     label: t.last,
     value: last
       ? t.lastValue(
-          names.get(last.agentId) ?? last.agentId,
+          names.get(agentKey(last.room, last.agentId)) ?? last.agentId,
           formatDateTime(last.createdAt),
           strings.routines.outcome[last.outcome] ?? last.outcome,
         )

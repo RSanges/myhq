@@ -22,8 +22,8 @@ export type LabelSpec = {
   /** Which point of the label sits at (x, y): 0 left or top, 0.5 center, 1 right or bottom. Default: centered. */
   ax?: number;
   ay?: number;
-  /** A box around the text, drawn in CSS: a name plate, a name tag over a head, a bubble, a round badge. */
-  box?: "plate" | "tag" | "bubble" | "badge";
+  /** A box around the text, drawn in CSS: a name plate, a name tag over a head, a bubble, a round badge, a count pill. */
+  box?: "plate" | "tag" | "bubble" | "badge" | "count";
   /** A colour (normalized hex) for the box: a thin line under a name plate or tag. Null or left out: none. */
   color?: string | null;
   /** Wrap at this width (world units), for a bubble. */

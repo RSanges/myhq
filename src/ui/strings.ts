@@ -416,6 +416,20 @@ export const strings = {
       lastValue: (agent: string, date: string, outcome: string) => `${agent}, ${date} (${outcome})`,
       unknown: "...",
     },
+    /** The single floor of the home (myhq.json `floor.layout: "room-per-project"`): a room per project. */
+    single: {
+      /** The buttons at the top: each one takes the view to its room. */
+      roomsLabel: "Aller à une salle",
+      goTo: (room: string) => `Aller à la salle ${room}`,
+      goToWithCount: (room: string, count: number) =>
+        count === 1 ? `Aller à la salle ${room}, 1 item à signer` : `Aller à la salle ${room}, ${count} items à signer`,
+      /** The sign at the door of the meeting room. */
+      meeting: "Réunion",
+      /** The user's desk of each room, listed under the floor: a link to what it waits for. */
+      pilesTitle: "À signer, par salle",
+      pile: (room: string, count: number) =>
+        count === 0 ? `${room} : rien à signer` : count === 1 ? `${room} : 1 à signer` : `${room} : ${count} à signer`,
+    },
     band: {
       title: "En un coup d'œil",
       show: "Voir la pièce",
@@ -562,6 +576,12 @@ export const strings = {
     signer: {
       /** The section of the cards, under the title of the page. */
       section: "Ce qui attend ta décision",
+      /** `/bureau/<id>?room=<room>`, from the user's desk of a room of the floor: only that room's items. */
+      filter: {
+        chip: (room: string) => `Filtré sur : ${room}`,
+        clear: (room: string) => `Retirer le filtre sur ${room}`,
+        section: (room: string) => `Ce qui attend ta décision pour ${room}`,
+      },
     },
     courrier: {
       hint: "Rien à décider : lis, puis marque comme vu, ou demande une réponse.",

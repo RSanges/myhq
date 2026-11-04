@@ -870,6 +870,47 @@ furniture, that pieces never share a cell, that the walls follow the rules
 above and that the hall is in one piece. More than 12 agents are listed
 under the floor but have no office on it.
 
+**The single floor.** With `floor.layout: "room-per-project"` in `myhq.json`
+(`home-layout.md`; the default, `"floor-per-project"`, is the floor of one
+room above), `/room` draws the whole home as one floor where each room of the
+home is one room (`layoutFloor`, `src/ui/floor-plan.ts`). It is the corner of
+a building seen from the front: the lobby in the corner, at the top of the
+screen, and the rooms along the two back walls, one wing along x, one along y,
+with the wooden hall in front of both wings and round the lobby. Only the
+outer walls of the building stand at full height: they look outside (the
+windows), and they hide nothing but the outside. Between two rooms of a wing
+the partition is the low rim of the first one, the second having no back wall
+on that side (an empty `back.x` or `back.y` of the room), so no room hides
+another and every room opens onto the hall through its front rim. A room of a
+wing is six cells deep and as long as its team needs (`roomLength`): two rows
+of workstations facing the back wall (desk, chair, aisle, twice), two cells per
+desk along the wing, the last column for the aisle to the opening, a tall
+plant at its top, and in the places left a bookshelf, a whiteboard, plants or a
+printer; its carpet takes its own colour. Each room also has the user's own
+desk, empty, in its front row by the opening, with a pile of folders on it:
+one per item of that room waiting for a decision (ten drawn at most), the
+spines in the room colour, and a count over it. The lobby (eight by eight)
+holds the reception counter facing the wing along x (the receptionist behind
+it), the coffee corner, a sofa by a rug and the user's desk of the onboarding
+room `_hq`, where room proposals land; the room of the reception
+(`reception.room`) opens that wing, the others go to the shorter wing in the
+order of the home, and a meeting room ends the shorter wing when the two
+differ by more than its length. The tests run every rule above on generated
+homes of 1 to 8 rooms of 1 to 12 agents, and check that a side without a back
+wall is lined by another room all along. The page then shows every agent of
+the home in the strip, the receptionist last; the buttons at the top take the
+view to a room (centred, and close enough to see it whole when it fits) and
+carry its count; the name of each room is a sign at its opening. A click on a
+user's desk (or the list « À signer, par salle » under the floor, its
+equivalent for the keyboard and screen readers) opens the page of the pile of
+decisions filtered to that room, `/bureau/<id>?room=<room>` (section 8). An
+agent carries what it submits to the user's desk of its own room, a delivery
+of a shared room (`forRoom`) to the desk of the room that ordered it, and a
+message to an agent of another room (`hq_message` with `room`) is a walk
+through the hall to that agent's desk. The overview is centred on the whole
+floor; on a screen where even one device pixel per art pixel is too big, the
+ends of the wings are a drag away.
+
 **The reception.** Onboarding is an agent too (section 3), and it is
 the one agent that no room owns: its runs belong to the reserved room `_hq`. So
 that it is visible, every template has a reception counter in its lobby (the
@@ -1022,7 +1063,9 @@ the room (README, "Trying the room without a real run").
   the 250 kB threshold), paid on `/room` only, since the module is a dynamic
   import. The renderer is behind an interface, so a canvas 2D one can replace it
   without touching the model.
-- The tray counts the items of the shown room.
+- The tray counts the items of the shown room; on the single floor, each
+  user's desk counts the items of its room (`pendingByRoom` of the view), an
+  item delivered by a shared room counting for the room that ordered it.
 
 ## 8. The desk objects
 
@@ -1069,6 +1112,10 @@ the model, the data, the API and one page per object.
 - **Deep links** keep working: `/#approval-<id>` opens the item on `/` as
   before, and the items of a module link to `/bureau/<id>#approval-<id>`, which
   unfolds and rings the item on the page of the pile or the tray.
+  `/bureau/<id>?room=<room>` (the user's desk of a room of the single floor)
+  shows the pile of `approvals` filtered to that room (its own items and the
+  deliveries ordered from a shared room), with a « Filtré sur » chip whose
+  cross goes back to the whole pile.
 - **The hub** (`src/ui/hub.tsx`, the mapping in `src/ui/hub-scene.ts`), at the
   top of `/`: the scene composed in the browser from `public/iso/hub/` (format
   in `scripts/iso/README.md`). Each object of the scene takes the state that

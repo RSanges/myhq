@@ -95,6 +95,7 @@ const stateWith = (rooms: string[], reception: State["reception"]): State =>
     })),
     invalidRooms: [],
     reception,
+    floor: { layout: "floor-per-project" },
     scheduler: { enabled: false, running: false, timeZone: "UTC" },
     firings: [],
     approvals: { pending: [], unseen: [], history: [] },
@@ -137,7 +138,7 @@ test("the receptionist walks from the counter to the tray inside the lobby, with
     const label = `${layout.template} with ${count}`;
     const toUser = routeToUser(layout, desk.office);
     assert.deepEqual(toUser[0], desk.office.seat);
-    assert.deepEqual(toUser[toUser.length - 1], layout.user.stand, "it ends where a folder is dropped in the tray");
+    assert.deepEqual(toUser[toUser.length - 1], layout.user!.stand, "it ends where a folder is dropped in the tray");
     assert.ok(toUser.length >= 2 && routeLength(toUser) >= 16, "a real walk");
     const lobby = layout.rooms[desk.office.room]!;
     const inLobby = (p: Point) =>
@@ -189,7 +190,7 @@ test("on submitting a room_proposal the receptionist walks to the user's office,
 
   const arrived = seen(model, T0 + 1000 + leg + 100);
   assert.equal(arrived.status.kind, "dropping");
-  assert.deepEqual([arrived.x, arrived.y], [model.layout.user.stand.x, model.layout.user.stand.y]);
+  assert.deepEqual([arrived.x, arrived.y], [model.layout.user!.stand.x, model.layout.user!.stand.y]);
   assert.equal(snapshotRoom(model, T0 + 1000 + leg + 100).pending, 0, "the folder is not in the tray yet");
   assert.equal(snapshotRoom(model, T0 + 1000 + leg + 900).pending, 1, "the receptionist's proposal counts in the tray");
   assert.equal(seen(model, T0 + 1000 + leg + DROP_STAY_MS + leg / 2).status.kind, "returning");

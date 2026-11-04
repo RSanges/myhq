@@ -199,7 +199,7 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.equal(walker.carrying, true);
   assert.equal(walker.animation, "walk");
   assert.ok(Math.hypot(walker.x - seat.x, walker.y - seat.y) > 1, "it left its chair");
-  assert.ok(Math.hypot(walker.x - layout.user.stand.x, walker.y - layout.user.stand.y) > 1, "on its way");
+  assert.ok(Math.hypot(walker.x - layout.user!.stand.x, walker.y - layout.user!.stand.y) > 1, "on its way");
   assert.ok(Math.abs(walker.x % 8) < 0.01 || Math.abs(walker.y % 8) < 0.01, "on a line through cell centres");
   assert.ok(walker.walked > 0, "it exposes the distance walked, for the renderer to frame the walk");
   assert.equal(walking.pending, 0);
@@ -212,7 +212,7 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
   assert.equal(beforeDrop.pending, 0);
   assert.equal(agent(dropped).carrying, false);
   assert.equal(dropped.pending, 1, "the counter rises when the folder is dropped");
-  assert.deepEqual([agent(dropped).x, agent(dropped).y], [layout.user.stand.x, layout.user.stand.y]);
+  assert.deepEqual([agent(dropped).x, agent(dropped).y], [layout.user!.stand.x, layout.user!.stand.y]);
   assert.equal(agent(leaving).status.kind, "dropping");
   assert.equal(agent(home).seated, true);
   assert.deepEqual([agent(home).x, agent(home).y], [seat.x, seat.y]);

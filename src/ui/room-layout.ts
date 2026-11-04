@@ -55,6 +55,25 @@ export type PlacedRoom = {
   open: { y: number[]; x: number[] };
   /** An office with desks and nobody at them. */
   vacant: boolean;
+  /** The room of the home it stands for on a single floor (`_hq` for the lobby); null on the floor of one room. */
+  project: string | null;
+  /** Its own colour on a single floor (a normalized hex); null: the colour of the floor shown, or neutral. */
+  color: string | null;
+};
+
+/** The user's own desk in a room of a single floor: empty, with the pile of what that room waits for. */
+export type OwnerDesk = {
+  /** The room of the home whose items it holds (`_hq`, the onboarding room, in the lobby). */
+  room: string;
+  /** Index of its room in `rooms`. */
+  roomIndex: number;
+  /** The workstation and its empty chair (pieces). */
+  desk: number;
+  chair: number;
+  /** Where an agent stands to drop a folder, and the way it faces there. */
+  stand: Point;
+  standNode: number;
+  faces: Direction;
 };
 
 export type Office = {
@@ -74,7 +93,8 @@ export type Office = {
 };
 
 export type RoomLayout = {
-  template: FloorTemplate["id"];
+  /** The template of a floor of one room, or `rooms`: the single floor where each room of the home is a room. */
+  template: FloorTemplate["id"] | "rooms";
   rooms: PlacedRoom[];
   /** Cells of the wooden hall (outside the rooms). */
   hall: Cell[];
@@ -82,6 +102,7 @@ export type RoomLayout = {
   offices: Office[];
   /** The reception counter (a piece) and the receptionist's spot, on the floor that has it; null elsewhere. */
   reception: { counter: number; office: Office } | null;
+  /** The lobby of a floor of one room: the user's desk and the tray; null on a single floor (see `owners`). */
   user: {
     /** The user's own workstation and chair (pieces), always empty. */
     desk: number;
@@ -92,7 +113,9 @@ export type RoomLayout = {
     stand: Point;
     standNode: number;
     faces: Direction;
-  };
+  } | null;
+  /** The user's desk of each room of a single floor; none on the floor of one room. */
+  owners: OwnerDesk[];
   /** The whiteboard of the meeting room and the coffee corner (pieces), when the floor has them. */
   board: number | null;
   coffee: number | null;
@@ -230,24 +253,45 @@ export type LayoutOptions = {
   reception?: boolean;
 };
 
+/** A room to assemble: its plan, who sits at its desks, and, on a single floor, the user's desk and the counter. */
+export type BuildRoom = {
+  spec: RoomSpec;
+  project: string | null;
+  color: string | null;
+  /** The agent of each desk of `spec.desks`, in order; undefined leaves the chair empty. */
+  keys: (string | undefined)[];
+  /** The user's own desk of the room (single floor). */
+  owner?: DeskSpec;
+  /** The reception counter of the lobby of a single floor, drawn with the receptionist on request. */
+  counter?: { at: Cell; staff: Cell; stand: Cell; faces: Direction; turn: 0 | 1 };
+};
+
+/** A floor to assemble: its rooms, the hall around them (cells) and the lanes of the hall (absolute cells). */
+export type BuildFloor = {
+  template: RoomLayout["template"];
+  rooms: BuildRoom[];
+  hall: CellRect[];
+  lanes: Cell[][];
+};
+
+type UserSpot = Omit<NonNullable<RoomLayout["user"]>, "standNode">;
+type PendingOffice = Omit<Office, "node">;
+
 /**
- * The floor for the given agent keys, in order, from the smallest template
- * that seats them. The reception counter is added to the lobby on request: it
- * seats nobody of `keys`, the receptionist belongs to the home, not to a room.
+ * The layout of a floor: pieces in absolute cells, offices of the agents, the
+ * user's desks, the hall's cells and the graph of aisles and lanes. Shared by
+ * the templates of a floor of one room and the single floor of the home.
  */
-export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLayout {
-  const template = templateFor(keys.length);
+export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): RoomLayout {
   const pieces: Piece[] = [];
   const rooms: PlacedRoom[] = [];
-  const lines: Point[][] = template.lanes.map((lane) => lane.map(centreOf));
+  const lines: Point[][] = floor.lanes.map((lane) => lane.map(centreOf));
   const stands: Point[] = [];
-  type Pending = Omit<Office, "node">;
-  const offices: Pending[] = [];
-  let reception: { counter: number; office: Pending } | null = null;
-  let user: Omit<RoomLayout["user"], "standNode"> | null = null;
+  const offices: PendingOffice[] = [];
+  const owners: Omit<OwnerDesk, "standNode">[] = [];
+  const found: { reception: { counter: number; office: PendingOffice } | null; user: UserSpot | null } = { reception: null, user: null };
   let board: number | null = null;
   let coffee: number | null = null;
-  let next = 0;
 
   const place = (room: RoomSpec, index: number, name: string, turn: number, at: Cell): number => {
     pieces.push({ name, turn, cell: add(room, at), room: index });
@@ -258,25 +302,48 @@ export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLay
     const chair = chairOf(desk);
     return { chair: place(room, index, "desk-chair", chair.turn, chair.at), seat: centreOf(add(room, chair.at)), faces: chair.faces };
   };
+  const placeCounter = (room: RoomSpec, index: number, counter: { at: Cell; staff: Cell; stand: Cell; faces?: Direction; turn?: 0 | 1 }) => {
+    const id = place(room, index, "reception-counter", counter.turn ?? 0, counter.at);
+    const standAt = centreOf(add(room, counter.stand));
+    stands.push(standAt);
+    found.reception = {
+      counter: id,
+      office: {
+        key: RECEPTION_KEY,
+        room: index,
+        chair: null,
+        seat: centreOf(add(room, counter.staff)),
+        faces: counter.faces ?? "SW",
+        stand: standAt,
+      },
+    };
+  };
 
-  template.rooms.forEach((spec, index) => {
+  floor.rooms.forEach((build, index) => {
+    const spec = build.spec;
     let seated = 0;
     for (const item of spec.pieces) {
       const id = place(spec, index, item.name, item.turn, item.at);
-      if (item.name === "whiteboard") board = id;
-      if (item.name === "coffee-corner") coffee = id;
+      if (item.name === "whiteboard" && board === null) board = id;
+      if (item.name === "coffee-corner" && coffee === null) coffee = id;
     }
-    for (const desk of spec.desks ?? []) {
-      const key = keys[next];
-      next += 1;
+    (spec.desks ?? []).forEach((desk, order) => {
+      const key = build.keys[order];
       const { chair, seat, faces } = placeDesk(spec, index, desk);
-      if (key === undefined) continue;
+      if (key === undefined) return;
       const stand = centreOf(add(spec, desk.stand));
       stands.push(stand);
       offices.push({ key, room: index, chair, seat, faces, stand });
       seated += 1;
-    }
+    });
     for (const aisle of spec.aisles ?? []) lines.push(aisle.map((cell) => centreOf(add(spec, cell))));
+    if (build.owner && build.project !== null) {
+      const desk = placeDesk(spec, index, build.owner);
+      const stand = centreOf(add(spec, build.owner.stand));
+      stands.push(stand);
+      owners.push({ room: build.project, roomIndex: index, desk: desk.chair - 1, chair: desk.chair, stand, faces: desk.faces });
+    }
+    if (build.counter && options.reception) placeCounter(spec, index, build.counter);
     if (spec.lobby) {
       const { user: own, tray, reception: counter, instead } = spec.lobby;
       const desk = placeDesk(spec, index, own);
@@ -284,24 +351,15 @@ export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLay
       const stand = centreOf(add(spec, tray.stand));
       const cabinet = centreOf(add(spec, tray.at));
       stands.push(stand);
-      user = {
+      found.user = {
         desk: desk.chair - 1,
         chair: desk.chair,
         tray: trayPiece,
         stand,
         faces: directionOf(cabinet.x - stand.x, cabinet.y - stand.y),
       };
-      if (options.reception) {
-        const id = place(spec, index, "reception-counter", 0, counter.at);
-        const standAt = centreOf(add(spec, counter.stand));
-        stands.push(standAt);
-        reception = {
-          counter: id,
-          office: { key: RECEPTION_KEY, room: index, chair: null, seat: centreOf(add(spec, counter.staff)), faces: "SW", stand: standAt },
-        };
-      } else {
-        for (const item of instead) place(spec, index, item.name, item.turn, item.at);
-      }
+      if (options.reception) placeCounter(spec, index, counter);
+      else for (const item of instead) place(spec, index, item.name, item.turn, item.at);
     }
     rooms.push({
       kind: spec.kind,
@@ -313,20 +371,19 @@ export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLay
       back: spec.back,
       open: { y: spec.open.y ?? [], x: spec.open.x ?? [] },
       vacant: (spec.desks?.length ?? 0) > 0 && seated === 0,
+      project: build.project,
+      color: build.color,
     });
   });
-  if (!user) throw new Error(`template ${template.id} has no lobby`);
-  const lobbyUser: Omit<RoomLayout["user"], "standNode"> = user;
 
   const graph = buildGraph(lines, stands);
   const node = (point: Point) => graph.nodes.findIndex((candidate) => same(candidate, point));
-  const withNode = (office: Pending): Office => ({ ...office, node: node(office.stand) });
-  const pendingReception = reception as { counter: number; office: Pending } | null;
+  const withNode = (office: PendingOffice): Office => ({ ...office, node: node(office.stand) });
 
   const inRoom = (cx: number, cy: number) => rooms.some((room) => cx >= room.x && cx < room.x + room.w && cy >= room.y && cy < room.y + room.d);
   const hall: Cell[] = [];
   const seen = new Set<string>();
-  for (const area of template.hall) {
+  for (const area of floor.hall) {
     for (let cx = area.x; cx < area.x + area.w; cx += 1) {
       for (let cy = area.y; cy < area.y + area.d; cy += 1) {
         const id = `${cx},${cy}`;
@@ -337,19 +394,41 @@ export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLay
     }
   }
 
+  const { reception, user } = found;
   return {
-    template: template.id,
+    template: floor.template,
     rooms,
     hall,
     pieces,
     offices: offices.map(withNode),
-    reception: pendingReception ? { counter: pendingReception.counter, office: withNode(pendingReception.office) } : null,
-    user: { ...lobbyUser, standNode: node(lobbyUser.stand) },
+    reception: reception ? { counter: reception.counter, office: withNode(reception.office) } : null,
+    user: user ? { ...user, standNode: node(user.stand) } : null,
+    owners: owners.map((owner) => ({ ...owner, standNode: node(owner.stand) })),
     board,
     coffee,
     bounds: boundsOf(rooms, hall),
     graph,
   };
+}
+
+/**
+ * The floor of one room for the given agent keys, in order, from the smallest
+ * template that seats them. The reception counter is added to the lobby on
+ * request: it seats nobody of `keys`, the receptionist belongs to the home,
+ * not to a room.
+ */
+export function layoutRoom(keys: string[], options: LayoutOptions = {}): RoomLayout {
+  const template = templateFor(keys.length);
+  let next = 0;
+  const rooms = template.rooms.map((spec): BuildRoom => {
+    const seats = (spec.desks ?? []).map(() => {
+      const key = keys[next];
+      next += 1;
+      return key;
+    });
+    return { spec, project: null, color: null, keys: seats };
+  });
+  return assembleLayout({ template: template.id, rooms, hall: template.hall, lanes: template.lanes }, options);
 }
 
 /** The screen box of the floor: every room with its walls, every cell of the hall. */
@@ -392,9 +471,32 @@ export function routeToOffice(layout: RoomLayout, from: Office, to: Office): Poi
   return tidy([from.seat, ...graphRoute(layout.graph, from.node, to.node)]);
 }
 
-/** The route from an agent's seat to the tray of the lobby. */
-export function routeToUser(layout: RoomLayout, from: Office): Point[] {
-  return tidy([from.seat, ...graphRoute(layout.graph, from.node, layout.user.standNode)]);
+/** The room of the home of an agent key (`room/agent`). */
+export const roomOfKey = (key: string): string => key.slice(0, Math.max(0, key.indexOf("/")));
+
+/**
+ * Where an agent brings what it submits: the user's desk of its own room on a
+ * single floor (of `forRoom`, the room that ordered it from a shared room,
+ * when there is one), the tray of the lobby on the floor of one room. Null
+ * when the floor has neither for it.
+ */
+export function dropSpotOf(
+  layout: RoomLayout,
+  key: string,
+  forRoom: string | null = null,
+): { standNode: number; stand: Point; faces: Direction } | null {
+  if (layout.owners.length > 0) {
+    const room = forRoom ?? roomOfKey(key);
+    return layout.owners.find((owner) => owner.room === room) ?? layout.owners.find((owner) => owner.room === roomOfKey(key)) ?? null;
+  }
+  return layout.user;
+}
+
+/** The route from an agent's seat to where it drops a folder (`dropSpotOf`); just its seat when there is none. */
+export function routeToUser(layout: RoomLayout, from: Office, forRoom: string | null = null): Point[] {
+  const spot = dropSpotOf(layout, from.key, forRoom);
+  if (!spot) return [from.seat];
+  return tidy([from.seat, ...graphRoute(layout.graph, from.node, spot.standNode)]);
 }
 
 /** Total length of a route. */

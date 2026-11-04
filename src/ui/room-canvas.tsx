@@ -26,6 +26,10 @@ export type RoomCanvasProps = {
   reduced: boolean;
   onSelect: (key: string) => void;
   onFailure: () => void;
+  /** A click on the user's desk of a room of the single floor (the room of the home it serves). */
+  onOwnerDesk?: (room: string) => void;
+  /** Take the view to this room of the single floor; a new `seq` asks again for the same room. */
+  focus?: { room: string; seq: number } | null;
 };
 
 /** Where floor.json and floor.png are served (public/iso/floor). */
@@ -231,7 +235,8 @@ export function RoomCanvas(props: RoomCanvasProps) {
       const point = local(event);
       const before = pointers.get(event.pointerId);
       if (!before) {
-        canvas.style.cursor = lastView && renderer?.agentAt(lastView, point.x, point.y) ? "pointer" : "grab";
+        const over = lastView && renderer ? renderer.agentAt(lastView, point.x, point.y) !== null || renderer.ownerDeskAt(point.x, point.y) !== null : false;
+        canvas.style.cursor = over ? "pointer" : "grab";
         return;
       }
       pointers.set(event.pointerId, point);
@@ -263,7 +268,12 @@ export function RoomCanvas(props: RoomCanvasProps) {
       if (dragged || event.type === "pointercancel") return;
       const point = local(event);
       const hit = lastView && renderer ? renderer.agentAt(lastView, point.x, point.y) : null;
-      if (hit) latest.current.onSelect(hit.key);
+      if (hit) {
+        latest.current.onSelect(hit.key);
+        return;
+      }
+      const desk = renderer?.ownerDeskAt(point.x, point.y) ?? null;
+      if (desk !== null) latest.current.onOwnerDesk?.(desk);
     };
     const onWheel = (event: WheelEvent) => {
       if (!renderer) return;
@@ -293,6 +303,12 @@ export function RoomCanvas(props: RoomCanvasProps) {
         }
         renderer = created;
         rendererRef.current = created;
+        // A room asked for before the drawing was ready (a phone that opens the floor from a room's button).
+        const asked = latest.current.focus;
+        if (asked) {
+          created.resize(host.clientWidth, host.clientHeight);
+          created.focusRoom(asked.room);
+        }
         kick();
       } catch {
         if (!cancelled) latest.current.onFailure();
@@ -321,6 +337,16 @@ export function RoomCanvas(props: RoomCanvasProps) {
       canvas.remove();
     };
   }, []);
+
+  // A "go to the room" of the buttons at the top: once per request, when the renderer is there.
+  const focusSeq = props.focus?.seq ?? 0;
+  const focusRoom = props.focus?.room ?? null;
+  useEffect(() => {
+    if (focusRoom === null) return;
+    rendererRef.current?.focusRoom(focusRoom);
+    refreshZoom();
+    kickRef.current();
+  }, [focusRoom, focusSeq]);
 
   const zoom = (step: number) => {
     rendererRef.current?.zoomBy(step);

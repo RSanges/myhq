@@ -149,8 +149,12 @@ export const characterBox = (x: number, y: number): Box => ({ x0: x - 4, y0: y -
 
 // ---- The scene of a floor ------------------------------------------------------------------------
 
-/** A frame of the atlas at a screen position (art pixels), with the tint of a mask (null: drawn as is). */
-export type Draw = { frame: number; x: number; y: number; tint: "room" | "pastel" | null };
+/**
+ * A frame of the atlas at a screen position (art pixels), with the tint of a
+ * mask (null: drawn as is) and the index of the room whose colour it takes
+ * (-1 for the hall and the walls).
+ */
+export type Draw = { frame: number; x: number; y: number; tint: "room" | "pastel" | null; room: number };
 
 /** A thing sorted by depth: a wall piece, a rim, a piece of furniture. `piece` is its index in `layout.pieces`. */
 export type Sorted = { box: Box; draws: Draw[]; piece: number | null };
@@ -164,12 +168,12 @@ export type FloorScene = {
 const wallName = (kind: "plain" | "window" | "door") => (kind === "plain" ? "wall" : kind === "window" ? "wall-window" : "wall-door");
 
 /** Where to draw `ref` for a piece whose first cell has its top corner at voxel (vx, vy). */
-export function placeRef(vx: number, vy: number, ref: Ref, tint: Draw["tint"] = null): Draw {
+export function placeRef(vx: number, vy: number, ref: Ref, tint: Draw["tint"] = null, room = -1): Draw {
   const corner = screenOf(vx, vy);
-  return { frame: ref[0], x: corner.x + ref[1], y: corner.y + ref[2], tint };
+  return { frame: ref[0], x: corner.x + ref[1], y: corner.y + ref[2], tint, room };
 }
 
-const masksOf = (vx: number, vy: number, masks: Mask[]): Draw[] => masks.map((mask) => placeRef(vx, vy, mask.frame, mask.mode));
+const masksOf = (vx: number, vy: number, masks: Mask[], room: number): Draw[] => masks.map((mask) => placeRef(vx, vy, mask.frame, mask.mode, room));
 
 /** The turn of a piece in the floor set (throws on a piece the set does not have: a template bug). */
 export function turnOf(set: FloorSet, name: string, turn: number): Turn {
@@ -184,22 +188,24 @@ const variant = ([cx, cy]: Cell, count: number) => (((cx * 7 + cy * 3) % count) 
 /**
  * The static scene of a floor: every tile of the hall and the rooms, the
  * floor shadows and rugs, and the sorted boxes of walls, rims and furniture.
- * `tinted` false draws the neutral carpet and tiles (a room without a colour).
+ * `tinted` false draws the neutral carpet and tiles (a room without a colour);
+ * a function says it room by room (the single floor, where each room has its own).
  */
-export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boolean): FloorScene {
+export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boolean | ((room: number) => boolean)): FloorScene {
   const tiles: { cell: Cell; draws: Draw[] }[] = [];
-  const tile = (cell: Cell, kind: string) => {
+  const tile = (cell: Cell, kind: string, room: number) => {
     const variants = set.tiles[kind] ?? set.tiles.wood!;
     const chosen = variants[variant(cell, variants.length)]!;
     const vx = cell[0] * CELL;
     const vy = cell[1] * CELL;
-    tiles.push({ cell, draws: [placeRef(vx, vy, chosen.sprite), ...masksOf(vx, vy, chosen.masks)] });
+    tiles.push({ cell, draws: [placeRef(vx, vy, chosen.sprite, null, room), ...masksOf(vx, vy, chosen.masks, room)] });
   };
-  for (const cell of layout.hall) tile(cell, "wood");
-  for (const room of layout.rooms) {
-    const kind = tinted ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";
-    for (let cx = room.x; cx < room.x + room.w; cx += 1) for (let cy = room.y; cy < room.y + room.d; cy += 1) tile([cx, cy], kind);
-  }
+  for (const cell of layout.hall) tile(cell, "wood", -1);
+  layout.rooms.forEach((room, index) => {
+    const colored = typeof tinted === "function" ? tinted(index) : tinted;
+    const kind = colored ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";
+    for (let cx = room.x; cx < room.x + room.w; cx += 1) for (let cy = room.y; cy < room.y + room.d; cy += 1) tile([cx, cy], kind, index);
+  });
   tiles.sort((a, b) => a.cell[0] + a.cell[1] - (b.cell[0] + b.cell[1]) || a.cell[0] - b.cell[0]);
 
   const flat: Draw[] = tiles.flatMap((entry) => entry.draws);
@@ -216,7 +222,7 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
     if (turn.flat) return;
     sorted.push({
       box: box(vx, vy, vx + turn.cells[0] * CELL, vy + turn.cells[1] * CELL),
-      draws: [placeRef(vx, vy, turn.sprite), ...masksOf(vx, vy, turn.masks)],
+      draws: [placeRef(vx, vy, turn.sprite, null, piece.room), ...masksOf(vx, vy, turn.masks, piece.room)],
       piece: index,
     });
   });
@@ -226,7 +232,7 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
     if (!turn.flat) continue;
     const vx = piece.cell[0] * CELL;
     const vy = piece.cell[1] * CELL;
-    flat.push(placeRef(vx, vy, turn.sprite), ...masksOf(vx, vy, turn.masks));
+    flat.push(placeRef(vx, vy, turn.sprite, null, piece.room), ...masksOf(vx, vy, turn.masks, piece.room));
   }
 
   for (const room of layout.rooms) {
@@ -242,7 +248,10 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
       const vy = Y + i * CELL;
       sorted.push({ box: box(X - thick, vy, X, vy + CELL), draws: [placeRef(X, vy, walls[wallName(kind)][1].sprite)], piece: null });
     });
-    sorted.push({ box: box(X - thick, Y - thick, X, Y), draws: [placeRef(X, Y, walls["wall-corner"].sprite)], piece: null });
+    // The post of the corner, where two back walls meet (a room with a low partition on one side has none).
+    if (room.back.x.length > 0 && room.back.y.length > 0) {
+      sorted.push({ box: box(X - thick, Y - thick, X, Y), draws: [placeRef(X, Y, walls["wall-corner"].sprite)], piece: null });
+    }
     for (let i = 0; i < room.w; i += 1) {
       if (room.open.y.includes(i)) continue;
       const vx = X + i * CELL;
@@ -271,14 +280,14 @@ export function hiddenByWalls(layout: RoomLayout, x: number, y: number, height =
     const X1 = (room.x + room.w) * CELL;
     const Y1 = (room.y + room.d) * CELL;
     if (x >= X0 && x <= X1 && y >= Y0 && y <= Y1) continue;
-    // The wall along -y: ground points (wx, Y0), raised by up to `height`.
-    if (y < Y0) {
+    // The wall along -y: ground points (wx, Y0), raised by up to `height` (a side without a back wall hides nothing).
+    if (y < Y0 && room.back.y.length > 0) {
       const wx = p.x / 2 + Y0;
       const z = (wx + Y0 - p.y) / 2;
       if (wx >= X0 && wx <= X1 && z >= 0 && z <= height) return true;
     }
     // The wall along -x: ground points (X0, wy).
-    if (x < X0) {
+    if (x < X0 && room.back.x.length > 0) {
       const wy = X0 - p.x / 2;
       const z = (X0 + wy - p.y) / 2;
       if (wy >= Y0 && wy <= Y1 && z >= 0 && z <= height) return true;

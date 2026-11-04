@@ -59,6 +59,7 @@ const state: State = {
   ],
   invalidRooms: [],
   reception: { room: null, sprite: null, runs: [] },
+  floor: { layout: "floor-per-project" },
   scheduler: { enabled: true, running: true, timeZone: "Europe/Paris" },
   firings: [],
   approvals: { pending: [], unseen: [], history: [] },

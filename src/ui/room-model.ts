@@ -1,11 +1,14 @@
 import { agentKey, viewEvent } from "./model";
 import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run } from "./schemas";
+import { layoutFloor } from "./floor-plan";
 import {
   directionOf,
+  dropSpotOf,
   layoutRoom,
   officeOf,
   pointOnRoute,
+  roomOfKey,
   routeLength,
   routeToOffice,
   routeToUser,
@@ -97,7 +100,13 @@ export function walkFrame(walked: number, stride: number = VOXELS_PER_STEP): num
 // ---- What the model is fed with ---------------------------------------------------
 
 export type RunSeed = Pick<Run, "id" | "room" | "agentId" | "status" | "startedAt" | "endedAt">;
-export type ApprovalSeed = Pick<Approval, "id" | "room" | "agentId" | "status">;
+export type ApprovalSeed = Pick<Approval, "id" | "room" | "agentId" | "status"> & { forRoom?: string | null };
+
+/**
+ * The room whose pile an item lands in: the room that ordered it from a
+ * shared room (`forRoom`), or the room of the agent that submitted it.
+ */
+export const pileRoomOf = (approval: { room: string; forRoom?: string | null }): string => approval.forRoom ?? approval.room;
 export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null };
 
 export type RoomInput =
@@ -108,6 +117,18 @@ export type RoomInput =
    * desk; its runs, events and approvals then belong to this room's model too.
    */
   | { type: "hydrate"; agents: AgentSeed[]; approvals: ApprovalSeed[]; reception?: AgentSeed | null }
+  /**
+   * The single floor of the home (`floor.layout: "room-per-project"`): every
+   * room with its agents and its colour, in the order of the home, and the
+   * receptionist at the counter of the shared lobby. `reception` names the
+   * room the lobby's counter is next to.
+   */
+  | {
+      type: "hydrate-floor";
+      rooms: { name: string; color: string | null; agents: AgentSeed[] }[];
+      approvals: ApprovalSeed[];
+      reception: { room: string | null; agent: AgentSeed | null };
+    }
   | { type: "run"; run: RunSeed }
   | { type: "event"; event: HqEvent }
   | { type: "approval"; approval: ApprovalSeed };
@@ -143,10 +164,19 @@ type AgentRuntime = {
   trips: Trip[];
 };
 
-type ApprovalState = { agentKey: string; status: Approval["status"]; shownAt: number };
+type ApprovalState = {
+  agentKey: string;
+  /** The room whose pile it is in (`pileRoomOf`). */
+  room: string;
+  status: Approval["status"];
+  shownAt: number;
+};
 
 export type RoomModel = {
+  /** The room of a floor of one room, or FLOOR_MODEL for the single floor of the home. */
   room: string;
+  /** The rooms of the home on the single floor (empty on the floor of one room). */
+  rooms: string[];
   /** This floor has the reception desk: the receptionist (key `_hq/onboarding`) is the last of `agents`. */
   reception: boolean;
   layout: RoomLayout;
@@ -154,13 +184,20 @@ export type RoomModel = {
   approvals: Record<number, ApprovalState>;
 };
 
+/** The key of the model of the single floor in the store (no room of the home can be called so: `*` is not a folder name). */
+export const FLOOR_MODEL = "*";
+
 export function createRoomModel(room: string): RoomModel {
-  return { room, reception: false, layout: layoutRoom([]), agents: [], approvals: {} };
+  return { room, rooms: [], reception: false, layout: layoutRoom([]), agents: [], approvals: {} };
 }
 
-/** Whether the entities of `room` belong to this model: its own room, and the reserved onboarding room on the floor with the reception. */
+/**
+ * Whether the entities of `room` belong to this model: its own room (every
+ * room of the home on the single floor), and the reserved onboarding room on
+ * the floor with the reception.
+ */
 function owns(model: RoomModel, room: string): boolean {
-  return room === model.room || (model.reception && room === RECEPTION_ROOM);
+  return room === model.room || model.rooms.includes(room) || (model.reception && room === RECEPTION_ROOM);
 }
 
 const tripEnd = (trip: Trip): number => trip.start + trip.legMs * 2 + trip.stayMs;
@@ -208,9 +245,10 @@ function walkLeg(path: Point[]): number {
   return Math.max(MIN_LEG_MS, (routeLength(path) / WALK_SPEED) * 1000);
 }
 
-function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at: number): AgentRuntime {
+function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, targetRoom: string | null, at: number): AgentRuntime {
   const self = officeOf(model.layout, agent.key);
-  const targetKey = agentKey(model.room, targetId);
+  // A colleague of its own room, unless the message names another room (on the single floor, a walk through the hall).
+  const targetKey = agentKey(targetRoom ?? roomOfKey(agent.key), targetId);
   const target = officeOf(model.layout, targetKey);
   const targetAgent = model.agents.find((candidate) => candidate.key === targetKey);
   if (!self || !target || !targetAgent || targetKey === agent.key) return agent;
@@ -231,10 +269,12 @@ function startVisit(model: RoomModel, agent: AgentRuntime, targetId: string, at:
   );
 }
 
-function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRuntime {
+function startSubmit(model: RoomModel, agent: AgentRuntime, forRoom: string | null, at: number): AgentRuntime {
   const self = officeOf(model.layout, agent.key);
-  if (!self) return agent;
-  const path = routeToUser(model.layout, self);
+  // A delivery of a shared room goes to the pile of the room that ordered it (on the single floor, across the hall).
+  const spot = dropSpotOf(model.layout, agent.key, forRoom);
+  if (!self || !spot) return agent;
+  const path = routeToUser(model.layout, self, forRoom);
   return withTrip(
     agent,
     {
@@ -243,7 +283,7 @@ function startSubmit(model: RoomModel, agent: AgentRuntime, at: number): AgentRu
       legMs: walkLeg(path),
       stayMs: DROP_STAY_MS,
       path,
-      faceStay: model.layout.user.faces,
+      faceStay: spot.faces,
       approvalId: null,
     },
     at,
@@ -263,11 +303,13 @@ function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
         const typing = { ...active, typingUntil: at + TYPING_MS, thought: null };
         if (view.name === HQ_MESSAGE_TOOL) {
           // A message to nobody in this room is just a tool call.
-          const trip = startVisit(model, active, typeof input.to === "string" ? input.to : "", at);
+          const room = typeof input.room === "string" && input.room !== "" ? input.room : null;
+          const trip = startVisit(model, active, typeof input.to === "string" ? input.to : "", room, at);
           return trip === active ? typing : { ...trip, thought: null };
         }
         if (view.name === HQ_SUBMIT_TOOL) {
-          const trip = startSubmit(model, active, at);
+          const forRoom = typeof input.forRoom === "string" && input.forRoom !== "" ? input.forRoom : null;
+          const trip = startSubmit(model, active, forRoom, at);
           return trip === active ? typing : { ...trip, thought: null };
         }
         if (view.name === HQ_TASK_UPDATE_TOOL && input.status === "blocked") {
@@ -305,7 +347,8 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
 }
 
 function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): RoomModel {
-  if (!owns(model, approval.room)) return model;
+  const room = pileRoomOf(approval);
+  if (!owns(model, room)) return model;
   const key = agentKey(approval.room, approval.agentId);
   const known = model.approvals[approval.id];
   if (approval.status !== "pending") {
@@ -313,7 +356,7 @@ function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): Ro
     const next = replaceAgent(model, key, (agent) => (agent.question ? { ...agent, question: null } : agent));
     return {
       ...next,
-      approvals: { ...next.approvals, [approval.id]: { agentKey: key, status: approval.status, shownAt: known?.shownAt ?? at } },
+      approvals: { ...next.approvals, [approval.id]: { agentKey: key, room, status: approval.status, shownAt: known?.shownAt ?? at } },
     };
   }
   if (known) return { ...model, approvals: { ...model.approvals, [approval.id]: { ...known, status: "pending" } } };
@@ -331,7 +374,7 @@ function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): Ro
     shownAt = Math.max(at, tripDropAt(trip));
     return { ...agent, trips };
   });
-  return { ...next, approvals: { ...next.approvals, [approval.id]: { agentKey: key, status: "pending", shownAt } } };
+  return { ...next, approvals: { ...next.approvals, [approval.id]: { agentKey: key, room, status: "pending", shownAt } } };
 }
 
 function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydrate" }>, at: number): RoomModel {
@@ -339,29 +382,14 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
   const reception = input.reception ?? null;
   const seeded: { key: string; seed: AgentSeed }[] = input.agents.map((seed, index) => ({ key: keys[index]!, seed }));
   if (reception) seeded.push({ key: RECEPTION_KEY, seed: reception });
-  const agents = seeded.map(({ key, seed }): AgentRuntime => {
-    const kept = model.agents.find((agent) => agent.key === key);
-    if (kept) return { ...kept, name: seed.name };
-    const run = seed.lastRun;
-    const running = run?.status === "running";
-    return {
-      key,
-      id: seed.id,
-      name: seed.name,
-      running,
-      runId: run?.id ?? 0,
-      lastActive: running ? at : run ? parseTime(run.endedAt ?? run.startedAt) : Number.NEGATIVE_INFINITY,
-      question: run?.status === "failed" ? "failed" : null,
-      typingUntil: 0,
-      thought: null,
-      trips: [],
-    };
-  });
+  const agents = seeded.map(({ key, seed }) => runtimeOf(model, key, seed, at));
   const approvals: Record<number, ApprovalState> = {};
   for (const approval of input.approvals) {
-    if (approval.room !== model.room && !(reception && approval.room === RECEPTION_ROOM)) continue;
+    const room = pileRoomOf(approval);
+    if (room !== model.room && !(reception && room === RECEPTION_ROOM)) continue;
     approvals[approval.id] = {
       agentKey: agentKey(approval.room, approval.agentId),
+      room,
       status: approval.status,
       shownAt: model.approvals[approval.id]?.shownAt ?? Number.NEGATIVE_INFINITY,
     };
@@ -379,11 +407,66 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
   };
 }
 
+/** A runtime for a seed, or the one the model already had for that key (its trips and bubbles go on). */
+function runtimeOf(model: RoomModel, key: string, seed: AgentSeed, at: number): AgentRuntime {
+  const kept = model.agents.find((agent) => agent.key === key);
+  if (kept) return { ...kept, name: seed.name };
+  const run = seed.lastRun;
+  const running = run?.status === "running";
+  return {
+    key,
+    id: seed.id,
+    name: seed.name,
+    running,
+    runId: run?.id ?? 0,
+    lastActive: running ? at : run ? parseTime(run.endedAt ?? run.startedAt) : Number.NEGATIVE_INFINITY,
+    question: run?.status === "failed" ? "failed" : null,
+    typingUntil: 0,
+    thought: null,
+    trips: [],
+  };
+}
+
+function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "hydrate-floor" }>, at: number): RoomModel {
+  const names = input.rooms.map((room) => room.name);
+  const receptionist = names.length > 0 ? input.reception.agent : null;
+  const seeded = input.rooms.flatMap((room) => room.agents.map((seed) => ({ key: agentKey(room.name, seed.id), seed })));
+  if (receptionist) seeded.push({ key: RECEPTION_KEY, seed: receptionist });
+  const agents = seeded.map(({ key, seed }) => runtimeOf(model, key, seed, at));
+  const approvals: Record<number, ApprovalState> = {};
+  for (const approval of input.approvals) {
+    const room = pileRoomOf(approval);
+    if (!names.includes(room) && !(receptionist && room === RECEPTION_ROOM)) continue;
+    approvals[approval.id] = {
+      agentKey: agentKey(approval.room, approval.agentId),
+      room,
+      status: approval.status,
+      shownAt: model.approvals[approval.id]?.shownAt ?? Number.NEGATIVE_INFINITY,
+    };
+  }
+  // The plan changes with the rooms, their agents, their colours and the reception: rebuilt only then.
+  const signature = JSON.stringify([input.rooms.map((room) => [room.name, room.color, room.agents.map((agent) => agent.id)]), input.reception.room, receptionist !== null]);
+  const layout =
+    signature === floorSignatures.get(model.layout)
+      ? model.layout
+      : layoutFloor(
+          input.rooms.map((room) => ({ name: room.name, color: room.color, keys: room.agents.map((agent) => agentKey(room.name, agent.id)) })),
+          { reception: input.reception.room, receptionist: receptionist !== null },
+        );
+  floorSignatures.set(layout, signature);
+  return { ...model, rooms: names, reception: receptionist !== null, layout, agents, approvals };
+}
+
+/** What each single floor layout was built from, so that a new snapshot with the same rooms keeps the same layout object. */
+const floorSignatures = new WeakMap<RoomLayout, string>();
+
 /** Feeds one entity of the stream (or a snapshot) to the model, at time `at`. */
 export function applyInput(model: RoomModel, input: RoomInput, at: number): RoomModel {
   switch (input.type) {
     case "hydrate":
       return applyHydrate(model, input, at);
+    case "hydrate-floor":
+      return applyHydrateFloor(model, input, at);
     case "run":
       return applyRun(model, input.run, at);
     case "event":
@@ -450,6 +533,8 @@ export type RoomView = {
   agents: AgentView[];
   /** Items in the tray, counting only the folders already dropped. */
   pending: number;
+  /** The same by room of the home (`_hq` for the onboarding room): the pile of each user's desk of the single floor. */
+  pendingByRoom: Record<string, number>;
   /** Frames per second the drawing needs right now: 0 when nothing moves. */
   fps: number;
   /** The next time something changes by itself (a bubble ends, a trip stage ends, sleep begins), or Infinity. */
@@ -574,6 +659,16 @@ export function pendingShown(model: RoomModel, at: number): number {
   return Object.values(model.approvals).filter((approval) => approval.status === "pending" && approval.shownAt <= at).length;
 }
 
+/** The items shown at `at`, by room of the home (a folder still carried is not counted yet). */
+export function pendingByRoom(model: RoomModel, at: number): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const approval of Object.values(model.approvals)) {
+    if (approval.status !== "pending" || approval.shownAt > at) continue;
+    counts[approval.room] = (counts[approval.room] ?? 0) + 1;
+  }
+  return counts;
+}
+
 /** The earliest time after `at` at which something changes without any new input. */
 export function nextChangeAt(model: RoomModel, at: number): number {
   let next = Number.POSITIVE_INFINITY;
@@ -618,6 +713,7 @@ export function snapshotRoom(model: RoomModel, at: number, reduced = false): Roo
     layout: model.layout,
     agents: views,
     pending: pendingShown(model, at),
+    pendingByRoom: pendingByRoom(model, at),
     fps: moving ? MOVE_FPS : reduced ? 0 : IDLE_FPS,
     nextChangeAt: nextChangeAt(model, at),
   };

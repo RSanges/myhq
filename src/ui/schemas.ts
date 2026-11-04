@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { annotationSchema } from "@/server/annotations";
 import { decisionRecordSchema } from "@/server/decision-history";
+import { DEFAULT_FLOOR_LAYOUT, FLOOR_LAYOUTS } from "./floor-mode";
 
 // Shapes received from the HTTP API (docs/api.md), validated before use.
 
@@ -114,11 +115,15 @@ const schedulerOff = { enabled: false, running: false, timeZone: "UTC" };
 /** The floor that draws the receptionist (the onboarding agent), its own sheet, and its latest runs, newest first. */
 export const receptionSchema = z.object({ room: z.string().nullable(), sprite: z.string().nullable(), runs: z.array(runSchema) });
 
+/** How /room draws the home; an unknown layout (a newer server) falls back to the default. */
+export const floorSchema = z.object({ layout: z.enum(FLOOR_LAYOUTS).catch(DEFAULT_FLOOR_LAYOUT) });
+
 export const stateSchema = z.object({
   cursor: z.number().int(),
   rooms: z.array(z.object({ name: z.string(), color: z.string().nullable().default(null), agents: z.array(agentSchema) })),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
+  floor: floorSchema.default({ layout: DEFAULT_FLOOR_LAYOUT }),
   scheduler: schedulerSchema.default(schedulerOff),
   firings: z.array(firingSchema).default([]),
   approvals: z.object({

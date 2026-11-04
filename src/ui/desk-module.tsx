@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { ChatPanel } from "./chat-panel";
 import { Desk, WatchDesk } from "./desk";
 import { AgendaView, ItemsView, JournalView, PostitsView } from "./desk-module-views";
 import { formatClock } from "./format";
 import { selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
+import { RECEPTION_ROOM } from "./reception";
 import type { Approval, DeskObject } from "./schemas";
 import { strings } from "./strings";
 import { buttonClass, ErrorNote } from "./ui";
@@ -142,6 +143,8 @@ function ModuleBody({
   reload: () => void;
 }) {
   const { model, dispatch } = hq;
+  // `?room=<room>`: the pile of one room only (the user's desk of that room on the single floor of /room).
+  const roomFilter = useSearchParams().get("room");
   const sources = coreSources(object);
   const types = useMemo(() => watchTypes(object), [object]);
   const pending = useMemo(() => selectPending(model), [model]);
@@ -152,6 +155,40 @@ function ModuleBody({
 
   if (object.object === "pile" && sources.includes("approvals")) {
     if (!model.loaded) return <p className="text-sm text-muted">{t.loading}</p>;
+    if (roomFilter) {
+      const label = roomFilter === RECEPTION_ROOM ? strings.room.reception.name : roomFilter;
+      // An item a shared room delivered belongs to the pile of the room that ordered it.
+      const mine = (approval: Approval) => (approval.forRoom ?? approval.room) === roomFilter;
+      return (
+        <div className="space-y-4">
+          <p className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex min-h-8 items-center gap-1 rounded-full border border-line bg-soft py-0.5 pr-1 pl-3 text-sm font-medium">
+              {t.signer.filter.chip(label)}
+              <Link
+                href={`/bureau/${object.id}`}
+                replace
+                aria-label={t.signer.filter.clear(label)}
+                title={t.signer.filter.clear(label)}
+                className="inline-flex size-7 items-center justify-center rounded-full text-muted hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:size-9"
+              >
+                <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </Link>
+            </span>
+          </p>
+          <Desk
+            title={t.signer.filter.section(label)}
+            pending={pending.filter(mine)}
+            unseen={[]}
+            history={history.filter(mine)}
+            agents={agents}
+            dispatch={dispatch}
+            target={target}
+          />
+        </div>
+      );
+    }
     return <Desk title={t.signer.section} pending={pending} unseen={[]} history={history} agents={agents} dispatch={dispatch} target={target} />;
   }
   if (object.object === "tray" && types.length > 0 && sources.every((source) => source.startsWith("watch:"))) {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_FLOOR_LAYOUT, type FloorLayoutMode } from "./floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "./reception";
 import type { Agent, Approval, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
 import { strings } from "./strings";
@@ -19,6 +20,8 @@ export type Model = {
   invalidRooms: State["invalidRooms"];
   /** The floor of the receptionist, its own sheet, and the latest onboarding runs, newest first. */
   reception: Reception;
+  /** How /room draws the home (myhq.json `floor.layout`). */
+  floorLayout: FloorLayoutMode;
   latestRuns: Record<string, Run>;
   approvals: Record<number, Approval>;
   events: HqEvent[];
@@ -45,6 +48,7 @@ export const initialModel: Model = {
   rooms: [],
   invalidRooms: [],
   reception: { room: null, sprite: null, runs: [] },
+  floorLayout: DEFAULT_FLOOR_LAYOUT,
   latestRuns: {},
   approvals: {},
   events: [],
@@ -91,6 +95,7 @@ export function reducer(model: Model, action: Action): Model {
         rooms: state.rooms,
         invalidRooms: state.invalidRooms,
         reception: state.reception,
+        floorLayout: state.floor.layout,
         latestRuns,
         approvals: indexApprovals([state.approvals.pending, state.approvals.unseen, state.approvals.history]),
         events: state.recent.events,

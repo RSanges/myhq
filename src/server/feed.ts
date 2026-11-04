@@ -12,11 +12,12 @@ import type {
   RunRow,
   RunStatus,
 } from "./db";
-import { NOTIFICATION_NOTE, readReceptionRoom } from "./home-settings";
+import { NOTIFICATION_NOTE, readFloorLayout, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, nextRoutineFire, type FiringDto } from "./routines";
 import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
+import type { FloorLayoutMode } from "../ui/floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
 // Shapes returned by the API (documented in docs/api.md).
@@ -245,6 +246,8 @@ export type StateDto = {
    * sets one, and its latest runs, newest first.
    */
   reception: { room: string | null; sprite: string | null; runs: RunDto[] };
+  /** How /room draws the home (myhq.json `floor.layout`): a floor per room, or one floor with a room per project. */
+  floor: { layout: FloorLayoutMode };
   scheduler: SchedulerInfo;
   firings: FiringDto[];
   /** `pending` waits for a decision, `unseen` (« À regarder ») for a look, `history` is the rest. */
@@ -259,6 +262,16 @@ export type SchedulerInfo = {
   running: boolean;
   timeZone: string;
 };
+
+/** The last reason `floor` of myhq.json was refused, so that it is logged once, not at every snapshot. */
+let floorError: string | null = null;
+
+function floorLayoutOf(home: string): FloorLayoutMode {
+  const { layout, error } = readFloorLayout(home);
+  if (error !== null && error !== floorError) console.error(`[floor] ${error}, using ${layout}`);
+  floorError = error;
+  return layout;
+}
 
 /**
  * The resources of an agent that a run of another agent holds while a task
@@ -325,6 +338,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           .all(RECEPTION_ROOM, RECEPTION_AGENT, RECEPTION_RUNS) as RunRow[]
       ).map(toRun),
     },
+    floor: { layout: floorLayoutOf(home.root) },
     scheduler,
     firings: listFirings(db, 50),
     approvals: {

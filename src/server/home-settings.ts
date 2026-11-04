@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { DEFAULT_FLOOR_LAYOUT, FLOOR_LAYOUTS, type FloorLayoutMode } from "../ui/floor-mode";
 
 // `<home>/myhq.json`, read by the app and by the HQ MCP server (which must
 // stay light: this module only needs the file system and zod).
@@ -102,6 +103,34 @@ export function readReceptionSprite(home: string): string | null {
     console.error(`[reception] ${(error as Error).message}`);
     return null;
   }
+}
+
+/** The `floor` block of myhq.json: how /room draws the home. */
+export const floorSettingsSchema = z.strictObject({ layout: z.enum(FLOOR_LAYOUTS).default(DEFAULT_FLOOR_LAYOUT) });
+
+/**
+ * The `floor.layout` of myhq.json, the default when the file or the key is
+ * absent. Read apart from the rest of the file (like the desk): an invalid
+ * block falls back to the default with the reason, and never breaks the other
+ * settings. Never throws.
+ */
+export function readFloorLayout(home: string): { layout: FloorLayoutMode; error: string | null } {
+  const file = path.join(home, "myhq.json");
+  let raw: unknown;
+  try {
+    if (!fs.existsSync(file)) return { layout: DEFAULT_FLOOR_LAYOUT, error: null };
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    return { layout: DEFAULT_FLOOR_LAYOUT, error: `myhq.json is not valid JSON: ${(error as Error).message}` };
+  }
+  const block = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).floor : undefined;
+  if (block === undefined) return { layout: DEFAULT_FLOOR_LAYOUT, error: null };
+  const parsed = floorSettingsSchema.safeParse(block);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `floor.${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return { layout: DEFAULT_FLOOR_LAYOUT, error: `myhq.json: ${details}` };
+  }
+  return { layout: parsed.data.layout, error: null };
 }
 
 /** The decision note of an informational item (a type of `notifyTypes`), stored already approved. */
