@@ -55,6 +55,14 @@ export type TurnResult = {
 
 export type DispatchResult = { reply: string; run: RunRow; messages: ChatMessageDto[] };
 
+/**
+ * What a message adds to a turn. `attachmentDir`: the message points to a file
+ * received from outside (a photo, a PDF) that sits in this folder. The folder
+ * is made readable for the turn, and reading anything during it counts as an
+ * untrusted read: the file's content could have asked for the actions that follow.
+ */
+export type TurnOptions = { attachmentDir?: string };
+
 /** Called with the result as soon as it is known, before the work that follows a reply (requests, afterReply). */
 export type Deliver = (result: TurnResult) => Promise<void> | void;
 
@@ -175,8 +183,8 @@ export class ChatService {
   }
 
   /** A message to the chat (the caller has handled commands, extensions and held actions). */
-  converse(text: string, channel: ChatChannel, deliver?: Deliver): Promise<TurnResult> {
-    return this.enqueue(() => this.converseNow(text, channel, deliver, []));
+  converse(text: string, channel: ChatChannel, deliver?: Deliver, options: TurnOptions = {}): Promise<TurnResult> {
+    return this.enqueue(() => this.converseNow(text, channel, deliver, [], options));
   }
 
   /** The user said yes to held actions: they run now, and the results are the reply. */
@@ -219,7 +227,13 @@ export class ChatService {
 
   // --- The pipeline ------------------------------------------------------------
 
-  private async converseNow(text: string, channel: ChatChannel, deliver: Deliver | undefined, notes: string[]): Promise<TurnResult> {
+  private async converseNow(
+    text: string,
+    channel: ChatChannel,
+    deliver: Deliver | undefined,
+    notes: string[],
+    options: TurnOptions = {},
+  ): Promise<TurnResult> {
     const chat = this.deps.chat;
     const t = strings.assistant;
     const done = async (result: TurnResult) => {
@@ -249,6 +263,7 @@ export class ChatService {
       text: resume ? composeChatInput([transcript("lastExchange"), preamble], text) : freshText,
       freshText,
       continue: resume,
+      ...(options.attachmentDir ? { extraDirs: [options.attachmentDir] } : {}),
       bin: this.deps.config.claudeBin,
       env: chatEnv(this.deps.env),
       maxBudgetUsd: this.deps.chatMaxBudgetUsd,
@@ -275,7 +290,14 @@ export class ChatService {
           const untrusted =
             outcome.tools === undefined
               ? ["(unknown)"]
-              : [...new Set(outcome.tools.filter((tool) => isUntrustedTool(tool, chat)))];
+              : [
+                  ...new Set(
+                    outcome.tools.filter(
+                      // A Read in a turn about a received file may have read that file.
+                      (tool) => isUntrustedTool(tool, chat) || (options.attachmentDir !== undefined && tool === "Read"),
+                    ),
+                  ),
+                ];
           if (untrusted.length > 0) {
             this.questions.ask({ actions: taken.actions });
             this.log(`chat actions held for confirmation (untrusted: ${untrusted.join(", ")})`);

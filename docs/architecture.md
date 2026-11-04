@@ -969,6 +969,29 @@ Photos (largest size) and documents are saved into the home's `dropDir` under a
 free name, with a companion `.md` note holding the caption when there is one.
 The Bot API does not hand over files above 20 MB; the user is told.
 
+A caption is a request of the owner about the file. Once the file is stored and
+acknowledged (« Reçu »), and when the conversation is configured, the caption
+goes through the chat pipeline like a typed message: the text is the caption
+followed by a bracketed line with the stored file's absolute path, its kind
+(photo or document) and the instruction to read it with the `Read` tool, which
+displays images and PDFs (`strings.assistant.files.attached`). The reply goes
+out on Telegram as for any text, and the exchange (with that text) is recorded
+in the chat history. Without a caption, or with the conversation off, nothing
+changes: the file is stored and acknowledged, no turn starts. A file that
+could not be stored never reaches the chat. The caption is never taken for a
+yes: it drops the actions held for confirmation, like any other message.
+
+Two things follow from the file being outside content. The drop folder must be
+readable for the turn: `ChatService.converse` takes an `attachmentDir`, and
+`buildChatArgs` adds it as an extra `--add-dir` unless the chat's working
+folder or one of its `addDirs` already contains it (the usual case when the
+drop folder is inside a vault listed in `chat.addDirs`); a plain text message
+never widens the chat's reach. And what a photo or a PDF says is an untrusted
+read: when such a turn called `Read`, the actions it asked for wait for the
+user's « oui » exactly as after a mail or a web page (the guard above, with
+`Read` counted as untrusted for that turn only; the same tool in an ordinary
+turn stays trusted).
+
 The assistant's chat is not a run: it does not count towards the daily cap and
 is not in the `runs` table. Each turn, answered or failed, is recorded in
 `chat_turns` instead: engine, model, status and failure reason, the four token

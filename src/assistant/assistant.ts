@@ -15,7 +15,7 @@ import { strings } from "../ui/strings";
 import { parseButtonData } from "./approval-buttons";
 import { selectionMessage } from "./choices";
 import type { ChatRunner } from "./chat";
-import { ChatService, type TurnResult } from "./chat-service";
+import { ChatService, type TurnOptions, type TurnResult } from "./chat-service";
 import {
   CORE_COMMANDS,
   isCoreCommand,
@@ -628,15 +628,20 @@ export class Assistant {
     for (const approval of result.approved) await this.handOver(approval);
   }
 
-  private async converse(text: string): Promise<void> {
+  private async converse(text: string, options: TurnOptions = {}): Promise<void> {
     if (!this.chat.configured) return this.reply(strings.assistant.chat.notConfigured);
     const stopTyping = this.startTyping();
     try {
       // The reply goes out as soon as it is known, the work that follows it (requests, afterReply) does not hold it back.
-      await this.chat.converse(text, "telegram", async (result) => {
-        stopTyping();
-        await this.sendResult(result);
-      });
+      await this.chat.converse(
+        text,
+        "telegram",
+        async (result) => {
+          stopTyping();
+          await this.sendResult(result);
+        },
+        options,
+      );
     } finally {
       stopTyping();
     }
@@ -690,20 +695,42 @@ export class Assistant {
     const wanted = photo
       ? t.photoName(stamp())
       : (safeFileName(message.document?.file_name) ?? t.documentName(stamp()));
+    let name: string;
+    let caption: string | undefined;
     try {
       fs.mkdirSync(dropDir, { recursive: true });
-      const name = freeName(dropDir, wanted);
+      name = freeName(dropDir, wanted);
       await this.deps.telegram.download(piece.file_id, path.join(dropDir, name));
-      const caption = message.caption?.trim();
+      caption = message.caption?.trim();
       if (caption) {
         const note = freeName(dropDir, `${name.slice(0, name.length - path.extname(name).length)}.md`);
         fs.writeFileSync(path.join(dropDir, note), `${caption}\n\n![${name}](${encodeURI(name)})\n`, "utf8");
       }
       this.log(`file received: ${name}${caption ? " (with caption)" : ""}`);
-      return this.reply(t.received(name, path.basename(dropDir)));
+      await this.reply(t.received(name, path.basename(dropDir)));
     } catch (error) {
       this.log(`file not received: ${describe(error)}`);
       return this.reply(t.failed);
     }
+    // A caption is a request of the owner about the file: it goes to the chat, with the file's path.
+    if (caption && this.chat.configured) {
+      return this.converseAboutFile(caption, path.join(dropDir, name), photo ? "photo" : "document", dropDir);
+    }
+  }
+
+  /**
+   * The caption of a received file, as a message of the owner to the chat. Like
+   * any message that is not a yes it drops the actions held for confirmation.
+   * The file's content is an untrusted read: the chat service holds the
+   * actions that follow it for a yes.
+   */
+  private async converseAboutFile(caption: string, file: string, kind: "photo" | "document", dir: string): Promise<void> {
+    if (this.questions.heldActions()) {
+      this.questions.clear();
+      this.log("held chat action(s) dropped");
+      await this.reply(strings.assistant.actions.dropped);
+    }
+    this.log(`caption of ${path.basename(file)} sent to the chat`);
+    return this.converse(strings.assistant.files.attached({ caption, file, kind }), { attachmentDir: dir });
   }
 }

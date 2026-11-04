@@ -45,6 +45,7 @@ async function setup(options: {
   config?: HqConfig;
   startRun?: (request: StartRunRequest) => RunRow;
   questions?: PendingQuestions;
+  dropDir?: string;
 }) {
   const config = options.config ?? makeHome();
   const db = getDbAt(config.dbPath);
@@ -65,7 +66,11 @@ async function setup(options: {
     chatId: CHAT,
     config,
     db,
-    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: chatConfig({ cwd: config.home, ...options.chat }) },
+    assistant: {
+      ...EMPTY_ASSISTANT_CONFIG,
+      ...(options.dropDir ? { dropDir: options.dropDir } : {}),
+      chat: chatConfig({ cwd: config.home, ...options.chat }),
+    },
     extensions: [],
     env: { PATH: process.env.PATH },
     chatMaxBudgetUsd: 0.5,
@@ -370,6 +375,7 @@ async function actionChat(options: {
   config?: HqConfig;
   startRun?: (request: StartRunRequest) => RunRow;
   questions?: PendingQuestions;
+  dropDir?: string;
 }) {
   const config = options.config ?? makeHome();
   const requestsDir = path.join(config.home, "chat", "requests");
@@ -377,6 +383,7 @@ async function actionChat(options: {
     config,
     startRun: options.startRun,
     questions: options.questions,
+    dropDir: options.dropDir,
     chat: {
       requestsDir,
       actions: [...ALL_ACTIONS],
@@ -609,4 +616,158 @@ test("assistant.json: actions whitelist, untrusted flags kept out of the MCP con
   assert.throws(() => loadAssistantConfig(home), /chat\.requests\.actions/);
   write({ mcpServers: { rom2: { command: "node", untrusted: "no" } } });
   assert.throws(() => loadAssistantConfig(home), /chat\.mcpServers\.rom2\.untrusted/);
+});
+
+// --- A captioned photo or document is a request of the owner ----------------------------
+
+const fileMessage = (extra: Record<string, unknown>) => ({
+  update_id: updateId++,
+  message: { message_id: updateId, chat: { id: Number(CHAT), type: "private" }, from: { id: Number(CHAT) }, date: 1, ...extra },
+});
+const photoMessage = (caption?: string) =>
+  fileMessage({ photo: [{ file_id: "big", width: 1280, height: 853 }], ...(caption ? { caption } : {}) });
+const documentMessage = (caption?: string) =>
+  fileMessage({ document: { file_id: "doc", file_name: "Invitation.pdf" }, ...(caption ? { caption } : {}) });
+
+const addDirsOf = (args: string[]) => args.flatMap((arg, i) => (args[i - 1] === "--add-dir" ? [arg] : []));
+
+test("a photo with a caption starts a chat turn with the stored file's path, and the exchange is kept", async () => {
+  const config = makeHome();
+  const dropDir = path.join(config.home, "inbox");
+  const { db, fake, seen, assistant } = await setup({ config, dropDir });
+  fake.addFile("big", "JPEGDATA");
+  await assistant.handleUpdate(photoMessage("Ajoute au calendrier") as never);
+  await assistant.idle();
+  const [photo] = fs.readdirSync(dropDir).filter((f) => f.endsWith(".jpg"));
+  assert.equal(seen.length, 1);
+  const input = seen[0]!.input;
+  assert.ok(input.startsWith("Ajoute au calendrier\n\n[Pièce jointe (photo) reçue sur Telegram : "), input);
+  assert.ok(input.includes(path.join(dropDir, photo!)), "the stored file's path");
+  assert.ok(input.includes("outil Read"));
+  assert.match(fake.sent()[0]!, /^Reçu : Photo .*\.jpg\. Déposé dans inbox\.$/);
+  assert.equal(fake.sent()[1], "Réponse 1");
+  const history = listChatHistory(db, 5);
+  assert.deepEqual(history.map((m) => m.role), ["user", "assistant"]);
+  assert.ok(history[0]!.text.includes(path.join(dropDir, photo!)));
+  assert.equal(history[1]!.text, "Réponse 1");
+});
+
+test("the drop folder is made readable for that turn unless the chat already covers it", async () => {
+  const outsideDir = path.join(os.tmpdir(), "myhq-drop-outside");
+  const outside = await setup({ dropDir: outsideDir });
+  outside.fake.addFile("big", "JPEGDATA");
+  await outside.assistant.handleUpdate(photoMessage("Ajoute au calendrier") as never);
+  await outside.assistant.idle();
+  assert.deepEqual(addDirsOf(outside.seen[0]!.args), [outsideDir]);
+  // A plain message does not widen the chat's reach.
+  await outside.say("Bonjour");
+  assert.deepEqual(addDirsOf(outside.seen[1]!.args), []);
+  fs.rmSync(outsideDir, { recursive: true, force: true });
+
+  const config = makeHome();
+  const vault = path.join(config.home, "vault");
+  const covered = await setup({ config, dropDir: path.join(vault, "inbox"), chat: { addDirs: [vault] } });
+  covered.fake.addFile("big", "JPEGDATA");
+  await covered.assistant.handleUpdate(photoMessage("Ajoute au calendrier") as never);
+  await covered.assistant.idle();
+  assert.deepEqual(addDirsOf(covered.seen[0]!.args), [vault], "inside an addDir: nothing added");
+
+  const home = makeHome();
+  const inCwd = await setup({ config: home, dropDir: path.join(home.home, "inbox") });
+  inCwd.fake.addFile("big", "JPEGDATA");
+  await inCwd.assistant.handleUpdate(photoMessage("Ajoute au calendrier") as never);
+  await inCwd.assistant.idle();
+  assert.deepEqual(addDirsOf(inCwd.seen[0]!.args), [], "inside the working folder: nothing added");
+});
+
+test("a photo without a caption is filed and acknowledged, no turn starts", async () => {
+  const config = makeHome();
+  const dropDir = path.join(config.home, "inbox");
+  const { db, fake, seen, assistant } = await setup({ config, dropDir });
+  fake.addFile("big", "JPEGDATA");
+  await assistant.handleUpdate(photoMessage() as never);
+  await assistant.idle();
+  assert.equal(seen.length, 0);
+  assert.equal(fake.sent().length, 1);
+  assert.match(fake.sent()[0]!, /^Reçu : Photo /);
+  assert.deepEqual(fs.readdirSync(dropDir).map((f) => path.extname(f)), [".jpg"], "no note without a caption");
+  assert.deepEqual(listChatHistory(db, 5), []);
+});
+
+test("a document with a caption starts a turn too", async () => {
+  const config = makeHome();
+  const dropDir = path.join(config.home, "inbox");
+  const { fake, seen, assistant } = await setup({ config, dropDir });
+  fake.addFile("doc", "%PDF");
+  await assistant.handleUpdate(documentMessage("Résume ce PDF") as never);
+  await assistant.idle();
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0]!.input.startsWith("Résume ce PDF\n\n[Pièce jointe (document) reçue sur Telegram : "));
+  assert.ok(seen[0]!.input.includes(path.join(dropDir, "Invitation.pdf")));
+  assert.equal(fs.readFileSync(path.join(dropDir, "Invitation.pdf"), "utf8"), "%PDF");
+  assert.deepEqual(fake.sent(), ["Reçu : Invitation.pdf. Déposé dans inbox.", "Réponse 1"]);
+});
+
+test("a file that cannot be stored never reaches the chat", async () => {
+  const config = makeHome();
+  const { fake, seen, assistant } = await setup({ config, dropDir: path.join(config.home, "inbox") });
+  // No file "big" on the fake Bot API: the download fails.
+  await assistant.handleUpdate(photoMessage("Ajoute au calendrier") as never);
+  await assistant.idle();
+  assert.equal(seen.length, 0);
+  assert.deepEqual(fake.sent(), [strings.assistant.files.failed]);
+});
+
+test("actions that follow a read in a file turn are held for a yes, a turn that read nothing runs them at once", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const first = addApproval(db);
+  const second = addApproval(db, "Garage");
+  // Turn 1 reads the photo then asks for an approval; turn 2 asks for one without reading anything.
+  const { fake, seen, assistant, logs } = await actionChat({
+    config,
+    dropDir: path.join(config.home, "inbox"),
+    files: (n) => [{ action: "approve", id: n === 1 ? first : second }],
+    tools: (n) => (n === 1 ? ["Read", "mcp__rom2__rom2_act"] : ["mcp__rom2__rom2_act"]),
+  });
+  fake.addFile("big", "JPEGDATA");
+  await assistant.handleUpdate(photoMessage("Approuve ce qui est demandé") as never);
+  await assistant.idle();
+  assert.equal(status(db, first), "pending", "nothing happens before the yes");
+  assert.match(fake.sent()[1]!, /^Réponse 1\n\nCette réponse s'appuie sur du courrier ou du web/);
+  assert.ok(logs.some((l) => /held for confirmation \(untrusted: Read\)/.test(l)));
+
+  await assistant.handleUpdate(message("Oui") as never);
+  await assistant.idle();
+  assert.equal(status(db, first), "approved");
+  assert.equal(seen.length, 1, "the yes is not a chat turn");
+
+  await assistant.handleUpdate(photoMessage("Approuve le garage") as never);
+  await assistant.idle();
+  assert.equal(status(db, second), "approved", "no Read, no hold");
+});
+
+test("a Read outside of a file message does not hold actions; a captioned file is not a yes and drops held ones", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  const id = addApproval(db);
+  const second = addApproval(db, "Garage");
+  const { fake, seen, assistant, say } = await actionChat({
+    config,
+    dropDir: path.join(config.home, "inbox"),
+    files: (n) => (n === 1 ? [{ action: "approve", id }] : n === 3 ? [{ action: "approve", id: second }] : []),
+    tools: (n) => (n === 1 ? ["mcp__mail__mail_search", "mcp__rom2__rom2_act"] : n === 3 ? ["Read", "mcp__rom2__rom2_act"] : []),
+  });
+  await say("Approuve le brouillon");
+  assert.equal(status(db, id), "pending");
+  fake.addFile("big", "JPEGDATA");
+  await assistant.handleUpdate(photoMessage("Oui") as never);
+  await assistant.idle();
+  assert.equal(status(db, id), "pending", "a caption saying oui is not the yes");
+  assert.equal(seen.length, 2, "the caption went to the chat");
+  assert.ok(fake.sent().includes(strings.assistant.actions.dropped));
+
+  // A plain text turn that reads a file of the vault is not held by this rule (Read alone is trusted).
+  await say("Approuve le garage");
+  assert.equal(status(db, second), "approved");
 });

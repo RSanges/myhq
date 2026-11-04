@@ -12,6 +12,12 @@ import type { ChatConfig } from "./home-config";
 export const CHAT_ROOM = "_chat";
 export const CHAT_AGENT = "chat";
 
+/** Whether `target` is `root` or lies under it. */
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 /**
  * The exact argument list of a chat turn. The message itself is written to
  * stdin. Same isolation as agent runs: only the whitelisted built-in tools
@@ -24,13 +30,17 @@ export const CHAT_AGENT = "chat";
  */
 export function buildChatArgs(
   chat: ChatConfig,
-  options: { continue: boolean; maxBudgetUsd: number; mcpConfigPath?: string },
+  options: { continue: boolean; maxBudgetUsd: number; mcpConfigPath?: string; extraDirs?: string[] },
 ): string[] {
   const args = ["-p"];
   if (options.continue) args.push("--continue");
   args.push("--output-format", "stream-json", "--verbose", "--model", chat.model);
   if (chat.systemPrompt) args.push("--system-prompt-file", chat.systemPrompt);
   for (const dir of chat.addDirs) args.push("--add-dir", dir);
+  // Read-only access the turn needs on top of the configured ones (a received file's folder), unless already covered.
+  for (const dir of options.extraDirs ?? []) {
+    if (![chat.cwd, ...chat.addDirs].some((root) => isInside(root, dir))) args.push("--add-dir", dir);
+  }
   args.push("--permission-mode", chat.permissionMode, "--setting-sources", "project,local");
   if (options.mcpConfigPath) args.push("--mcp-config", options.mcpConfigPath);
   args.push("--strict-mcp-config");
@@ -223,6 +233,8 @@ export async function askChat(params: {
   /** What to send instead of `text` when the turn starts a new conversation after a failed `--continue`. */
   freshText?: string;
   continue: boolean;
+  /** Folders the turn must be able to read besides the configured ones (added with --add-dir when not covered). */
+  extraDirs?: string[];
   bin: string;
   env: Env;
   maxBudgetUsd: number;
@@ -242,7 +254,12 @@ export async function askChat(params: {
   const attempt = (resume: boolean, input: string) =>
     run({
       bin: params.bin,
-      args: buildChatArgs(params.chat, { continue: resume, maxBudgetUsd: params.maxBudgetUsd, mcpConfigPath }),
+      args: buildChatArgs(params.chat, {
+        continue: resume,
+        maxBudgetUsd: params.maxBudgetUsd,
+        mcpConfigPath,
+        extraDirs: params.extraDirs,
+      }),
       cwd: params.chat.cwd,
       env: params.env,
       input,
