@@ -290,11 +290,13 @@ test("the conversation's system prompt file of the home is passed explicitly", (
   assert.ok(!buildChatArgs(chat, { continue: false, maxBudgetUsd: 0.5 }).includes("--system-prompt-file"));
 });
 
-test("the chat environment is the agents' one, with tool search off", () => {
+test("the chat environment is the agents' one, with tool search off and blocking MCP startup", () => {
   assert.deepEqual(chatEnv({ PATH: "/bin", HQ_TELEGRAM_BOT_TOKEN: "t", HQ_CLAUDE_OAUTH_TOKEN: "c", MYHQ_HOME: "x" }), {
     PATH: "/bin",
     CLAUDE_CODE_OAUTH_TOKEN: "c",
     ENABLE_TOOL_SEARCH: "false",
+    MCP_CONNECTION_NONBLOCKING: "0",
+    MCP_CONNECT_TIMEOUT_MS: "30000",
   });
 });
 

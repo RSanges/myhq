@@ -8,6 +8,7 @@ import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
+import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
@@ -15,6 +16,7 @@ import { resourceHolder } from "./resources";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { skillTools, syncSkills } from "./skills";
+import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
@@ -39,7 +41,43 @@ export type RunnerDeps = {
   send?: Send;
   /** The environment read for HQ_PUBLIC_URL (the links of the alerts). Default: process.env. */
   env?: Env;
+  /** Delay before the one retry of a run stopped for an MCP server not connected. Default: 5 s. */
+  mcpRetryDelayMs?: number;
 };
+
+/** End reason of a run stopped at its start because an MCP server it declares is not connected. */
+export const MCP_NOT_CONNECTED = "mcp_not_connected";
+const MCP_RETRY_DELAY_MS = 5_000;
+
+/** The MCP servers of a run's start event that are not connected, as `name (status)`. */
+export function notConnectedServers(servers: readonly { name: string; status: string }[]): string[] {
+  return servers.filter((server) => server.status !== "connected").map((server) => `${server.name} (${server.status})`);
+}
+
+/**
+ * The date line every run's prompt ends with: today in the home's language and
+ * time zone, the weekday spelled out, so that no agent works the weekday out
+ * by itself (a model gets it wrong).
+ */
+export function todayLine(at: Date, timeZone: string, language: string): string {
+  const day = new Intl.DateTimeFormat(language, {
+    timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(at);
+  return `Today is ${day} (${dayKey(at, timeZone)}, time zone ${timeZone}). Use this date and this weekday as given, never compute them yourself.`;
+}
+
+/** The language of the home for the date line; the default one when myhq.json cannot be read. */
+function promptLanguage(home: string): string {
+  try {
+    return readHomeLanguage(home);
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+}
 
 type ActiveRun = { controller: AbortController; reason: "timeout" | null };
 
@@ -271,6 +309,8 @@ export function launchRun(params: {
   /** Only these pending tasks of the agent go into the run's mailbox. Default: all of them. */
   claimIds?: number[];
   prompt: (runId: number, mailbox: TaskRow[]) => string;
+  /** 1 for the automatic retry of a run stopped for an MCP server not connected; there is no second one. */
+  attempt?: number;
 }): RunRow {
   const { config, deps, room, agent, task } = params;
   const db = getDbAt(config.dbPath);
@@ -336,8 +376,11 @@ export function launchRun(params: {
     })
     .immediate();
 
-  const prompt = params.prompt(run.id, mailbox);
-  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps }).catch((error) => {
+  const today = todayLine(new Date(), liveConfig(config).timeZone, promptLanguage(config.home));
+  const prompt = `${params.prompt(run.id, mailbox)}\n\n${today}`;
+  // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
+  const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
+  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps, retry }).catch((error) => {
     console.error(`[runner] run #${run.id} crashed`, error);
   });
   return run;
@@ -354,6 +397,8 @@ type ExecuteParams = {
   send: Send;
   /** Passed on to the runs this one wakes (wakeAgents). */
   deps: RunnerDeps;
+  /** Starts the one retry of this run when an MCP server is not connected at its start; null for a retry. */
+  retry: (() => RunRow) | null;
 };
 
 function storeEvent(db: Db, run: RunRow, event: RunEvent): void {
@@ -399,6 +444,7 @@ async function execute(p: ExecuteParams): Promise<void> {
   };
 
   let end: Extract<RunEvent, { type: "end" }> | null = null;
+  let mcpDown = false;
   try {
     if (agent.worktree) {
       ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
@@ -432,6 +478,25 @@ async function execute(p: ExecuteParams): Promise<void> {
       onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
     };
     for await (const event of engine.run(input)) {
+      if (event.type === "start") {
+        // A run without the tools of its servers must never deliver: it is stopped before its first turn.
+        const down = notConnectedServers(event.mcpServers);
+        if (down.length > 0) {
+          mcpDown = true;
+          storeEvent(db, run, event);
+          end = {
+            type: "end",
+            status: "failed",
+            reason: MCP_NOT_CONNECTED,
+            summary: `Stopped at its start, before doing anything: MCP server not connected: ${down.join(", ")}.`,
+            usage: { ...ZERO_USAGE },
+            costUsd: 0,
+          };
+          storeEvent(db, run, end);
+          active.controller.abort();
+          break;
+        }
+      }
       if (event.type === "end") end = event;
       if (event.type === "start" && event.sessionId) {
         db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
@@ -459,6 +524,11 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   let status: RunStatus = end?.status ?? "failed";
   let summary = end?.summary ?? "The engine ended without a result.";
+  const retryDelayMs = p.deps.mcpRetryDelayMs ?? MCP_RETRY_DELAY_MS;
+  const retrying = mcpDown && p.retry !== null;
+  if (mcpDown) {
+    summary += retrying ? ` Retried once in ${Math.round(retryDelayMs / 1000)} s.` : " Second attempt: no retry.";
+  }
   if (active.reason === "timeout") {
     status = "failed";
     summary = `Timed out after ${Math.round(config.runTimeoutMs / 60_000)} minutes (HQ_RUN_TIMEOUT_MINUTES).`;
@@ -501,7 +571,10 @@ async function execute(p: ExecuteParams): Promise<void> {
   await notifyPendingApprovals(db, p.send, p.deps.env);
   // What the bot sends on its own goes into the conversation MyHQ keeps, so
   // that the user's answer to it is understood (chat-history.ts).
-  if (status === "failed") {
+  if (retrying) {
+    // No alert yet: the retry alerts if it fails too, or if it cannot start.
+    setTimeout(() => void retryRun(p, summary), retryDelayMs);
+  } else if (status === "failed") {
     const text = withLine(
       strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }),
       runLinkLine(run.id, p.deps.env),
@@ -514,5 +587,24 @@ async function execute(p: ExecuteParams): Promise<void> {
     const link = deskLinkLine(p.deps.env);
     for (const part of appendLine(toTelegramMessages(summary), link)) sent = (await p.send(part)) || sent;
     if (sent) recordBotMessage(db, withLine(summary, link), "summary");
+  }
+}
+
+/** Starts the retry of a run stopped for an MCP server; when it cannot start, the failure is alerted as any other. */
+async function retryRun(p: ExecuteParams, summary: string): Promise<void> {
+  try {
+    p.retry?.();
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    const text = withLine(
+      strings.notify.runFailed({
+        room: p.room.name,
+        agent: p.agent.name,
+        runId: p.run.id,
+        summary: `${summary} The retry could not start: ${why}`,
+      }),
+      runLinkLine(p.run.id, p.deps.env),
+    );
+    if (await p.send(text)) recordBotMessage(p.db, text, "alert");
   }
 }

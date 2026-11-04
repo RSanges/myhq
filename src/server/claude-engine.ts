@@ -126,9 +126,19 @@ export function builtInTools(allowedTools: string[]): string[] {
 /**
  * Environment additions for every run. Tool search is off so that the MCP
  * tools are in the tool list from the start (with it, a model must first look
- * them up, which smaller models fail to do).
+ * them up, which smaller models fail to do). MCP startup is made blocking: by
+ * default (CLI 2.1.183) `claude -p` connects the servers in the background and
+ * sends the first request at once, so a server slower to start than the CLI
+ * (a `tsx` server on a busy machine) is still `pending` and the agent works
+ * without its tools. The wait is bounded by MCP_CONNECT_TIMEOUT_MS (5 s by
+ * default), raised to the CLI's own per-server connect timeout (MCP_TIMEOUT,
+ * 30 s); a server still pending after it is caught by the runner.
  */
-export const CLAUDE_ENV = { ENABLE_TOOL_SEARCH: "false" } as const;
+export const CLAUDE_ENV = {
+  ENABLE_TOOL_SEARCH: "false",
+  MCP_CONNECTION_NONBLOCKING: "0",
+  MCP_CONNECT_TIMEOUT_MS: "30000",
+} as const;
 
 /** The exact argument list given to `claude`. */
 export function buildClaudeArgs(input: RunInput): string[] {

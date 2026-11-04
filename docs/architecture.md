@@ -38,7 +38,19 @@ are never passed on. The one exception is `HQ_CLAUDE_OAUTH_TOKEN`: when set,
 it becomes the process's `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token from
 `claude setup-token`, to run unattended on a subscription). Tool search is
 turned off (`ENABLE_TOOL_SEARCH=false`) so that the MCP tools are listed from
-the start. The Claude Code binary is not
+the start. MCP startup is made blocking (`MCP_CONNECTION_NONBLOCKING=0`,
+`MCP_CONNECT_TIMEOUT_MS=30000`): by default CLI 2.1.183 connects the servers
+in the background and sends the first request at once, so a server slower to
+start than the CLI is still `pending` and the agent works without its tools
+(it then writes tool calls as text and invents a result). The runner checks
+the start event too: when a server listed there is not `connected`, the run
+is stopped at once, before its first event is read, and fails with the end
+reason `mcp_not_connected`; it is started again once, a few seconds later,
+with the same task and the tasks it had claimed. Only a second failure (or a
+retry that cannot start) is alerted, like any other failed run. The prompt of
+every run ends with today's date, the weekday spelled out in the home's
+`language` and the time zone of `HQ_TIMEZONE`, so that no agent works the
+weekday out by itself. The Claude Code binary is not
 modified and runs on the user's own plan, which is the frame the subscription
 terms allow. There is no Agent SDK.
 
