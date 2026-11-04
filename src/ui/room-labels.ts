@@ -24,6 +24,8 @@ export type LabelSpec = {
   ay?: number;
   /** A box around the text, drawn in CSS: a name plate, a bubble, a round badge. */
   box?: "plate" | "bubble" | "badge";
+  /** A colour (normalized hex) for the box: a thin line under a name plate. Null or left out: none. */
+  color?: string | null;
   /** Wrap at this width (world units), for a bubble. */
   maxWidth?: number;
   /** Keep the label inside the plan horizontally. */
@@ -90,7 +92,7 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
       if (element.hidden) element.hidden = false;
       const fontSize = Math.round(spec.size * scale * 100) / 100;
       const maxWidth = spec.maxWidth ? Math.round(spec.maxWidth * scale) : 0;
-      const data = `${spec.tone ?? "ink"}|${spec.weight ?? 600}|${spec.display ? 1 : 0}|${spec.box ?? ""}`;
+      const data = `${spec.tone ?? "ink"}|${spec.weight ?? 600}|${spec.display ? 1 : 0}|${spec.box ?? ""}|${spec.color ?? ""}`;
       let measure = false;
       if (entry.data !== data) {
         entry.data = data;
@@ -100,6 +102,13 @@ export function createLabelLayer(container: HTMLElement): LabelLayer {
         else delete element.dataset.display;
         if (spec.box) element.dataset.box = spec.box;
         else delete element.dataset.box;
+        if (spec.color) {
+          element.dataset.tint = "";
+          element.style.setProperty("--room-color", spec.color);
+        } else {
+          delete element.dataset.tint;
+          element.style.removeProperty("--room-color");
+        }
         measure = true;
       }
       if (entry.text !== spec.text) {

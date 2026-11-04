@@ -30,6 +30,7 @@ const state: State = {
   rooms: [
     {
       name: "demo",
+      color: null,
       agents: [
         {
           id: "scout",

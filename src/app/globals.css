@@ -1578,6 +1578,28 @@ body {
   font-size: 0.8125rem;
 }
 
+/* A room with a colour: a dot, a tinted border and background; the chosen one keeps the inverted fill, ringed in the colour. */
+.room-swatch {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--room-color);
+}
+
+.room-rooms .wall-filter[data-tint] {
+  border-color: var(--room-color);
+  background: color-mix(in srgb, var(--room-color) 14%, var(--card));
+}
+
+.room-rooms .wall-filter[data-tint]:hover {
+  background: color-mix(in srgb, var(--room-color) 22%, var(--card));
+}
+
+.room-rooms .wall-filter[data-tint][aria-pressed="true"] {
+  background: var(--foreground);
+  box-shadow: 0 0 0 2px var(--room-color);
+}
+
 .room-live {
   margin-left: auto;
 }
@@ -1666,6 +1688,11 @@ body {
   border: 1px solid var(--line);
   border-radius: 0.4em;
   background: var(--card);
+}
+
+/* A name plate in the colour of the room: a thin line under the name. */
+.room-label[data-box="plate"][data-tint] {
+  border-bottom: max(2px, 0.2em) solid var(--room-color);
 }
 
 .room-label[data-box="bubble"] {
@@ -1798,6 +1825,21 @@ body {
 .room-agent[aria-expanded="true"] {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The colour of the room (see .chat-chip[data-tint]). */
+.room-agent[data-tint] {
+  border-color: var(--room-color);
+  background: color-mix(in srgb, var(--room-color) 14%, var(--card));
+}
+
+.room-agent[data-tint]:hover {
+  background: color-mix(in srgb, var(--room-color) 22%, var(--card));
+}
+
+.room-agent[data-tint][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--room-color) 30%, var(--card));
+  box-shadow: 0 0 0 1px var(--room-color);
 }
 
 .room-agent-name {
@@ -2256,6 +2298,26 @@ body {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The colour of a room (room.json "color", set as --room-color): a soft tint over the card, a border and a dot in
+   the colour. The text stays in the foreground token, so it reads in both themes. A chip without it stays neutral. */
+.chat-chip[data-tint] {
+  border-color: var(--room-color);
+  background: color-mix(in srgb, var(--room-color) 14%, var(--card));
+}
+
+.chat-chip[data-tint]:hover {
+  background: color-mix(in srgb, var(--room-color) 22%, var(--card));
+}
+
+.chat-chip[data-tint][aria-checked="true"] {
+  background: color-mix(in srgb, var(--room-color) 30%, var(--card));
+  box-shadow: 0 0 0 1px var(--room-color);
+}
+
+.chat-chip[data-tint] .chat-dot {
+  border-color: var(--room-color);
 }
 
 /* The state of an agent: a ring when idle, a full dot at work, red after a failure (it is also said in text). */

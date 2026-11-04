@@ -104,7 +104,7 @@ export const receptionSchema = z.object({ room: z.string().nullable(), sprite: z
 
 export const stateSchema = z.object({
   cursor: z.number().int(),
-  rooms: z.array(z.object({ name: z.string(), agents: z.array(agentSchema) })),
+  rooms: z.array(z.object({ name: z.string(), color: z.string().nullable().default(null), agents: z.array(agentSchema) })),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
   scheduler: schedulerSchema.default(schedulerOff),

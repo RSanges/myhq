@@ -90,8 +90,13 @@ const agentSchema = z.strictObject({
   notifyRuns: z.enum(["summary"]).optional(),
 });
 
+/** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
+export const roomColorSchema = z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #ff3d7f");
+
 export const roomFileSchema = z.strictObject({
   name: idSchema,
+  /** Colour of the room in the interface (chat chips, floor strip, name plates). Without it the room stays neutral. */
+  color: roomColorSchema.optional(),
   targetRepo: z.string().min(1),
   agents: z.array(agentSchema).min(1),
 });
@@ -141,6 +146,8 @@ export type Room = {
   dir: string;
   /** Absolute path of the target repository. */
   targetRepo: string;
+  /** Hex colour of the room in the interface, or null for the neutral look. */
+  color: string | null;
   agents: Agent[];
 };
 
@@ -250,6 +257,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     name: room.name,
     dir: roomDir,
     targetRepo,
+    color: room.color ?? null,
     agents,
   };
 }

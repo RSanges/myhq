@@ -40,6 +40,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 {
   "name": "example",
   "targetRepo": "../example-project",
+  "color": "#ff3d7f",
   "agents": [
     {
       "id": "scout",
@@ -85,6 +86,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 |---|---|---|
 | `name` | yes | Room name, unique in the home. |
 | `targetRepo` | yes | Path of the repository the room works on, relative to the home. |
+| `color` | no | The room's colour in the interface, a CSS hex colour (`#rgb` or `#rrggbb`). The chat chips of the room's agents, the agent strip under the floor and the room's button in the floor header take it as a soft tint (border and dot in the colour, text unchanged), and the name plates on the floor get a thin line in it. Without it the room stays neutral. The assistant's own chip keeps its blue. |
 | `agents[].id` | yes | Stable identifier, used in messages and in the database. |
 | `agents[].name` | yes | Display name. |
 | `agents[].role` | yes | Path of the role prompt, relative to the room directory. |

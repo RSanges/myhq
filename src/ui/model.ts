@@ -144,14 +144,14 @@ export function agentState(lastRun: Run | null | undefined): AgentState {
   return "idle";
 }
 
-export type TeamAgent = Agent & { room: string; key: string; state: AgentState };
+export type TeamAgent = Agent & { room: string; key: string; state: AgentState; color: string | null };
 
 export function selectAgents(model: Model): TeamAgent[] {
   return model.rooms.flatMap((room) =>
     room.agents.map((agent) => {
       const key = agentKey(room.name, agent.id);
       const lastRun = model.latestRuns[key] ?? null;
-      return { ...agent, lastRun, room: room.name, key, state: agentState(lastRun) };
+      return { ...agent, lastRun, room: room.name, key, state: agentState(lastRun), color: room.color };
     }),
   );
 }

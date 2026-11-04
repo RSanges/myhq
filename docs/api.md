@@ -208,6 +208,7 @@ restart.
     {
       "name": "demo",
       "targetRepo": "../demo-project",
+      "color": null,
       "agents": [
         {
           "id": "scout",
@@ -235,6 +236,7 @@ restart.
 ```
 
 - `role` and `targetRepo` are relative to the home.
+- `color`: the room's hex colour from `room.json`, or `null` (a neutral room).
 - `sprite`: `/api/sprites/<room>/<agent>` when the agent declares a character
   sheet in `room.json` and the file exists, `null` otherwise (the room view
   then draws the neutral character shipped with the app).

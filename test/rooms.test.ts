@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { getDbAt } from "../src/server/db";
+import { getState } from "../src/server/feed";
 import { loadHome, syncHome, type Agent } from "../src/server/rooms";
+import { schedulerInfo } from "../src/server/routines";
 import { makeHome } from "./helpers";
 
 const agent = { id: "scout", name: "Scout", role: "roles/scout.md", model: "sonnet", allowedTools: ["WebSearch"] };
@@ -19,6 +21,30 @@ test("loads a valid room with defaults resolved inside the home", () => {
   assert.equal(scout.rolePath, path.join(config.home, "rooms", "demo", "roles", "scout.md"));
   assert.equal(scout.workDir, path.join(config.home, "data", "work", "demo", "scout"));
   assert.deepEqual(scout.mcpServers, {});
+});
+
+test("a room colour is a hex colour; without one the room is neutral", () => {
+  assert.equal(loadHome(makeHome().home).rooms[0]!.color, null);
+  for (const color of ["#ff3d7f", "#FF3D7F", "#f37"]) {
+    const config = makeHome({}, { name: "demo", targetRepo: "x", color, agents: [agent] });
+    const home = loadHome(config.home);
+    assert.deepEqual(home.invalid, [], color);
+    assert.equal(home.rooms[0]!.color, color);
+  }
+  for (const color of ["pink", "ff3d7f", "#ff3d7", "#ff3d7f00ff", "rgb(255, 61, 127)", "#ggg", "", 7]) {
+    const config = makeHome({}, { name: "demo", targetRepo: "x", color, agents: [agent] });
+    const home = loadHome(config.home);
+    assert.equal(home.rooms.length, 0, String(color));
+    assert.match(home.invalid[0]!.error, /color/, String(color));
+  }
+});
+
+test("the state exposes the colour of each room, null when it has none", () => {
+  const config = makeHome({}, { name: "demo", targetRepo: "../demo-project", color: "#ff3d7f", agents: [agent] });
+  const db = getDbAt(config.dbPath);
+  assert.equal(getState(db, loadHome(config.home), schedulerInfo(config)).rooms[0]!.color, "#ff3d7f");
+  const plain = makeHome();
+  assert.equal(getState(getDbAt(plain.dbPath), loadHome(plain.home), schedulerInfo(plain)).rooms[0]!.color, null);
 });
 
 test("an empty home has no rooms", () => {

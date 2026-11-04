@@ -41,6 +41,8 @@ export type RoomScene = {
   view: RoomView;
   board: { title: string; rows: BoardLine[] };
   labels: { userDesk: string; tray: string };
+  /** Colour of the room (a normalized hex): a thin line under each agent's name plate. Null: none. */
+  color: string | null;
   selected: string | null;
   reduced: boolean;
 };
@@ -452,7 +454,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
           labels.place(`plate:${agent.key}`, { text: agent.name, x: plate.x, y: plate.y, size: 6.6, weight: 700, box: "plate", ax: 0.5, ay: 0 });
         } else {
           const office = layout.offices.find((spot) => spot.key === agent.key);
-          if (office) labels.place(`plate:${agent.key}`, { text: agent.name, x: office.plate.x, y: office.plate.y, size: 6.6, weight: 700, box: "plate", ax: office.plate.ax === 0 ? 0 : 1 });
+          if (office) labels.place(`plate:${agent.key}`, { text: agent.name, x: office.plate.x, y: office.plate.y, size: 6.6, weight: 700, box: "plate", ax: office.plate.ax === 0 ? 0 : 1, color: scene.color });
         }
         if (!agent.seated && agent.alpha > 0.5) {
           labels.place(`tag:${agent.key}`, { text: agent.name, x: agent.x, y: agent.y + 3, size: 7, weight: 700, ay: 0 });

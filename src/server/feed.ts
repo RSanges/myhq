@@ -195,6 +195,8 @@ export type StateDto = {
   rooms: {
     name: string;
     targetRepo: string;
+    /** Hex colour of the room (room.json), or null for the neutral look. */
+    color: string | null;
     agents: {
       id: string;
       name: string;
@@ -240,6 +242,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
     rooms: home.rooms.map((room) => ({
       name: room.name,
       targetRepo: toPosix(path.relative(home.root, room.targetRepo)),
+      color: room.color,
       agents: room.agents.map((agent) => {
         const row = lastRun.get(room.name, agent.id) as RunRow | undefined;
         const state: AgentState =

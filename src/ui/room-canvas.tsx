@@ -15,6 +15,8 @@ export type RoomCanvasProps = {
   labels: RoomScene["labels"];
   /** Character sheet URL per agent key (null: the neutral character). */
   sprites: Record<string, string | null>;
+  /** Colour of the room (a normalized hex), worn by the name plates; null for the neutral look. */
+  color: string | null;
   selected: string | null;
   reduced: boolean;
   onSelect: (key: string) => void;
@@ -94,7 +96,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
       }
       renderer.setSprites(props.sprites);
       renderer.draw(
-        { view, board: props.board, labels: props.labels, selected: props.selected, reduced: props.reduced },
+        { view, board: props.board, labels: props.labels, color: props.color, selected: props.selected, reduced: props.reduced },
         now,
       );
       canvas.dataset.frames = String(renderer.frames);

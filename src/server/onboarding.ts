@@ -165,7 +165,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
   const language = readHomeLanguage(config.home);
   const home = loadHome(config.home);
   const existingRooms = [...home.rooms.map((r) => r.name), ...home.invalid.map((r) => path.basename(r.dir))];
-  const room: Room = { name: ONBOARDING_ROOM, dir: config.home, targetRepo: target, agents: [] };
+  const room: Room = { name: ONBOARDING_ROOM, dir: config.home, targetRepo: target, color: null, agents: [] };
   const agent = onboardingAgent(config, target, deps.model ?? "sonnet");
   room.agents.push(agent);
   const targetRepo = toPosix(path.relative(config.home, target)) || ".";

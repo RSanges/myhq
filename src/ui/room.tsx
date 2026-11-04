@@ -8,6 +8,7 @@ import { selectAgents } from "./model";
 import { RECEPTION_KEY } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
 import { RoomCanvas } from "./room-canvas";
+import { chipStyle } from "./room-color";
 import { buildBoard } from "./room-board";
 import type { AgentStatus, AgentView, Coarse, RoomView } from "./room-model";
 import { snapshotRoom } from "./room-model";
@@ -89,6 +90,7 @@ export function RoomPage() {
   const agents = useMemo(() => selectAgents(model), [model]);
 
   const roomNames = useMemo(() => model.rooms.map((room) => room.name), [model.rooms]);
+  const roomColors = useMemo(() => new Map(model.rooms.map((each) => [each.name, each.color])), [model.rooms]);
   const [chosen, setChosen] = useState<string | null>(null);
   const room = chosen !== null && roomNames.includes(chosen) ? chosen : (roomNames[0] ?? null);
   const roomAgents = useMemo(() => agents.filter((agent) => agent.room === room), [agents, room]);
@@ -103,6 +105,7 @@ export function RoomPage() {
   // The reception desk is drawn on one floor of the home only (reception.room of myhq.json).
   const receptionHere = model.reception.room !== null && model.reception.room === room;
   const receptionSprite = model.reception.sprite ?? RECEPTIONIST_SHEET;
+  const roomColor = chipStyle(room === null ? null : roomColors.get(room))?.["--room-color"] ?? null;
   const closeSheet = useCallback(() => setSelectedKey(null), []);
 
   const snapshot = useRoomSnapshot(store, room, reduced);
@@ -148,11 +151,23 @@ export function RoomPage() {
         <h1 className="room-title wall-display">{title}</h1>
         {model.loaded && roomNames.length > 1 && (
           <div className="room-rooms" role="group" aria-label={t.roomsLabel}>
-            {roomNames.map((name) => (
-              <button key={name} type="button" className="wall-filter" aria-pressed={name === room} onClick={() => setChosen(name)}>
-                {name}
-              </button>
-            ))}
+            {roomNames.map((name) => {
+              const tint = chipStyle(roomColors.get(name));
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className="wall-filter"
+                  aria-pressed={name === room}
+                  data-tint={tint ? "" : undefined}
+                  style={tint ?? undefined}
+                  onClick={() => setChosen(name)}
+                >
+                  {tint && <span className="room-swatch" aria-hidden />}
+                  {name}
+                </button>
+              );
+            })}
           </div>
         )}
         <p className="wall-live room-live" role="status" data-connected={connection === "live" ? "" : undefined}>
@@ -208,6 +223,7 @@ export function RoomPage() {
                     board={boardForCanvas}
                     labels={{ userDesk: t.userDesk, tray: t.tray }}
                     sprites={sprites}
+                    color={roomColor}
                     selected={selectedKey}
                     reduced={reduced}
                     onSelect={setSelectedKey}
@@ -230,6 +246,7 @@ export function RoomPage() {
               <AgentRow
                 key={agent.key}
                 name={agent.name}
+                color={agent.color}
                 status={statusOf.get(agent.key)?.status ?? null}
                 selected={agent.key === selectedKey}
                 onOpen={() => setSelectedKey(agent.key)}
@@ -268,23 +285,29 @@ export function RoomPage() {
 /** One agent of the list under the floor: a button with its name and what it is doing, that opens its sheet. */
 function AgentRow({
   name,
+  color = null,
   status,
   selected,
   onOpen,
   receptionist = false,
 }: {
   name: string;
+  /** Colour of the agent's room; the receptionist has none. */
+  color?: string | null;
   status: AgentStatus | null;
   selected: boolean;
   onOpen: () => void;
   receptionist?: boolean;
 }) {
+  const tint = chipStyle(color);
   return (
     <li>
       <button
         type="button"
         className="room-agent"
         data-state={status?.kind}
+        data-tint={tint ? "" : undefined}
+        style={tint ?? undefined}
         aria-expanded={selected}
         aria-haspopup="dialog"
         title={t.openCard(name)}

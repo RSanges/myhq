@@ -84,6 +84,7 @@ const baseState = (over: Partial<State> = {}): State => ({
   rooms: [
     {
       name: "demo",
+      color: null,
       agents: [
         {
           id: "scout",

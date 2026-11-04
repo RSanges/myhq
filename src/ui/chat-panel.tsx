@@ -5,6 +5,7 @@ import { selectionMessage, textWithoutChoices, type Choice } from "../assistant/
 import { formatClock } from "./format";
 import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
+import { chipStyle } from "./room-color";
 import type { ChatMessage, ChatSignal } from "./schemas";
 import { strings } from "./strings";
 import { useChat } from "./use-chat";
@@ -345,22 +346,27 @@ export function ChatPanel({
           >
             {t.chatChip(name)}
           </button>
-          {agents.map((each) => (
-            <button
-              key={each.key}
-              type="button"
-              role="radio"
-              aria-checked={agent?.key === each.key}
-              className="chat-chip"
-              data-state={each.state}
-              title={t.agentChip({ name: each.name, room: inRooms ? each.room : null, state: strings.team.state[each.state] })}
-              onClick={() => setTarget(each.key)}
-            >
-              <span className="chat-dot" aria-hidden />
-              {each.name}
-              <span className="sr-only">{`, ${strings.team.state[each.state]}`}</span>
-            </button>
-          ))}
+          {agents.map((each) => {
+            const tint = chipStyle(each.color);
+            return (
+              <button
+                key={each.key}
+                type="button"
+                role="radio"
+                aria-checked={agent?.key === each.key}
+                className="chat-chip"
+                data-state={each.state}
+                data-tint={tint ? "" : undefined}
+                style={tint ?? undefined}
+                title={t.agentChip({ name: each.name, room: inRooms ? each.room : null, state: strings.team.state[each.state] })}
+                onClick={() => setTarget(each.key)}
+              >
+                <span className="chat-dot" aria-hidden />
+                {each.name}
+                <span className="sr-only">{`, ${strings.team.state[each.state]}`}</span>
+              </button>
+            );
+          })}
         </div>
         <textarea
           ref={textRef}
