@@ -84,9 +84,14 @@ export function RoomCanvas(props: RoomCanvasProps) {
     kickRef.current();
   });
 
+  const zoomableRef = useRef({ in: false, out: false });
   const refreshZoom = () => {
     const renderer = rendererRef.current;
-    setZoomable({ in: renderer?.canZoom(1) ?? false, out: renderer?.canZoom(-1) ?? false });
+    const next = { in: renderer?.canZoom(1) ?? false, out: renderer?.canZoom(-1) ?? false };
+    // Called on every frame too (a view moved by the drawing itself): a render only when it changes.
+    if (next.in === zoomableRef.current.in && next.out === zoomableRef.current.out) return;
+    zoomableRef.current = next;
+    setZoomable(next);
   };
 
   useEffect(() => {
@@ -136,6 +141,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
         now,
       );
       canvas.dataset.frames = String(renderer.frames);
+      refreshZoom();
 
       const fps = renderer.busy(now, current.reduced) ? 60 : view.fps;
       if (fps > 0) schedule(fps >= 30 ? 0 : 1000 / fps);

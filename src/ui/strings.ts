@@ -424,8 +424,6 @@ export const strings = {
       goTo: (room: string) => `Aller à la salle ${room}`,
       goToWithCount: (room: string, count: number) =>
         count === 1 ? `Aller à la salle ${room}, 1 item à signer` : `Aller à la salle ${room}, ${count} items à signer`,
-      /** The sign at the door of the meeting room. */
-      meeting: "Réunion",
       /** The user's desk of each room, listed under the floor: a link to what it waits for. */
       pilesTitle: "À signer, par salle",
       pile: (room: string, count: number) =>

@@ -966,43 +966,46 @@ under the floor but have no office on it.
 **The single floor.** With `floor.layout: "room-per-project"` in `myhq.json`
 (`home-layout.md`; the default, `"floor-per-project"`, is the floor of one
 room above), `/room` draws the whole home as one floor where each room of the
-home is one room (`layoutFloor`, `src/ui/floor-plan.ts`). It is the corner of
-a building seen from the front: the lobby in the corner, at the top of the
-screen, and the rooms along the two back walls, one wing along x, one along y,
-with the wooden hall in front of both wings and round the lobby. Only the
-outer walls of the building stand at full height: they look outside (the
-windows), and they hide nothing but the outside. Between two rooms of a wing
-the partition is the low rim of the first one, the second having no back wall
-on that side (an empty `back.x` or `back.y` of the room), so no room hides
-another and every room opens onto the hall through its front rim. A room of a
-wing is six cells deep and as long as its team needs (`roomLength`): two rows
-of workstations facing the back wall (desk, chair, aisle, twice), two cells per
-desk along the wing, the last column for the aisle to the opening, a tall
-plant at its top, and in the places left a bookshelf, a whiteboard, plants or a
-printer; its carpet takes its own colour. Each room also has the user's own
-desk, empty, in its front row by the opening, with a pile of folders on it:
-one per item of that room waiting for a decision (ten drawn at most), the
-spines in the room colour, and a count over it. The lobby (eight by eight)
-holds the reception counter facing the wing along x (the receptionist behind
-it), the coffee corner, a sofa by a rug and the user's desk of the onboarding
-room `_hq`, where room proposals land; the room of the reception
-(`reception.room`) opens that wing, the others go to the shorter wing in the
-order of the home, and a meeting room ends the shorter wing when the two
-differ by more than its length. The tests run every rule above on generated
-homes of 1 to 8 rooms of 1 to 12 agents, and check that a side without a back
-wall is lined by another room all along. The page then shows every agent of
-the home in the strip, the receptionist last; the buttons at the top take the
-view to a room (centred, and close enough to see it whole when it fits) and
-carry its count; the name of each room is a sign at its opening. A click on a
-user's desk (or the list « À signer, par salle » under the floor, its
-equivalent for the keyboard and screen readers) opens the page of the pile of
-decisions filtered to that room, `/bureau/<id>?room=<room>` (section 8). An
-agent carries what it submits to the user's desk of its own room, a delivery
-of a shared room (`forRoom`) to the desk of the room that ordered it, and a
-message to an agent of another room (`hq_message` with `room`) is a walk
-through the hall to that agent's desk. The overview is centred on the whole
-floor; on a screen where even one device pixel per art pixel is too big, the
-ends of the wings are a drag away.
+home is a suite of its own (`layoutFloor`, `src/ui/floor-plan.ts`): a block
+with its own back walls, windows and front rim, like the rooms of the
+templates, laid out with the lobby on a loose grid and joined by corridors. A
+corridor runs along x under each row of blocks and one along y to the right of
+each column whose blocks open sideways onto it, so the corridors branch and
+cross; the blocks of an even column open downwards onto the corridor of their
+row, those of an odd column are turned a quarter, stand a little lower and open
+sideways, and a short walkway leads from an opening to its corridor when a
+block is smaller than its place. Blocks stand five cells apart: the corridor,
+then the shadow of the next block's back wall, so no block hides another, no
+corridor runs behind a wall and every window looks onto an empty strip. The
+grid is the one whose floor is the smallest on screen, two columns and two
+rows at least from three blocks. A suite is six cells deep and as long as its
+team needs (`roomLength`): two rows of workstations facing the back wall
+(desk, chair, aisle, twice), two cells per desk, the column of the aisle to the
+opening with a tall plant at its top, a bookshelf, a whiteboard, plants or a
+printer in the places left, and for a team of six or more a coffee nook (the
+coffee corner, a sofa on a rug); its carpet takes its own colour. Each suite
+also has the user's own desk, empty, in its front row by the opening, with a
+pile of folders on it: one per item of that room waiting for a decision (ten
+drawn at most), the spines in the room colour, and a count over it. The lobby
+(eight by eight, the first block) holds the reception counter, the
+receptionist behind it, the coffee corner, a sofa by a rug and the user's desk
+of the onboarding room `_hq`, where room proposals land; the room of the
+reception (`reception.room`) is the next block, the others follow in the
+order of the home. The tests run every rule above on generated homes of 1 to 8
+rooms of 1 to 12 agents, and check that blocks stand apart and keep their
+walls. The page shows every agent of the home in the strip, the receptionist
+last; the buttons at the top centre the view on a room (close enough to see it
+whole when it fits) and carry its count; the name of each room is a sign at its
+opening. A click on a user's desk (or the list « À signer, par salle » under
+the floor, its equivalent for the keyboard and screen readers) opens the page
+of the pile of decisions filtered to that room, `/bureau/<id>?room=<room>`
+(section 8). An agent carries what it submits to the user's desk of its own
+room, a delivery of a shared room (`forRoom`) to the desk of the room that
+ordered it, and a message to an agent of another room (`hq_message` with
+`room`) is a walk along the corridors to that agent's desk. The floor is meant
+to be panned (a drag, a swipe, the wheel); its overview, centred on the whole,
+may go one step under one device pixel per art pixel (half of one, sampled
+smoothly, without the names over the heads) so that it fits the screen.
 
 **The reception.** Onboarding is an agent too (section 3), and it is
 the one agent that no room owns: its runs belong to the reserved room `_hq`. So

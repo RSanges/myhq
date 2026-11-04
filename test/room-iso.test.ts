@@ -14,7 +14,7 @@ import {
   sheetRow,
   turnOf,
 } from "../src/ui/iso-floor";
-import { layoutFloor, LOBBY_SIZE, MAX_ROOM_AGENTS, roomLength, type FloorRoomInput } from "../src/ui/floor-plan";
+import { GAP, layoutFloor, LOBBY_SIZE, MAX_ROOM_AGENTS, roomLength, type FloorRoomInput } from "../src/ui/floor-plan";
 import { FLOOR_TEMPLATES } from "../src/ui/floor-templates";
 import {
   CELL,
@@ -379,24 +379,38 @@ test("the single floor: a room per room of the home, its colour, its agents at i
   }
 });
 
-test("the single floor: the reception's room opens the wing along x, the wings stay balanced, sizes follow the agents", () => {
+test("the single floor: separate blocks on a grid in two dimensions, the reception's room next to the lobby, sizes from the agents", () => {
   for (const counts of floorHomes()) {
     const rooms = homeRooms(counts);
     const reception = rooms[rooms.length - 1]!.name;
     const layout = layoutFloor(rooms, { reception, receptionist: false });
     const label = `rooms ${counts.join(",")}`;
     assert.equal(layout.reception, null, `${label}: no counter without the receptionist`);
-    const first = layout.rooms.find((room) => room.project === reception)!;
-    assert.deepEqual([first.x, first.y], [LOBBY_SIZE, 0], `${label}: the reception's room is next to the lobby`);
-    const along = (side: "x" | "y") =>
-      layout.rooms.filter((room) => room.kind !== "lobby" && (side === "x" ? room.y === 0 : room.x === 0)).reduce((total, room) => total + (side === "x" ? room.w : room.d), 0);
-    // Along its wing: x for the rooms against the back wall along x (y = 0), y for the others.
-    const length = (room: RoomLayout["rooms"][number]) => (room.y === 0 ? room.w : room.d);
-    const longest = Math.max(...layout.rooms.filter((room) => room.kind !== "lobby").map(length));
-    assert.ok(Math.abs(along("x") - along("y")) <= longest, `${label}: wings of ${along("x")} and ${along("y")}`);
+    assert.equal(layout.rooms[1]!.project, reception, `${label}: the reception's room comes right after the lobby`);
+    // Blocks stand apart: GAP cells or more between any two, along x or along y.
+    layout.rooms.forEach((a, i) => {
+      layout.rooms.forEach((b, j) => {
+        if (j <= i) return;
+        const apartX = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w));
+        const apartY = Math.max(b.y - (a.y + a.d), a.y - (b.y + b.d));
+        assert.ok(apartX >= GAP || apartY >= GAP, `${label}: blocks at ${a.x},${a.y} and ${b.x},${b.y} stand apart`);
+      });
+    });
+    // Every block has its own walls: both back walls at full height.
+    for (const room of layout.rooms) assert.ok(room.back.x.length > 0 && room.back.y.length > 0, `${label}: a block at ${room.x},${room.y} with its walls`);
+    if (layout.rooms.length >= 3) {
+      assert.ok(new Set(layout.rooms.map((room) => room.x)).size >= 2, `${label}: more than one column`);
+      assert.ok(new Set(layout.rooms.map((room) => room.y)).size >= 2, `${label}: more than one row`);
+    }
     for (const room of rooms) {
       const placed = layout.rooms.find((each) => each.project === room.name)!;
-      assert.equal(length(placed), roomLength(room.keys.length), `${label}: ${room.name} sized from its agents`);
+      const length = placed.open.y.length > 0 ? placed.w : placed.d;
+      assert.equal(length, roomLength(room.keys.length), `${label}: ${room.name} sized from its agents`);
+    }
+    // Some blocks open downwards, some sideways: the corridors branch.
+    if (layout.rooms.length >= 3) {
+      assert.ok(layout.rooms.some((room) => room.open.x.length > 0), `${label}: a block opens sideways`);
+      assert.ok(layout.rooms.some((room) => room.open.y.length > 0), `${label}: a block opens downwards`);
     }
   }
   assert.ok(roomLength(1) < roomLength(6) && roomLength(6) < roomLength(12), "a bigger team, a longer room");

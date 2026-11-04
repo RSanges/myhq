@@ -171,7 +171,7 @@ export function RoomPage() {
     [single, roomNames, model.reception.room],
   );
   const labels = useMemo(
-    () => ({ userDesk: t.userDesk, trayCount: t.trayCount, roomSign: (name: string | null) => (name === null ? t.single.meeting : roomLabel(name)) }),
+    () => ({ userDesk: t.userDesk, trayCount: t.trayCount, roomSign: roomLabel }),
     [],
   );
 

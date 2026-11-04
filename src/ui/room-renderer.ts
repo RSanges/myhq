@@ -58,8 +58,8 @@ export type RoomScene = {
   labels: {
     userDesk: string;
     trayCount: (count: number) => string;
-    /** The sign at the door of a room of the single floor: its name, or the meeting room's. */
-    roomSign?: (room: string | null) => string;
+    /** The sign at the door of a room of the single floor: its name. */
+    roomSign?: (room: string) => string;
   };
   /** Colour of the room (a normalized hex): carpets, tiles, rugs, sofas, the counter and the name tags. Null: neutral. */
   color: string | null;
@@ -114,6 +114,13 @@ export type RendererOptions = {
 
 /** The closest the floor gets: this many device pixels per art pixel. */
 export const MAX_ZOOM = 6;
+/**
+ * The overview of the single floor, which spreads its suites far apart, may
+ * go one step further than one device pixel per art pixel: half of one,
+ * sampled smoothly (the art is then a map, not pixel art, until the next step
+ * closer). The floor of one room never goes under one.
+ */
+export const OVERVIEW_ZOOM = 0.5;
 const BUMP_MS = 650;
 /** Free space around the floor when it is fitted, in art pixels. */
 const MARGIN = 8;
@@ -226,6 +233,15 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
 
   const atlas = Texture.from(atlasImage);
   atlas.source.scaleMode = "nearest";
+  /** Every texture source drawn (the atlas, the character sheets): nearest at a whole zoom, linear under one. */
+  const sources = new Set([atlas.source]);
+  let sampling: "nearest" | "linear" = "nearest";
+  const applySampling = () => {
+    const wanted = zoom < 1 ? "linear" : "nearest";
+    if (wanted === sampling) return;
+    sampling = wanted;
+    for (const source of sources) source.scaleMode = wanted;
+  };
   const frameTextures = floorSet.atlas.frames.map(([x, y, w, h]) => new Texture({ source: atlas.source, frame: new Rectangle(x, y, w, h) }));
 
   // Layers, back to front: the flat floor, the marks on it, everything sorted, effects on top.
@@ -246,11 +262,14 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let layout: RoomLayout | null = null;
 
   const scale = () => zoom / resolution;
+  /** The lowest zoom of the floor shown: the overview step on the single floor, one device pixel elsewhere. */
+  const minZoom = () => (layout?.template === "rooms" ? OVERVIEW_ZOOM : 1);
   const offset = (): Point => ({
     x: Math.round((cssSize.width / 2 - center.x * scale()) * resolution) / resolution,
     y: Math.round((cssSize.height / 2 - center.y * scale()) * resolution) / resolution,
   });
   const applyView = () => {
+    applySampling();
     const at = offset();
     world.scale.set(scale());
     world.position.set(at.x, at.y);
@@ -265,9 +284,10 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     if (!layout) return;
     const b = layout.bounds;
     const device = { w: cssSize.width * resolution, h: cssSize.height * resolution };
-    zoom = Math.max(1, Math.min(MAX_ZOOM, Math.floor(Math.min(device.w / (b.w + 2 * MARGIN), device.h / (b.h + 2 * MARGIN)))));
+    const fits = Math.min(device.w / (b.w + 2 * MARGIN), device.h / (b.h + 2 * MARGIN));
+    zoom = fits >= 1 ? Math.min(MAX_ZOOM, Math.floor(fits)) : minZoom();
     const overflow = Math.max(((b.w + 2 * MARGIN) * zoom) / device.w, ((b.h + 2 * MARGIN) * zoom) / device.h);
-    // The single floor is a balanced V with the lobby in the middle: its overview is always centred on the whole.
+    // The overview of the single floor is always centred on the whole of it.
     if (overflow <= NEARLY_FITS || layout.offices.length === 0 || layout.template === "rooms") {
       center = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
     } else {
@@ -289,7 +309,13 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     void loadImage(url)
       .then((image) => {
         if (destroyed) return;
-        sheets.set(url, sliceSheet(image));
+        const sheet = sliceSheet(image);
+        const source = sheet?.frames[0]?.[0]?.source;
+        if (source) {
+          source.scaleMode = sampling;
+          sources.add(source);
+        }
+        sheets.set(url, sheet);
         options.onLoad();
       })
       .catch(() => {
@@ -507,7 +533,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       applyView();
     },
     zoomBy(step, around) {
-      const next = Math.max(1, Math.min(MAX_ZOOM, zoom + step));
+      // Whole steps, and the overview step under one on the single floor.
+      const next = step > 0 ? Math.min(MAX_ZOOM, zoom < 1 ? 1 : zoom + step) : zoom > 1 ? Math.max(1, zoom + step) : minZoom();
       if (next === zoom) return;
       const anchor = around ?? { x: cssSize.width / 2, y: cssSize.height / 2 };
       const at = offset();
@@ -530,7 +557,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       applyView();
     },
     canZoom(step) {
-      return step > 0 ? zoom < MAX_ZOOM : zoom > 1;
+      return step > 0 ? zoom < MAX_ZOOM : zoom > minZoom();
     },
     ownerDeskAt(x, y) {
       const at = offset();
@@ -648,7 +675,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         }
 
         // The name over the head, and what the agent is doing over the name.
-        if (agent.alpha > 0.5) {
+        // Under one device pixel per art pixel (the overview of the single floor) the floor is a map: no name over the heads.
+        if (agent.alpha > 0.5 && zoom >= 1) {
           const top = node.feet.y - node.height - 3;
           labels.place(`name:${agent.key}`, {
             text: agent.name,
@@ -757,7 +785,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       }
       if (current.template === "rooms" && scene.labels.roomSign) {
         for (const room of current.rooms) {
-          if (room.project === RECEPTION_ROOM) continue;
+          if (room.project === null || room.project === RECEPTION_ROOM) continue;
           const door = room.open.y[0] !== undefined ? { x: room.x + room.open.y[0] + 0.5, y: room.y + room.d } : room.open.x[0] !== undefined ? { x: room.x + room.w, y: room.y + room.open.x[0] + 0.5 } : null;
           if (!door) continue;
           const at = screenOf(door.x * CELL, door.y * CELL, 30);
