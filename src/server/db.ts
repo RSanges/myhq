@@ -470,6 +470,25 @@ ALTER TABLE approvals ADD COLUMN for_room TEXT;
 ALTER TABLE runs ADD COLUMN resources TEXT NOT NULL DEFAULT '[]';
 `,
   },
+  {
+    version: 13,
+    sql: `
+-- Files joined to an item (hq_submit attachments): a copy of each one lives in
+-- data/attachments/<approval_id>/<id><ext>. No foreign key, so that a rebuild
+-- of approvals (as in migration 11) never cascades onto the files.
+CREATE TABLE approval_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  approval_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  caption TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX approval_files_approval ON approval_files (approval_id);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

@@ -997,4 +997,22 @@ export const strings = {
       queued: "L'accueil est occupé : ta demande d'agent attend son prochain tour.",
     },
   },
+  /** Files joined to an item (hq_submit `attachments`): their preview on the desk and their line on Telegram. */
+  attachments: {
+    title: (count: number) => (count === 1 ? "Fichier joint" : `Fichiers joints (${count})`),
+    /** The quote of a remark made on a video or a sound at a given time: « clip-01.mp4 à 0:12 ». */
+    atTime: (name: string, time: string) => `${name} à ${time}`,
+    annotateAt: "Annoter à cet instant",
+    annotateAtLabel: (name: string, time: string) => `Annoter ${name} à ${time}`,
+    download: "Télécharger",
+    open: "Ouvrir",
+    enlarge: (name: string) => `Agrandir ${name}`,
+    close: "Fermer",
+    previewOf: (name: string) => `Aperçu de ${name}`,
+    size: (bytes: number) =>
+      bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} Mo`,
+    kind: { video: "Vidéo", image: "Image", audio: "Son", model: "Pièce 3D", pdf: "PDF" },
+    /** The line of a Telegram alert that lists the files of the item. */
+    telegramLine: (names: readonly string[]) => `Fichiers joints : ${names.join(", ")}`,
+  },
 } as const;

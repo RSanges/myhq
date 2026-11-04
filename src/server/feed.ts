@@ -1,5 +1,6 @@
 import path from "node:path";
 import { parseAnnotations, type Annotation } from "./annotations";
+import { FILES_SELECT, parseFiles, type ApprovalFileDto } from "./attachments";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import type {
   ApprovalRow,
@@ -92,17 +93,19 @@ export type ApprovalDto = {
    * `agentId` stay the producing agent's, who gets the decisions. Null: its own room.
    */
   forRoom: string | null;
+  /** The files joined by the agent (hq_submit `attachments`), in the order given. */
+  files: ApprovalFileDto[];
   decidedAt: string | null;
   createdAt: string;
 };
 
 /** An approval row, with whether its execution task is done (see `APPROVAL_SELECT`). */
-export type ApprovalRowWithAction = ApprovalRow & { action_done?: number };
+export type ApprovalRowWithAction = ApprovalRow & { action_done?: number; files?: string | null };
 
-/** Selects approvals as `a`, with `action_done`; append a WHERE clause. */
+/** Selects approvals as `a`, with `action_done` and `files`; append a WHERE clause. */
 export const APPROVAL_SELECT = `SELECT a.*, EXISTS(
   SELECT 1 FROM tasks t WHERE t.source = 'approval' AND t.ref_id = a.id AND t.status = 'done'
-) AS action_done FROM approvals a`;
+) AS action_done, ${FILES_SELECT} FROM approvals a`;
 
 export const toRun = (r: RunRow): RunDto => ({
   id: r.id,
@@ -162,6 +165,7 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
     r.status === "seen" ||
     (r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at),
   forRoom: r.for_room ?? null,
+  files: parseFiles(r.files, r.id),
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });

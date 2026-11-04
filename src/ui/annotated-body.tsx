@@ -14,7 +14,8 @@ type Editing = { kind: "new"; span: Span; quote: string } | { kind: "edit"; inde
 /** The « Annoter » button, placed under the end of the selection (px, relative to the body). */
 type Floating = { top: number; left: number; span: Span; quote: string };
 
-function CommentBox({
+/** The box of one remark: the quoted passage, the comment, and its buttons (also used by attachments.tsx). */
+export function CommentBox({
   quote,
   initial,
   readOnly,

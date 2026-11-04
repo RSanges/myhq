@@ -48,6 +48,19 @@ export const messageSchema = z.object({
   createdAt: z.string(),
 });
 
+/** A file joined to an item by its agent (hq_submit `attachments`), served at `url`. */
+export const approvalFileSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  mime: z.string(),
+  kind: z.enum(["video", "image", "audio", "model", "pdf"]),
+  size: z.number(),
+  sha256: z.string(),
+  caption: z.string().nullable(),
+  url: z.string(),
+});
+export type ApprovalFile = z.infer<typeof approvalFileSchema>;
+
 export const approvalSchema = z.object({
   id: z.number().int(),
   room: z.string(),
@@ -65,6 +78,8 @@ export const approvalSchema = z.object({
   informational: z.boolean().default(false),
   /** The room that ordered it from a shared room: its pile and its colour. `room` stays the producing agent's. */
   forRoom: z.string().nullable().optional(),
+  /** Absent from the items built before files existed (and in the tests that build items by hand). */
+  files: z.array(approvalFileSchema).optional(),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
 });
