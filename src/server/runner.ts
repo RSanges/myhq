@@ -9,6 +9,7 @@ import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
+import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
@@ -33,6 +34,8 @@ export type RunnerDeps = {
   config?: HqConfig;
   engine?: Engine;
   send?: Send;
+  /** The environment read for HQ_PUBLIC_URL (the links of the alerts). Default: process.env. */
+  env?: Env;
 };
 
 type ActiveRun = { controller: AbortController; reason: "timeout" | null };
@@ -387,7 +390,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       }
       storeEvent(db, run, event);
       if (event.type === "tool_result") {
-        void notifyPendingApprovals(db, p.send);
+        void notifyPendingApprovals(db, p.send, p.deps.env);
         wake(p);
       }
     }
@@ -447,17 +450,21 @@ async function execute(p: ExecuteParams): Promise<void> {
   })();
 
   wake(p);
-  await notifyPendingApprovals(db, p.send);
+  await notifyPendingApprovals(db, p.send, p.deps.env);
   // What the bot sends on its own goes into the conversation MyHQ keeps, so
   // that the user's answer to it is understood (chat-history.ts).
   if (status === "failed") {
-    const text = strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary });
+    const text = withLine(
+      strings.notify.runFailed({ room: room.name, agent: agent.name, runId: run.id, summary }),
+      runLinkLine(run.id, p.deps.env),
+    );
     if (await p.send(text)) recordBotMessage(db, text, "alert");
   }
   // A brief or a recap agent delivers its text this way: its summary is the message.
   if (status === "done" && agent.notifyRuns === "summary") {
     let sent = false;
-    for (const part of toTelegramMessages(summary)) sent = (await p.send(part)) || sent;
-    if (sent) recordBotMessage(db, summary, "summary");
+    const link = deskLinkLine(p.deps.env);
+    for (const part of appendLine(toTelegramMessages(summary), link)) sent = (await p.send(part)) || sent;
+    if (sent) recordBotMessage(db, withLine(summary, link), "summary");
   }
 }

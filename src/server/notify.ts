@@ -3,6 +3,7 @@ import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings
 import { splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
 import { NOTIFICATION_NOTE } from "./home-settings";
+import { appendLine, approvalLinkLine, withLine } from "./public-url";
 import { strings } from "../ui/strings";
 import type { Env } from "./config";
 import type { Db } from "./db";
@@ -68,9 +69,10 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
  * the app process sweeps them (during and after each run). A pending item gets
  * the short alert with the buttons; an informational one is sent in full, its
  * alert line then its body as is, cut in messages of 4000 characters, with no
- * buttons.
+ * buttons. When HQ_PUBLIC_URL is set (read from `env`), each one ends with the
+ * line « Ouvrir : <url>/#approval-<id> ».
  */
-export async function notifyPendingApprovals(db: Db, send: Send = sendAlert): Promise<void> {
+export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env: Env = process.env): Promise<void> {
   const rows = db
     .prepare(
       `SELECT a.id, a.room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
@@ -93,13 +95,14 @@ export async function notifyPendingApprovals(db: Db, send: Send = sendAlert): Pr
     // Marked first so that two concurrent sweeps never send the same item twice.
     if (mark.run(new Date().toISOString(), row.id).changes === 0) continue;
     if (row.status === "pending") {
-      const text = strings.notify.approvalPending(row);
+      const text = withLine(strings.notify.approvalPending(row), approvalLinkLine(row.id, env));
       if (await send(text, { approvalId: row.id })) recordBotMessage(db, text, "alert");
       continue;
     }
-    const text = `${strings.notify.notification(row)}\n\n${row.body}`;
+    const link = approvalLinkLine(row.id, env);
+    const full = `${strings.notify.notification(row)}\n\n${row.body}`;
     let sent = false;
-    for (const part of splitMessage(text)) sent = (await send(part)) || sent;
-    if (sent) recordBotMessage(db, text, "notification");
+    for (const part of appendLine(splitMessage(full), link)) sent = (await send(part)) || sent;
+    if (sent) recordBotMessage(db, withLine(full, link), "notification");
   }
 }

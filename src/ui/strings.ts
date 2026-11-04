@@ -469,6 +469,10 @@ export const strings = {
       `MyHQ : ${p.title} (#${p.id})\n${p.room} / ${p.agent} : ${p.type}`,
     runFailed: (p: { room: string; agent: string; runId: number; summary: string }) =>
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
+    /** Last line of an alert about an approval or a failed run, when HQ_PUBLIC_URL is set. */
+    open: (url: string) => `Ouvrir : ${url}`,
+    /** Last line of a brief or a summary, when HQ_PUBLIC_URL is set. */
+    desk: (url: string) => `Bureau : ${url}`,
   },
   /** The conversation panel of the desk and of the floor (the same conversation as Telegram's). */
   chat: {
