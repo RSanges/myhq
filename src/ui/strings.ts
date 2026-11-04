@@ -507,6 +507,18 @@ export const strings = {
     /** Last line of a brief or a summary, when HQ_PUBLIC_URL is set. */
     desk: (url: string) => `Bureau : ${url}`,
   },
+  /** The hub: the desk drawn as a scene at the top of `/` (src/ui/hub.tsx). */
+  hub: {
+    sceneLabel: "Le bureau",
+    /** The name of an object of the scene for a screen reader, with what it holds. */
+    object: (label: string, count: number) => (count > 0 ? `${label}, ${count}` : label),
+    objectError: (label: string) => `${label}, en erreur`,
+    /** Objects of the desk the scene does not show right now (post-its without a note). */
+    more: "Aussi sur le bureau :",
+    cardsLabel: "Les modules du bureau",
+    cardEmpty: "Rien",
+    cardError: "Erreur",
+  },
   /** The objects of the desk (myhq.json `desk`) and their pages, /bureau/<id>. */
   deskModules: {
     /** Labels of the default desk, when myhq.json has no `desk` block. */
@@ -523,8 +535,6 @@ export const strings = {
       bot: "Message automatique",
     },
     pageTitle: (label: string, count: number) => (count > 0 ? `(${count}) ${label} · MyHQ` : `${label} · MyHQ`),
-    navLabel: "Les objets du bureau",
-    navCount: (label: string, count: number) => `${label}, ${count}`,
     back: "Bureau",
     backLabel: "Retour au bureau",
     loading: "Chargement du module...",

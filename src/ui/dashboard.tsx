@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo } from "react";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { Desk } from "./desk";
-import { DeskNav } from "./desk-module";
 import { Feed } from "./feed";
+import { DeskHub } from "./hub";
 import { Meter } from "./meter";
 import { RoutineJournal } from "./routine-journal";
 import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
@@ -62,7 +62,7 @@ export function Dashboard() {
         </div>
       </header>
 
-      {desk.desk && <DeskNav objects={desk.desk.objects} />}
+      <DeskHub desk={desk.desk} narrow={!wide} />
 
       {loadError && (
         <div className="space-y-3">
@@ -79,7 +79,7 @@ export function Dashboard() {
 
       {model.loaded && (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <div className="order-2 min-w-0 lg:order-first lg:col-span-2">
+          <div className="order-2 min-w-0 lg:order-last lg:col-span-2">
             <Meter usage={model.usage} failed={usageFailed} />
           </div>
           <div className="order-1 min-w-0">

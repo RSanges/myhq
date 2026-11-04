@@ -30,37 +30,6 @@ function watchTypes(object: DeskObject): (string | null)[] {
 
 const matchesTypes = (types: (string | null)[]) => (approval: Approval) => types.some((type) => type === null || type === approval.type);
 
-/** The row of links to the objects of the desk, at the top of `/` until the scene replaces it. */
-export function DeskNav({ objects }: { objects: DeskObject[] }) {
-  if (objects.length === 0) return null;
-  return (
-    <nav aria-label={t.navLabel}>
-      <ul className="flex flex-wrap gap-x-1 gap-y-1 text-sm">
-        {objects.map((object) => (
-          <li key={object.id}>
-            <Link
-              href={`/bureau/${object.id}`}
-              aria-label={object.count > 0 ? t.navCount(object.label, object.count) : object.label}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 py-1 text-muted hover:bg-soft hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-11"
-            >
-              {object.label}
-              {object.status === "error" ? (
-                <span aria-hidden className="size-1.5 rounded-full bg-danger" />
-              ) : (
-                object.count > 0 && (
-                  <span aria-hidden className="rounded-full bg-accent-soft px-1.5 text-xs font-semibold text-accent">
-                    {object.count}
-                  </span>
-                )
-              )}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
 /** A command of the home that failed: what happened, in French, and a way to try again. */
 export function CommandError({ object, onRetry }: { object: DeskObject; onRetry: () => void }) {
   if (object.status !== "error") return null;

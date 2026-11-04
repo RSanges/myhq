@@ -933,11 +933,10 @@ the room (README, "Trying the room without a real run").
 
 ## 8. The desk objects
 
-The desk (`/`) is becoming a scene: the user's office in isometric pixel art,
-where each object on the desk is a module (a pile of items to sign, a mail
-tray, a newspaper, post-its, a wall calendar, a phone). The scene is drawn
-later; what it stands on is in place: the model, the data, the API and one
-page per object.
+The desk (`/`) opens on a scene, the hub: the user's office in isometric
+pixel art, where each object on the desk is a module (a pile of items to sign,
+a mail tray, a newspaper, post-its, a wall calendar, a phone). It stands on
+the model, the data, the API and one page per object.
 
 - **The model** (`src/server/desk.ts`): `desk.objects` of `myhq.json` lists the
   objects, each `{ id, object, label, source }` (schema and defaults in
@@ -977,5 +976,37 @@ page per object.
 - **Deep links** keep working: `/#approval-<id>` opens the item on `/` as
   before, and the items of a module link to `/bureau/<id>#approval-<id>`, which
   unfolds and rings the item on the page of the pile or the tray.
-- **Until the scene**: `/` stays the desk it was, with a discreet row of links
-  to the objects at the top, each with its count.
+- **The hub** (`src/ui/hub.tsx`, the mapping in `src/ui/hub-scene.ts`), at the
+  top of `/`: the scene composed in the browser from `public/iso/hub/` (format
+  in `scripts/iso/README.md`). Each object of the scene takes the state that
+  matches its desk object: the pile has one folder per pending item (14 at
+  most), each spine tinted with the room colour of its item, oldest at the
+  bottom (`spines`, a neutral grey for a room without a colour); the tray has
+  as many letters as its count (5 at most), the monitor as many post-its; the
+  newspaper is there when its count is not zero; the phone lights its lamp
+  when it has something unread, and the wall calendar marks today (the
+  browser's day). The tint masks are applied as the build does (colour times
+  the grey of the mask), cached per frame and colour. The scene is drawn at
+  1x on an offscreen canvas, then on the page at the largest integer scale in
+  device pixels that fits the width (and, on a wide screen, the window height
+  minus room for what follows), with nearest neighbour sampling, so nothing is
+  blurred whatever the pixel ratio. A small pixel badge (a 3 x 5 font) sits
+  over each object that holds something: its count, 99+ beyond, « ! » for a
+  command in error. A kind the home's desk does not configure is drawn empty
+  and does nothing.
+  Each configured object is a link to `/bureau/<id>` laid over its hit box,
+  in the order of the home's desk, named for a screen reader with its label
+  and count; keyboard focus draws its hover frame (lifted, two rings) and a
+  tooltip with its label. The pointer is resolved per pixel (the alpha of the
+  frames drawn), since some hit boxes overlap (the post-its, the pile, the
+  newspaper): the object under the pointer gets the hover frame and the
+  tooltip, and a click opens it. An object with nothing drawn (no post-it, no
+  newspaper) is listed under the scene (« Aussi sur le bureau »). The scene
+  follows `useDesk`, so it changes on each `desk` event without a reload; the
+  phone's lamp blinks while it has something unread, unless
+  `prefers-reduced-motion` asks otherwise. On a phone (under 40rem) the scene
+  fits the width and a list of the modules follows it (label, count, link);
+  should the assets fail to load, that list stands in for the scene.
+  Under the scene, the desk keeps its folded items (« À regarder », then « À
+  valider » and the history), so `/#approval-<id>` works as before; the meter
+  comes after them on a wide screen.
