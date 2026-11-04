@@ -1,0 +1,524 @@
+{
+  "scale": 1,
+  "voxel": {
+    "top": [
+      4,
+      2
+    ],
+    "edge": 2
+  },
+  "props": [
+    {
+      "name": "room",
+      "file": "room.png",
+      "w": 338,
+      "h": 319,
+      "anchor": {
+        "x": 169,
+        "y": 229
+      },
+      "origin": {
+        "x": 169,
+        "y": 153
+      },
+      "footprint": [
+        84,
+        84
+      ]
+    },
+    {
+      "name": "desk",
+      "file": "desk.png",
+      "w": 162,
+      "h": 129,
+      "anchor": {
+        "x": 81,
+        "y": 91
+      },
+      "origin": {
+        "x": 57,
+        "y": 51
+      },
+      "footprint": [
+        50,
+        26
+      ]
+    },
+    {
+      "name": "monitor",
+      "file": "monitor.png",
+      "w": 54,
+      "h": 61,
+      "anchor": {
+        "x": 31,
+        "y": 54
+      },
+      "origin": {
+        "x": 17,
+        "y": 39
+      },
+      "footprint": [
+        8,
+        6
+      ]
+    },
+    {
+      "name": "doc-pile-1",
+      "file": "doc-pile-1.png",
+      "w": 42,
+      "h": 24,
+      "anchor": {
+        "x": 22,
+        "y": 14
+      },
+      "origin": {
+        "x": 24,
+        "y": 3
+      },
+      "footprint": [
+        10,
+        12
+      ]
+    },
+    {
+      "name": "doc-pile-3",
+      "file": "doc-pile-3.png",
+      "w": 46,
+      "h": 26,
+      "anchor": {
+        "x": 23,
+        "y": 16
+      },
+      "origin": {
+        "x": 25,
+        "y": 5
+      },
+      "footprint": [
+        10,
+        12
+      ]
+    },
+    {
+      "name": "doc-pile-6",
+      "file": "doc-pile-6.png",
+      "w": 48,
+      "h": 33,
+      "anchor": {
+        "x": 25,
+        "y": 23
+      },
+      "origin": {
+        "x": 27,
+        "y": 12
+      },
+      "footprint": [
+        10,
+        12
+      ]
+    },
+    {
+      "name": "doc-pile-10",
+      "file": "doc-pile-10.png",
+      "w": 48,
+      "h": 41,
+      "anchor": {
+        "x": 25,
+        "y": 31
+      },
+      "origin": {
+        "x": 27,
+        "y": 20
+      },
+      "footprint": [
+        10,
+        12
+      ]
+    },
+    {
+      "name": "mail-tray",
+      "file": "mail-tray.png",
+      "w": 56,
+      "h": 35,
+      "anchor": {
+        "x": 29,
+        "y": 22
+      },
+      "origin": {
+        "x": 31,
+        "y": 9
+      },
+      "footprint": [
+        12,
+        14
+      ]
+    },
+    {
+      "name": "newspaper",
+      "file": "newspaper.png",
+      "w": 41,
+      "h": 25,
+      "anchor": {
+        "x": 21,
+        "y": 15
+      },
+      "origin": {
+        "x": 23,
+        "y": 5
+      },
+      "footprint": [
+        9,
+        11
+      ]
+    },
+    {
+      "name": "phone",
+      "file": "phone.png",
+      "w": 26,
+      "h": 16,
+      "anchor": {
+        "x": 13,
+        "y": 9.5
+      },
+      "origin": {
+        "x": 10,
+        "y": 3
+      },
+      "footprint": [
+        8,
+        5
+      ]
+    },
+    {
+      "name": "mug",
+      "file": "mug.png",
+      "w": 20,
+      "h": 21,
+      "anchor": {
+        "x": 9,
+        "y": 17
+      },
+      "origin": {
+        "x": 9,
+        "y": 11
+      },
+      "footprint": [
+        6,
+        6
+      ]
+    },
+    {
+      "name": "keyboard",
+      "file": "keyboard.png",
+      "w": 42,
+      "h": 24,
+      "anchor": {
+        "x": 21,
+        "y": 13.5
+      },
+      "origin": {
+        "x": 12,
+        "y": 3
+      },
+      "footprint": [
+        15,
+        6
+      ]
+    },
+    {
+      "name": "calendar",
+      "file": "calendar.png",
+      "w": 28,
+      "h": 44,
+      "anchor": {
+        "x": 14,
+        "y": 37.5
+      },
+      "origin": {
+        "x": 3,
+        "y": 31
+      },
+      "footprint": [
+        12,
+        1
+      ]
+    },
+    {
+      "name": "lamp",
+      "file": "lamp.png",
+      "w": 31,
+      "h": 38,
+      "anchor": {
+        "x": 8,
+        "y": 34
+      },
+      "origin": {
+        "x": 8,
+        "y": 28
+      },
+      "footprint": [
+        6,
+        6
+      ]
+    },
+    {
+      "name": "chair",
+      "file": "chair.png",
+      "w": 50,
+      "h": 73,
+      "anchor": {
+        "x": 27,
+        "y": 65
+      },
+      "origin": {
+        "x": 27,
+        "y": 49
+      },
+      "footprint": [
+        14,
+        14
+      ]
+    },
+    {
+      "name": "plant",
+      "file": "plant.png",
+      "w": 88,
+      "h": 92,
+      "anchor": {
+        "x": 41,
+        "y": 85
+      },
+      "origin": {
+        "x": 41,
+        "y": 69
+      },
+      "footprint": [
+        10,
+        10
+      ]
+    },
+    {
+      "name": "bookshelf",
+      "file": "bookshelf.png",
+      "w": 72,
+      "h": 96,
+      "anchor": {
+        "x": 36,
+        "y": 78.5
+      },
+      "origin": {
+        "x": 49,
+        "y": 61
+      },
+      "footprint": [
+        11,
+        24
+      ]
+    },
+    {
+      "name": "rug",
+      "file": "rug.png",
+      "w": 140,
+      "h": 73,
+      "anchor": {
+        "x": 70,
+        "y": 38
+      },
+      "origin": {
+        "x": 60,
+        "y": 3
+      },
+      "footprint": [
+        40,
+        30
+      ]
+    },
+    {
+      "name": "floor-lamp",
+      "file": "floor-lamp.png",
+      "w": 34,
+      "h": 134,
+      "anchor": {
+        "x": 17,
+        "y": 129
+      },
+      "origin": {
+        "x": 17,
+        "y": 117
+      },
+      "footprint": [
+        6,
+        6
+      ]
+    },
+    {
+      "name": "poster",
+      "file": "poster.png",
+      "w": 32,
+      "h": 52,
+      "anchor": {
+        "x": 16,
+        "y": 44.5
+      },
+      "origin": {
+        "x": 29,
+        "y": 37
+      },
+      "footprint": [
+        1,
+        14
+      ]
+    },
+    {
+      "name": "clock",
+      "file": "clock.png",
+      "w": 20,
+      "h": 22,
+      "anchor": {
+        "x": 10,
+        "y": 19.5
+      },
+      "origin": {
+        "x": 3,
+        "y": 15
+      },
+      "footprint": [
+        4,
+        1
+      ]
+    }
+  ],
+  "scene": {
+    "file": "scene-desk.png",
+    "w": 340,
+    "h": 322,
+    "pile": 6,
+    "objects": [
+      {
+        "name": "room",
+        "x": 2,
+        "y": 2,
+        "w": 336,
+        "h": 318
+      },
+      {
+        "name": "floor-lamp",
+        "x": 154,
+        "y": 42,
+        "w": 32,
+        "h": 101
+      },
+      {
+        "name": "clock",
+        "x": 220,
+        "y": 58,
+        "w": 18,
+        "h": 21
+      },
+      {
+        "name": "calendar",
+        "x": 288,
+        "y": 96,
+        "w": 26,
+        "h": 43
+      },
+      {
+        "name": "poster",
+        "x": 24,
+        "y": 97,
+        "w": 30,
+        "h": 51
+      },
+      {
+        "name": "lamp",
+        "x": 202,
+        "y": 99,
+        "w": 27,
+        "h": 37
+      },
+      {
+        "name": "monitor",
+        "x": 224,
+        "y": 103,
+        "w": 52,
+        "h": 60
+      },
+      {
+        "name": "plant",
+        "x": 82,
+        "y": 116,
+        "w": 86,
+        "h": 91
+      },
+      {
+        "name": "desk",
+        "x": 154,
+        "y": 125,
+        "w": 160,
+        "h": 127
+      },
+      {
+        "name": "mail-tray",
+        "x": 156,
+        "y": 132,
+        "w": 54,
+        "h": 34
+      },
+      {
+        "name": "bookshelf",
+        "x": 14,
+        "y": 148,
+        "w": 70,
+        "h": 95
+      },
+      {
+        "name": "keyboard",
+        "x": 210,
+        "y": 154,
+        "w": 42,
+        "h": 22
+      },
+      {
+        "name": "doc-pile",
+        "x": 258,
+        "y": 156,
+        "w": 46,
+        "h": 32
+      },
+      {
+        "name": "phone",
+        "x": 198,
+        "y": 163,
+        "w": 26,
+        "h": 15
+      },
+      {
+        "name": "newspaper",
+        "x": 224,
+        "y": 172,
+        "w": 31,
+        "h": 24
+      },
+      {
+        "name": "chair",
+        "x": 124,
+        "y": 174,
+        "w": 48,
+        "h": 72
+      },
+      {
+        "name": "mug",
+        "x": 252,
+        "y": 177,
+        "w": 18,
+        "h": 20
+      },
+      {
+        "name": "rug",
+        "x": 78,
+        "y": 206,
+        "w": 140,
+        "h": 66
+      }
+    ]
+  }
+}
