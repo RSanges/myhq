@@ -82,3 +82,40 @@ export function formatAge(iso: string, at: number = Date.now()): string {
   const days = Math.floor(hours / 24);
   return days < 14 ? t.days(days) : shortDay.format(date);
 }
+
+const longDay = new Intl.DateTimeFormat(strings.locale, { weekday: "long", day: "numeric", month: "long" });
+const fullDay = new Intl.DateTimeFormat(strings.locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+/** The local calendar day of an instant or a date, as `2026-11-04` (a plain date is kept as is). */
+export function localDayKey(value: string | Date): string | null {
+  const date = typeof value === "string" ? calendarDate(value) : value;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** The day `days` after a day key. */
+export function addDayKey(key: string, days: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return localDayKey(new Date(y ?? 0, (m ?? 1) - 1, (d ?? 1) + days)) ?? key;
+}
+
+/** « mercredi 4 novembre », for a day key or an instant. */
+export function formatLongDay(value: string): string {
+  const date = calendarDate(value);
+  return date ? longDay.format(date) : value;
+}
+
+/** « mercredi 4 novembre 2026 ». */
+export function formatFullDay(value: string | Date): string {
+  const date = typeof value === "string" ? calendarDate(value) : value;
+  return date ? fullDay.format(date) : String(value);
+}
+
+/** The time of an instant the French way: « 9 h », « 14 h 30 ». */
+export function formatHour(iso: string): string {
+  const date = toDate(iso);
+  if (!date) return iso;
+  const minutes = date.getMinutes();
+  return minutes === 0 ? `${date.getHours()} h` : `${date.getHours()} h ${String(minutes).padStart(2, "0")}`;
+}

@@ -200,6 +200,7 @@ export function ChatPanel({
   subscribe,
   agents,
   narrow,
+  page = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -207,6 +208,8 @@ export function ChatPanel({
   agents: TeamAgent[];
   /** The panel covers the whole screen (a phone). */
   narrow: boolean;
+  /** The panel is the page itself (the phone of the desk, /bureau/<id>): no overlay, and its button goes back to the desk. */
+  page?: boolean;
 }) {
   const chat = useChat(subscribe);
   const [target, setTarget] = useState(CHAT_TARGET);
@@ -253,13 +256,13 @@ export function ChatPanel({
   return (
     <aside
       id={PANEL_ID}
-      className="chat-panel"
+      className={page ? "chat-panel chat-panel-page" : "chat-panel"}
       hidden={!open}
-      role={narrow ? "dialog" : "complementary"}
-      aria-modal={narrow ? true : undefined}
+      role={page ? "region" : narrow ? "dialog" : "complementary"}
+      aria-modal={narrow && !page ? true : undefined}
       aria-label={name}
       onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
+        if (event.key === "Escape" && !page) onClose();
       }}
     >
       <header className="chat-head">
@@ -267,8 +270,8 @@ export function ChatPanel({
         <button type="button" className="chat-link" title={t.newTitle} onClick={() => void chat.clear()}>
           {t.newLink}
         </button>
-        <button type="button" className="chat-btn" onClick={onClose}>
-          {t.close}
+        <button type="button" className="chat-btn" onClick={onClose} aria-label={page ? strings.deskModules.backLabel : undefined}>
+          {page ? strings.deskModules.back : t.close}
         </button>
       </header>
 

@@ -199,6 +199,52 @@ export const clearedSchema = z.object({ cleared: z.boolean() });
 
 export const readySchema = z.object({ cursor: z.number().int() });
 
+/** An object of the desk (GET /api/desk). */
+export const deskObjectKindSchema = z.enum(["pile", "tray", "newspaper", "postits", "calendar", "phone"]);
+const deskRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("approval"), id: z.number().int(), room: z.string(), agentId: z.string(), type: z.string(), status: z.string() }),
+  z.object({ kind: z.literal("run"), id: z.number().int(), room: z.string(), agentId: z.string() }),
+  z.object({ kind: z.literal("chat"), id: z.number().int(), role: z.string() }),
+]);
+export const deskItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  body: z.string().nullable(),
+  at: z.string().nullable(),
+  end: z.string().nullable(),
+  allDay: z.boolean(),
+  href: z.string().nullable(),
+  tone: z.enum(["neutral", "info", "warn", "alert", "muted"]).nullable(),
+  color: z.string().nullable(),
+  ref: deskRefSchema.nullable(),
+});
+export const deskObjectSchema = z.object({
+  id: z.string(),
+  object: deskObjectKindSchema,
+  label: z.string(),
+  source: z.string(),
+  status: z.enum(["ok", "error"]),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+  count: z.number().int(),
+  items: z.array(deskItemSchema),
+  slots: z.array(z.object({ start: z.string(), end: z.string(), label: z.string().nullable() })).nullable(),
+  note: z.string().nullable(),
+  spines: z.array(z.object({ approvalId: z.number().int(), room: z.string(), color: z.string().nullable() })).nullable(),
+  updatedAt: z.string(),
+});
+export const deskSchema = z.object({ objects: z.array(deskObjectSchema), configError: z.string().nullable() });
+
+/** The `desk` message of the stream: a count changed. */
+export const deskEventSchema = z.object({
+  objects: z.array(z.object({ id: z.string(), count: z.number().int(), status: z.enum(["ok", "error"]) })),
+  at: z.string(),
+});
+
+export type DeskObject = z.infer<typeof deskObjectSchema>;
+export type DeskItem = z.infer<typeof deskItemSchema>;
+export type Desk = z.infer<typeof deskSchema>;
+export type DeskSignal = { type: "counts"; counts: z.infer<typeof deskEventSchema> } | { type: "ready" };
+
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type ChatTurn = z.infer<typeof chatTurnSchema>;
 export type ChatReply = z.infer<typeof chatReplySchema>;

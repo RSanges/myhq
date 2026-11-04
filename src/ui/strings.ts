@@ -507,6 +507,81 @@ export const strings = {
     /** Last line of a brief or a summary, when HQ_PUBLIC_URL is set. */
     desk: (url: string) => `Bureau : ${url}`,
   },
+  /** The objects of the desk (myhq.json `desk`) and their pages, /bureau/<id>. */
+  deskModules: {
+    /** Labels of the default desk, when myhq.json has no `desk` block. */
+    defaults: {
+      pile: "À signer",
+      tray: "Courrier",
+      newspaper: "Journal",
+      phone: "Téléphone",
+    },
+    /** Who wrote a message of the conversation, as an item of the phone. */
+    chatWho: {
+      user: "Toi",
+      assistant: (name: string) => name,
+      bot: "Message automatique",
+    },
+    pageTitle: (label: string, count: number) => (count > 0 ? `(${count}) ${label} · MyHQ` : `${label} · MyHQ`),
+    navLabel: "Les objets du bureau",
+    navCount: (label: string, count: number) => `${label}, ${count}`,
+    back: "Bureau",
+    backLabel: "Retour au bureau",
+    loading: "Chargement du module...",
+    loadFailed: "Impossible de charger le bureau.",
+    unknown: "Ce module n'existe pas sur ce bureau.",
+    configError: "Le bloc desk de myhq.json est invalide : le bureau par défaut est affiché.",
+    empty: "Rien pour l'instant.",
+    updatedAt: (time: string) => `Mis à jour à ${time}`,
+    refresh: "Actualiser",
+    commandError: {
+      COMMAND_TIMEOUT: "La commande du home n'a pas répondu à temps.",
+      COMMAND_FAILED: "La commande du home a échoué.",
+      COMMAND_INVALID_OUTPUT: "La commande du home a renvoyé une réponse illisible.",
+    } as Record<string, string>,
+    commandErrorHint: "Le détail est dans le journal du serveur.",
+    openLink: "Ouvrir",
+    signer: {
+      /** The section of the cards, under the title of the page. */
+      section: "Ce qui attend ta décision",
+    },
+    courrier: {
+      hint: "Rien à décider : lis, puis marque comme vu, ou demande une réponse.",
+      sortLabel: "Ordre",
+      oldestFirst: "Plus anciens d'abord",
+      newestFirst: "Plus récents d'abord",
+      unseenTitle: (count: number) => `À regarder (${count})`,
+      seenTitle: (count: number) => `Déjà vus (${count})`,
+      emptyUnseen: "Aucun courrier à regarder.",
+    },
+    journal: {
+      masthead: "Le Journal",
+      edition: (date: string) => `Édition du ${date}`,
+      lead: "À la une",
+      unread: "Non lu",
+      markRead: "Marquer comme lu",
+      empty: "Aucun brief ni récap pour l'instant.",
+      byline: (who: string, when: string) => `${who}, ${when}`,
+    },
+    agenda: {
+      today: "Aujourd'hui",
+      tomorrow: "Demain",
+      dayTitle: (prefix: string | null, day: string) => (prefix ? `${prefix}, ${day}` : day),
+      allDay: "Toute la journée",
+      span: (start: string, end: string) => `${start} à ${end}`,
+      free: "Créneaux libres",
+      freeSlot: (start: string, end: string) => `${start} à ${end}`,
+      noEvent: "Aucun rendez-vous.",
+      readOnly: "Lecture seule : pour changer un rendez-vous, demande-le à l'assistant.",
+    },
+    postits: {
+      hint: "Ta liste À faire, lue telle quelle.",
+      due: (day: string) => `Pour le ${day}`,
+      overdue: (day: string) => `En retard (${day})`,
+      today: "Pour aujourd'hui",
+      empty: "Rien à faire pour l'instant.",
+    },
+  },
   /** The conversation panel of the desk and of the floor (the same conversation as Telegram's). */
   chat: {
     assistantName: "Rom2",

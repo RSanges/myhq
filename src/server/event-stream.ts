@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { app } from "./app";
 import { subscribeChat } from "./chat-hub";
+import { deskCommands, subscribeDesk } from "./desk";
 import { errorResponse, HqError } from "./errors";
 import { changesSince, currentCursor } from "./feed";
 import { subscribeRoadmap } from "./roadmap";
@@ -12,7 +13,7 @@ const cursorSchema = z.coerce.number().int().min(0);
 /**
  * Server-Sent Events: new runs and run updates, events, messages and
  * approvals, read from the `changes` table, then the messages that are not
- * stored changes (roadmap, chat). See docs/api.md. Called by GET /api/events,
+ * stored changes (roadmap, chat, desk). See docs/api.md. Called by GET /api/events,
  * apart from the route so that tests can read the stream.
  */
 export function eventStreamResponse(request: Request): Response {
@@ -33,11 +34,13 @@ export function eventStreamResponse(request: Request): Response {
     let keepalive: ReturnType<typeof setInterval> | undefined;
     let unsubscribeRoadmap: (() => void) | undefined;
     let unsubscribeChat: (() => void) | undefined;
+    let unsubscribeDesk: (() => void) | undefined;
     const stop = () => {
       clearInterval(poll);
       clearInterval(keepalive);
       unsubscribeRoadmap?.();
       unsubscribeChat?.();
+      unsubscribeDesk?.();
     };
 
     const stream = new ReadableStream<Uint8Array>({
@@ -65,6 +68,9 @@ export function eventStreamResponse(request: Request): Response {
         });
         unsubscribeChat = subscribeChat((event) => {
           send(`event: chat\ndata: ${JSON.stringify(event)}\n\n`);
+        });
+        unsubscribeDesk = subscribeDesk({ config, db, commands: deskCommands(config.home) }, (counts) => {
+          send(`event: desk\ndata: ${JSON.stringify({ ...counts, at: new Date().toISOString() })}\n\n`);
         });
         request.signal.addEventListener("abort", () => {
           stop();

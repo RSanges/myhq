@@ -930,3 +930,52 @@ the room (README, "Trying the room without a real run").
   import. The renderer is behind an interface, so a canvas 2D one can replace it
   without touching the model.
 - The tray counts the items of the shown room.
+
+## 8. The desk objects
+
+The desk (`/`) is becoming a scene: the user's office in isometric pixel art,
+where each object on the desk is a module (a pile of items to sign, a mail
+tray, a newspaper, post-its, a wall calendar, a phone). The scene is drawn
+later; what it stands on is in place: the model, the data, the API and one
+page per object.
+
+- **The model** (`src/server/desk.ts`): `desk.objects` of `myhq.json` lists the
+  objects, each `{ id, object, label, source }` (schema and defaults in
+  `home-layout.md`). It is read apart from the rest of the file, so an invalid
+  block falls back to the default desk without touching `notifyTypes` or the
+  export. A source of the core is read from the database at each request
+  (`approvals`, `watch:<type>`, `summaries`, `chat`); a command of the home
+  goes through `DeskCommands` (`src/server/desk-command.ts`): the system shell
+  in the home, the environment of the home's other commands, a timeout (the
+  desk does not wait for a program that keeps the output open after the shell
+  is killed), its stdout validated by zod, the result cached a short while,
+  one run shared by concurrent requests, a failure kept as a value (an error
+  state with its code), stderr in the log only.
+- **The API**: `GET /api/desk` gives every object with its count and items
+  (and the room colour of each pending item for a pile, so the scene can paint
+  the spines); `GET /api/events` sends a `desk` message when a count or the
+  state of an object changes. The counts are read every three seconds while a
+  stream is open (one watcher per home, shared by every stream, started with
+  the first and stopped with the last); a command is run again only when its
+  cache is stale. The first reading is the baseline and is not announced.
+- **The pages**, `/bureau/<id>` (`src/ui/desk-module.tsx`,
+  `desk-module-views.tsx`): a back link to the desk, the label and the count,
+  the connection state, and the interface of the object, chosen by its kind
+  and its source. A pile of `approvals` is the desk's own approval cards
+  (`Desk`: folded lines, annotations, the Approuver guard, every action, the
+  history tab). A tray of `watch:` sources lists its unseen items with « Vu »
+  and « Demander à » the assistant, oldest or newest first, then the ones
+  already seen (`WatchDesk`). The newspaper is a reading view: a masthead with
+  the day, the latest brief or recap as the lead story, the others in columns
+  on a wide screen; an unseen brief can be marked read there. The calendar
+  shows today in large and the next seven days beside it (under it on a phone),
+  each with its events and its free slots, read-only. The post-its are notes,
+  numbered as the list numbers them, the late ones marked. The phone is the
+  conversation panel as the page itself. Any other pairing gets a plain list.
+  Each page follows the live stream like the desk does (`useHq`), and reads
+  `GET /api/desk` again on each `desk` message (`useDesk`).
+- **Deep links** keep working: `/#approval-<id>` opens the item on `/` as
+  before, and the items of a module link to `/bureau/<id>#approval-<id>`, which
+  unfolds and rings the item on the page of the pile or the tray.
+- **Until the scene**: `/` stays the desk it was, with a discreet row of links
+  to the objects at the top, each with its count.

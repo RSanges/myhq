@@ -354,6 +354,7 @@ data: {Run}
 | `approval` | Approval | an agent submits an item, and when the item is decided |
 | `chat` | `{ "type": "message", "message": ChatMessage }`, `{ "type": "cleared" }` or `{ "type": "turn", "turn": TurnState }` | a message is added to the conversation (from any channel: Telegram, the desk's panel, an alert of the bot), the conversation is emptied (`/new`), or a turn starts, queues or ends (see `GET /api/chat/history`) |
 | `roadmap` | `{ "at": string }` | `docs/roadmap.json` of the home was created, edited, replaced or removed (see `GET /api/roadmap`) |
+| `desk` | `{ "objects": [{ "id", "count", "status" }], "at": string }` | the count or the state (`ok`, `error`) of an object of the desk changed (see `GET /api/desk`) |
 
 `data` is the entity as it is when the message is sent, so an older change may
 already carry a later state (for example an approval created then approved
@@ -379,6 +380,83 @@ Browser usage:
 const source = new EventSource(`/api/events?since=${state.cursor}`);
 source.addEventListener("approval", (e) => upsertApproval(JSON.parse(e.data)));
 ```
+
+The `desk` message is not a stored change either (no `id`, never replayed).
+The counts are read every three seconds while a stream is open, and only a
+change is sent (the first reading is not). Consumers fetch `GET /api/desk`
+again, and do so as well when the stream opens.
+
+### `GET /api/desk`
+
+The objects of the desk (`desk` of `myhq.json`, or the default desk, see
+`home-layout.md`), each with its count and items. The core's sources are read
+at each request; a command of the home is served from its cache while fresh.
+A failing command never fails the route: its object has `status: "error"`.
+
+```json
+{
+  "objects": [
+    {
+      "id": "signer",
+      "object": "pile",
+      "label": "À signer",
+      "source": "approvals",
+      "status": "ok",
+      "error": null,
+      "count": 1,
+      "items": [
+        {
+          "id": "approval-12",
+          "title": "Reply to a thread about group trips",
+          "body": "Markdown text to approve.",
+          "at": "2026-11-04T08:00:00.000Z",
+          "end": null,
+          "allDay": false,
+          "href": "/bureau/signer#approval-12",
+          "tone": null,
+          "color": "#ff3d7f",
+          "ref": { "kind": "approval", "id": 12, "room": "demo", "agentId": "scout", "type": "community_reply", "status": "pending" }
+        }
+      ],
+      "slots": null,
+      "note": null,
+      "spines": [{ "approvalId": 12, "room": "demo", "color": "#ff3d7f" }],
+      "updatedAt": "2026-11-04T09:00:00.000Z"
+    },
+    {
+      "id": "agenda",
+      "object": "calendar",
+      "label": "Agenda",
+      "source": "command",
+      "status": "error",
+      "error": { "code": "COMMAND_TIMEOUT", "message": "timed out after 10000 ms" },
+      "count": 0,
+      "items": [],
+      "slots": null,
+      "note": null,
+      "spines": null,
+      "updatedAt": "2026-11-04T09:00:00.000Z"
+    }
+  ],
+  "configError": null
+}
+```
+
+- `source`: the core's source (`approvals`, `watch:mail_alert`, `summaries`,
+  `chat`), several joined by `+` (`watch:brief+summaries`), or `command`.
+- `items[].ref`: what an item of the core is (`approval`, `run` for a run
+  summary, `chat` for a message), `null` for an item of a command. `color` is
+  the colour of its room, `null` for a neutral room or a command. `href` opens
+  it on the page of the object, `/bureau/<id>`.
+- `slots` and `note`: from a command (a calendar's free stretches, a line about
+  its data), `null` otherwise.
+- `spines`: for a source with `approvals`, the room colour of each pending item,
+  oldest first (the pile of the scene); `null` otherwise.
+- `error.code`: `COMMAND_TIMEOUT`, `COMMAND_FAILED` (exit code, or a `cwd`
+  outside the home) or `COMMAND_INVALID_OUTPUT` (not JSON, or not the
+  contract). The command's stderr is in the server's log, never here.
+- `configError`: why the `desk` block was not used (the default desk is then
+  returned), `null` otherwise.
 
 ### `GET /api/sprites/[room]/[agent]`
 

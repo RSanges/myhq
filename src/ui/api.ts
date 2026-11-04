@@ -8,6 +8,7 @@ import {
   chatHistorySchema,
   chatReplySchema,
   clearedSchema,
+  deskSchema,
   errorBodySchema,
   itemAskResponseSchema,
   routinesResponseSchema,
@@ -16,6 +17,7 @@ import {
   usageSchema,
   type Approval,
   type ChatReply,
+  type Desk,
   type Run,
   type State,
   type Usage,
@@ -77,6 +79,8 @@ export const fetchState = (): Promise<State> => request("/api/state", stateSchem
 export const fetchRoadmap = (): Promise<Roadmap> => request("/api/roadmap", roadmapSchema);
 
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
+
+export const fetchDesk = (): Promise<Desk> => request("/api/desk", deskSchema);
 
 export const fetchRoutines = () => request("/api/routines", routinesResponseSchema);
 

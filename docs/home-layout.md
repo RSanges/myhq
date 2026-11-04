@@ -561,7 +561,13 @@ without a section, the feature is off. Other keys are ignored.
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
   "reception": { "room": "assistant" },
   "onboarding": { "sprite": "sprites/reception.png" },
-  "notifyTypes": ["brief", "mail_alert"]
+  "notifyTypes": ["brief", "mail_alert"],
+  "desk": {
+    "objects": [
+      { "id": "signer", "object": "pile", "label": "À signer", "source": "approvals" },
+      { "id": "agenda", "object": "calendar", "label": "Agenda", "source": { "command": "node tools/agenda.mjs", "cacheSeconds": 300 } }
+    ]
+  }
 }
 ```
 
@@ -574,7 +580,72 @@ without a section, the feature is off. Other keys are ignored.
 | `onboarding.sprite` | no | Character sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`: a 4 by 4 PNG or WebP grid, inside the home). Default: the sheet shipped with MyHQ, `public/sprites/receptionist.png` (violet outfit, headset and lanyard). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 
+| `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone. |
+
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
 log (and every item keeps the pending flow).
+
+### The desk objects (`desk`)
+
+The desk is drawn as an office, and each object on it is a module with a count,
+items and a page of its own, `/bureau/<id>` (see `architecture.md`, section 8).
+`desk.objects` lists them, at most one of each kind:
+
+| Field | Meaning |
+|---|---|
+| `id` | The address of its page, `/bureau/<id>`: lowercase letters, digits and hyphens, starting with a letter, unique. |
+| `object` | What the scene draws: `pile`, `tray`, `newspaper`, `postits`, `calendar` or `phone`. |
+| `label` | Its name in the interface (1 to 40 characters). |
+| `source` | Where its count and items come from: a source of the core, a list of them, or a command of the home. |
+
+Sources of the core:
+
+| Source | Count | Items |
+|---|---|---|
+| `approvals` | Pending items. | Every pending item, oldest first (the object also gets the room colour of each one, the spines of the pile). |
+| `watch:<type>`, `watch:*` | Unseen informational items of that type (of any type for `*`). | The unseen ones, oldest first, then the 20 last seen ones (`tone: "muted"`). |
+| `summaries` | Summaries of the day. | The 20 last run summaries (runs ended `done`) of the agents with `notifyRuns: "summary"`, the briefs and recaps they send, newest first. |
+| `chat` | Replies and messages of the bot since the user last wrote. | The 10 last messages of the conversation. |
+
+A list (`["watch:brief", "summaries"]`) adds up the counts and merges the
+items, newest first. Without a `desk` block the desk is: `signer` (pile,
+`approvals`), `courrier` (tray, `watch:mail_alert`), `journal` (newspaper,
+`["watch:brief", "summaries"]`) and `telephone` (phone, `chat`); post-its and a
+calendar exist only when configured, since only a home knows where they live.
+An invalid block is reported (`configError` of `GET /api/desk`, and a line on
+the pages) and the default desk is shown; the rest of `myhq.json` is not affected.
+
+A command of the home: `{ "command", "cwd"?, "timeoutSeconds"?, "cacheSeconds"? }`.
+It runs through the system shell, in `cwd` (relative to the home, the home by
+default, never outside it), with the same environment as the other commands of
+the home (the app's, without `HQ_TELEGRAM_*` nor `HQ_CLAUDE_OAUTH_TOKEN`). It is
+killed after `timeoutSeconds` (1 to 60, default 10) and its result is kept
+`cacheSeconds` (0 to 3600, default 60), a failure too; two requests at once share
+one run. It prints one JSON document on stdout (unknown fields are dropped):
+
+```json
+{
+  "count": 2,
+  "items": [
+    { "id": "a1", "title": "Dentiste", "body": "Paris 11e", "at": "2026-11-05T13:30:00.000Z", "end": "2026-11-05T14:15:00.000Z", "href": "https://example.com/event", "tone": "warn" },
+    { "title": "Anniversaire", "at": "2026-11-07", "end": "2026-11-07", "allDay": true }
+  ],
+  "slots": [{ "start": "2026-11-05T08:00:00.000Z", "end": "2026-11-05T13:30:00.000Z" }],
+  "note": "Lu du cache."
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `count` | The number the scene shows on the object (an integer, 0 or more). |
+| `items[]` | At most 200. `title` (required, 1 to 300 characters), `id` (else `item-<n>`), `body` (Markdown), `at` and `end` (an instant with its offset, or a date `YYYY-MM-DD`), `allDay`, `href` (an http(s) URL or a path of the app starting with `/`; anything else makes the output invalid), `tone` (`neutral`, `info`, `warn`, `alert`, `muted`). |
+| `slots` | Free stretches of a calendar, `{ start, end, label? }` (instants). Optional. |
+| `note` | A short line about the data, shown on the page. Optional. |
+
+A command that runs past its timeout, exits with another code than 0 or prints
+something else than this contract puts its object in an error state
+(`COMMAND_TIMEOUT`, `COMMAND_FAILED`, `COMMAND_INVALID_OUTPUT`): the page says it
+and offers to try again, the desk goes on, and stderr goes to the server's log
+only. A command meant for the desk must be read-only and print no secret.
 

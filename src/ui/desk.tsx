@@ -603,28 +603,20 @@ const FLASH_MS = 2_400;
 
 const NO_ANNOTATIONS: Annotation[] = [];
 
-export function Desk({
-  pending,
-  unseen,
-  history,
-  agents,
-  dispatch,
-  target,
-}: {
-  pending: Approval[];
-  /** The informational items waiting for a look: their own section, above the tabs. */
-  unseen: Approval[];
-  history: Approval[];
-  /** To give each folded line the name of its agent and the colour of its room. */
-  agents: readonly TeamAgent[];
-  dispatch: Dispatch;
-  /** The deep link of the address bar, if any (#approval-<id>). */
-  target: DeepLinkTarget | null;
-}) {
-  const [tab, setTab] = useState<Tab>("pending");
+/**
+ * The fold state of a list of desk items, kept by id so that a refresh of the
+ * data, a switch of tab or a decision elsewhere never folds an item the user
+ * opened; and the deep link (#approval-<id>) followed once, as soon as the
+ * items hold it: unfolded, scrolled to and ringed. `onHit` lets the caller
+ * show the right tab first.
+ */
+function useFolds(
+  items: readonly Approval[],
+  agents: readonly TeamAgent[],
+  target: DeepLinkTarget | null,
+  onHit?: (hit: { id: number; tab: DeskTab | null }) => void,
+) {
   const [flash, setFlash] = useState<{ id: number; nonce: number } | null>(null);
-  // Every item is folded until the user (or a deep link) opens it. Kept here, by id, so that a refresh of the data,
-  // a switch of tab or a decision elsewhere never folds an item the user opened.
   const [openIds, setOpenIds] = useState<ReadonlySet<number>>(new Set());
   const [handled, setHandled] = useState<number | null>(null);
   const now = useNow();
@@ -643,13 +635,12 @@ export function Desk({
       else next.delete(id);
       return next;
     });
-  // A deep link is followed once, as soon as the desk holds the data: the right tab, the item unfolded and ringed.
-  // An id the desk does not know is ignored. The hash stays in the address, so later refreshes of the data change nothing.
+  // An id the items do not hold is ignored. The hash stays in the address, so later refreshes of the data change nothing.
   if (target && handled !== target.nonce) {
     setHandled(target.nonce);
-    const hit = resolveApprovalLink(target.link, [...pending, ...unseen, ...history]);
+    const hit = resolveApprovalLink(target.link, items);
     if (hit) {
-      if (hit.tab) setTab(hit.tab);
+      onHit?.(hit);
       setFlash({ id: hit.id, nonce: target.nonce });
       setOpen(hit.id, true);
     }
@@ -663,6 +654,58 @@ export function Desk({
     const timer = window.setTimeout(() => setFlash(null), FLASH_MS);
     return () => window.clearTimeout(timer);
   }, [flash]);
+
+  const itemProps = (approval: Approval): ItemProps => ({
+    open: openIds.has(approval.id),
+    onToggle: () => setOpen(approval.id, !openIds.has(approval.id)),
+    fold: () => setOpen(approval.id, false),
+    flash: flash?.id === approval.id,
+    who: whoById(approval),
+    now,
+  });
+
+  /** « Tout déplier / Tout replier » acts on what is on screen. */
+  const allOpen = (shown: readonly Approval[]) => shown.length > 0 && shown.every((approval) => openIds.has(approval.id));
+  const toggleAll = (shown: readonly Approval[]) => {
+    const open = allOpen(shown);
+    setOpenIds((current) => {
+      const next = new Set(current);
+      for (const approval of shown) {
+        if (open) next.delete(approval.id);
+        else next.add(approval.id);
+      }
+      return next;
+    });
+  };
+
+  return { itemProps, allOpen, toggleAll };
+}
+
+export function Desk({
+  pending,
+  unseen,
+  history,
+  agents,
+  dispatch,
+  target,
+  title = strings.desk.title,
+}: {
+  pending: Approval[];
+  /** The informational items waiting for a look: their own section, above the tabs. */
+  unseen: Approval[];
+  history: Approval[];
+  /** To give each folded line the name of its agent and the colour of its room. */
+  agents: readonly TeamAgent[];
+  dispatch: Dispatch;
+  /** The deep link of the address bar, if any (#approval-<id>). */
+  target: DeepLinkTarget | null;
+  /** The title of the section (the page of the pile has its own). */
+  title?: string;
+}) {
+  const [tab, setTab] = useState<Tab>("pending");
+  const folds = useFolds([...pending, ...unseen, ...history], agents, target, (hit) => {
+    if (hit.tab) setTab(hit.tab);
+  });
   // Remarks made on pending items, kept here (not in the cards) until the decision is sent: a tab switch or a refresh keeps them.
   const [drafts, setDrafts] = useState<Record<number, Annotation[]>>({});
   // An approved item that points to a thread, a branch to push or a CLAUDE.md block is now the user's: show it in the history.
@@ -674,31 +717,15 @@ export function Desk({
       active ? "bg-soft" : "text-muted hover:bg-soft"
     }`;
 
-  const itemProps = (approval: Approval): ItemProps => ({
-    open: openIds.has(approval.id),
-    onToggle: () => setOpen(approval.id, !openIds.has(approval.id)),
-    fold: () => setOpen(approval.id, false),
-    flash: flash?.id === approval.id,
-    who: whoById(approval),
-    now,
-  });
-
+  const itemProps = folds.itemProps;
   // « Tout déplier / Tout replier » acts on what is on screen: the watch section and the tab shown.
   const shown = tab === "pending" ? [...unseen, ...pending] : [...unseen, ...history];
-  const allOpen = shown.length > 0 && shown.every((approval) => openIds.has(approval.id));
-  const toggleAll = () =>
-    setOpenIds((current) => {
-      const next = new Set(current);
-      for (const approval of shown) {
-        if (allOpen) next.delete(approval.id);
-        else next.add(approval.id);
-      }
-      return next;
-    });
+  const allOpen = folds.allOpen(shown);
+  const toggleAll = () => folds.toggleAll(shown);
 
   return (
     <Section
-      title={strings.desk.title}
+      title={title}
       aside={
         shown.length > 0 ? (
           <button type="button" className={buttonClass()} aria-pressed={allOpen} onClick={toggleAll}>
@@ -781,5 +808,93 @@ export function Desk({
         )}
       </div>
     </Section>
+  );
+}
+
+/**
+ * The page of the tray: the informational items of its types, the unseen
+ * ones first (Vu, Demander à l'assistant), sorted by age either way, then
+ * the ones already seen, folded like on the desk.
+ */
+export function WatchDesk({
+  unseen,
+  seen,
+  agents,
+  dispatch,
+  target,
+}: {
+  unseen: Approval[];
+  seen: Approval[];
+  agents: readonly TeamAgent[];
+  dispatch: Dispatch;
+  target: DeepLinkTarget | null;
+}) {
+  const t = strings.deskModules.courrier;
+  const [newestFirst, setNewestFirst] = useState(false);
+  const folds = useFolds([...unseen, ...seen], agents, target);
+  const sorted = useMemo(() => {
+    const list = [...unseen].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+    return newestFirst ? list.reverse() : list;
+  }, [unseen, newestFirst]);
+  const shown = [...unseen, ...seen];
+  const allOpen = folds.allOpen(shown);
+  const sortClass = (active: boolean) =>
+    `min-h-10 pointer-coarse:min-h-12 rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+      active ? "bg-soft" : "text-muted hover:bg-soft"
+    }`;
+  return (
+    <div className="space-y-6">
+      <section aria-labelledby="watch-unseen" className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id="watch-unseen" className="text-base font-semibold">
+            {t.unseenTitle(unseen.length)}
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <div role="group" aria-label={t.sortLabel} className="flex gap-1">
+              <button type="button" aria-pressed={!newestFirst} className={sortClass(!newestFirst)} onClick={() => setNewestFirst(false)}>
+                {t.oldestFirst}
+              </button>
+              <button type="button" aria-pressed={newestFirst} className={sortClass(newestFirst)} onClick={() => setNewestFirst(true)}>
+                {t.newestFirst}
+              </button>
+            </div>
+            {shown.length > 0 && (
+              <button type="button" className={buttonClass()} aria-pressed={allOpen} onClick={() => folds.toggleAll(shown)}>
+                {allOpen ? strings.desk.collapseAll : strings.desk.expandAll}
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="text-xs text-muted">{t.hint}</p>
+        {sorted.length === 0 ? (
+          <p className="text-sm text-muted">{t.emptyUnseen}</p>
+        ) : (
+          <ul className="space-y-2">
+            {sorted.map((approval) => (
+              <WatchCard key={approval.id} approval={approval} dispatch={dispatch} item={folds.itemProps(approval)} />
+            ))}
+          </ul>
+        )}
+      </section>
+      {seen.length > 0 && (
+        <section aria-labelledby="watch-seen" className="space-y-3">
+          <h2 id="watch-seen" className="text-base font-semibold text-muted">
+            {t.seenTitle(seen.length)}
+          </h2>
+          <ul className="space-y-2">
+            {seen.map((approval) => (
+              <HistoryCard
+                key={approval.id}
+                approval={approval}
+                dispatch={dispatch}
+                annotations={NO_ANNOTATIONS}
+                onAnnotations={() => undefined}
+                item={folds.itemProps(approval)}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
   );
 }

@@ -2019,6 +2019,18 @@ body {
   }
 }
 
+/* The phone of the desk (/bureau/<id>): the panel is the page, on a phone too. */
+.chat-panel.chat-panel-page {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  border-left: 0;
+  animation: none;
+}
+
 .chat-panel :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

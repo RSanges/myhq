@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo } from "react";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { Desk } from "./desk";
+import { DeskNav } from "./desk-module";
 import { Feed } from "./feed";
 import { Meter } from "./meter";
 import { RoutineJournal } from "./routine-journal";
@@ -12,11 +13,13 @@ import { strings } from "./strings";
 import { Team } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
 import { useDeepLink } from "./use-deep-link";
+import { useDesk } from "./use-desk";
 import { useHq } from "./use-hq";
 import { useMediaQuery } from "./use-media-query";
 
 export function Dashboard() {
-  const { model, dispatch, connection, loadError, usageFailed, retry, subscribeChat } = useHq();
+  const { model, dispatch, connection, loadError, usageFailed, retry, subscribeChat, subscribeDesk } = useHq();
+  const desk = useDesk(subscribeDesk);
   const chat = useChatToggle();
   const target = useDeepLink();
   const wide = useMediaQuery("(min-width: 40rem)");
@@ -58,6 +61,8 @@ export function Dashboard() {
           <ChatToggle open={chat.open} onClick={chat.toggle} buttonRef={chat.toggleRef} />
         </div>
       </header>
+
+      {desk.desk && <DeskNav objects={desk.desk.objects} />}
 
       {loadError && (
         <div className="space-y-3">

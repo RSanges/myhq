@@ -3,7 +3,17 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorText, fetchRoutines, fetchState, fetchUsage } from "./api";
 import { initialModel, reducer, type Action, type Model } from "./model";
-import { approvalSchema, chatEventSchema, eventSchema, messageSchema, readySchema, runSchema, type ChatSignal } from "./schemas";
+import {
+  approvalSchema,
+  chatEventSchema,
+  deskEventSchema,
+  eventSchema,
+  messageSchema,
+  readySchema,
+  runSchema,
+  type ChatSignal,
+  type DeskSignal,
+} from "./schemas";
 import type { HqChange } from "./room-store";
 
 export type Connection = "connecting" | "live" | "reconnecting";
@@ -22,6 +32,8 @@ export type Hq = {
   retry: () => void;
   /** Calls `listener` with the chat events of the stream, and with `ready` each time it opens. Returns the unsubscribe function. */
   subscribeChat: (listener: (signal: ChatSignal) => void) => () => void;
+  /** Calls `listener` with the `desk` events of the stream (a count changed), and with `ready` each time it opens. */
+  subscribeDesk: (listener: (signal: DeskSignal) => void) => () => void;
 };
 
 /**
@@ -47,6 +59,14 @@ export function useHq(onChange?: (change: HqChange) => void): Hq {
       listeners.delete(listener);
     };
   }, []);
+  const deskListeners = useRef(new Set<(signal: DeskSignal) => void>());
+  const subscribeDesk = useCallback((listener: (signal: DeskSignal) => void) => {
+    const listeners = deskListeners.current;
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
   const listener = useRef(onChange);
   useEffect(() => {
     listener.current = onChange;
@@ -59,6 +79,7 @@ export function useHq(onChange?: (change: HqChange) => void): Hq {
     let usageTimer: ReturnType<typeof setTimeout> | undefined;
     let cursor = 0;
     const tellChat = (signal: ChatSignal) => chatListeners.current.forEach((each) => each(signal));
+    const tellDesk = (signal: DeskSignal) => deskListeners.current.forEach((each) => each(signal));
 
     const refreshUsage = async () => {
       try {
@@ -102,7 +123,10 @@ export function useHq(onChange?: (change: HqChange) => void): Hq {
         readySchema.parse(data);
         // The chat events are not replayed: the conversation is loaded again.
         tellChat({ type: "ready" });
+        // The desk events are not replayed either: the counts are read again.
+        tellDesk({ type: "ready" });
       });
+      follow("desk", (data) => tellDesk({ type: "counts", counts: deskEventSchema.parse(data) }));
       follow("chat", (data) => tellChat(chatEventSchema.parse(data)));
       follow("run", (data) => {
         const run = runSchema.parse(data);
@@ -166,6 +190,7 @@ export function useHq(onChange?: (change: HqChange) => void): Hq {
     loadError,
     usageFailed,
     subscribeChat,
+    subscribeDesk,
     retry: () => {
       setLoadError(null);
       setConnection("connecting");
