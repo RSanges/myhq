@@ -362,6 +362,7 @@ export function RoomPage() {
                     officeTray={officeTray}
                     focus={single ? focus : null}
                     onRoom={single ? openRoomSheet : undefined}
+                    sheetOpen={sheet !== null}
                   />
                 )}
               </div>

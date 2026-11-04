@@ -1099,10 +1099,12 @@ it, and always closer than the overview: at the whole zoom nearest to the one
 where the room (walls and signboard included) fills the view, and at least one
 step closer than the overview, so a big room overflows the view a little
 rather than being only recentred (never more than FOCUS_OVERFLOW, 1.75 times,
-along its tighter side; `focusZoom` of `floor-view.ts`). A room taller than
-the view keeps its signboard and back wall in sight, its front is cut. On a
-wide screen it is centred in the part of the canvas left of the room's sheet
-it opens (below). The zoom passes through whole steps only so every frame
+along its tighter side; `focusZoom` of `floor-view.ts`). The centre of the
+room's box (signboard included) goes to the middle of the view, so a room
+bigger than the view overflows it evenly on both sides; on a wide screen, the
+middle of the part of the canvas left of the room's sheet it opens (below);
+when the sheet closes, the room goes back to the middle of the whole canvas,
+unless the view moved since (a drag, a zoom, the overview). The zoom passes through whole steps only so every frame
 stays crisp, at once under `prefers-reduced-motion`. A click on the floor
 outside the rooms, or the « Vue d'ensemble » button, flies back to the
 overview and closes the room's sheet. A click on an agent still opens its

@@ -113,6 +113,11 @@ export type RoomRenderer = {
   focusRoom(room: string, animate?: boolean, insetRight?: number): void;
   /** The same for a room of the floor by its index in the layout. */
   focusIndex(index: number, animate?: boolean, insetRight?: number): void;
+  /**
+   * Centres the room last flown to again, in the part of the canvas left of `insetRight` CSS pixels (a sheet that
+   * opened or closed), unless the view moved since (a drag, a zoom, the overview).
+   */
+  refocus(insetRight: number, animate?: boolean): void;
   /** The room of the home a room of the floor stands for (`_hq` for the lobby), null for the user's office or a floor of one room. */
   roomName(index: number): string | null;
   /** The room of the floor under a point of the canvas (CSS pixels): its index, or null for the hall, the garden or nothing. */
@@ -311,6 +316,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let zoom = 1;
   let center: Point = { x: 0, y: 0 };
   let adjusted = false;
+  /** The room of the floor the view was last flown to, while nothing else moved it. */
+  let focused: number | null = null;
   let layout: RoomLayout | null = null;
 
   const scale = () => zoom / resolution;
@@ -413,11 +420,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     // The box has its own few pixels of air: no margin on top of them, so a room fills the view as soon as it fits.
     const fits = Math.min(device.w / (maxX - minX), device.h / (maxY - minY));
     const next = focusZoom(fits, overviewView()?.zoom ?? MIN_ZOOM, MIN_ZOOM, MAX_ZOOM);
-    // The middle of the part left visible is half the inset left of the canvas's centre. A room taller than the
-    // view keeps its signboard and back wall in sight: its top at the top of the view, its front cut instead.
-    const tall = (maxY - minY) * next > device.h;
-    const y = tall ? minY + device.h / next / 2 : (minY + maxY) / 2;
-    return { zoom: next, center: { x: (minX + maxX) / 2 + ((inset / 2) * resolution) / next, y } };
+    // The centre of the box at the middle of the part left visible (half the inset left of the canvas's centre):
+    // a room bigger than the view overflows it evenly on both sides.
+    return { zoom: next, center: { x: (minX + maxX) / 2 + ((inset / 2) * resolution) / next, y: (minY + maxY) / 2 } };
   };
   /** A point of the canvas (CSS pixels) in art pixels. */
   const artOf = (x: number, y: number): Point => {
@@ -784,6 +789,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     zoomBy(step, around) {
       // Whole steps only, from one device pixel per art pixel to MAX_ZOOM.
       flight = null;
+      focused = null;
       const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + Math.sign(step)));
       if (next === zoom) return;
       const anchor = around ?? { x: cssSize.width / 2, y: cssSize.height / 2 };
@@ -796,6 +802,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     },
     panBy(dx, dy) {
       flight = null;
+      focused = null;
       center = { x: center.x - dx / scale(), y: center.y - dy / scale() };
       adjusted = true;
       clampCenter();
@@ -806,6 +813,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       if (!view) return;
       goTo(view, animate);
       adjusted = false;
+      focused = null;
     },
     canZoom(step) {
       return step > 0 ? zoom < MAX_ZOOM : zoom > MIN_ZOOM;
@@ -852,7 +860,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       const view = roomView(index, insetRight);
       if (!view) return;
       adjusted = true;
+      focused = index;
       goTo(view, animate);
+    },
+    refocus(insetRight, animate = false) {
+      if (focused !== null) renderer.focusIndex(focused, animate, insetRight);
     },
     roomName(index) {
       return layout?.rooms[index]?.project ?? null;

@@ -41,6 +41,8 @@ export type RoomCanvasProps = {
    * a click that goes back to the overview. Given, the room is centred left of the sheet it opens (wide screens).
    */
   onRoom?: (room: string | null) => void;
+  /** A room's sheet is open: when it closes, the room flown to is centred again in the whole canvas. */
+  sheetOpen?: boolean;
 };
 
 /** Where floor.json and floor.png are served (public/iso/floor). */
@@ -445,6 +447,18 @@ export function RoomCanvas(props: RoomCanvasProps) {
     refreshZoom();
     kickRef.current();
   }, [focusRoom, focusSeq]);
+
+  // The sheet closed: the room it covered part of comes back to the middle of the canvas (if the view did not move).
+  const sheetOpen = props.sheetOpen ?? false;
+  const wasOpen = useRef(sheetOpen);
+  useEffect(() => {
+    if (wasOpen.current && !sheetOpen) {
+      rendererRef.current?.refocus(0, !latest.current.reduced);
+      refreshZoom();
+      kickRef.current();
+    }
+    wasOpen.current = sheetOpen;
+  }, [sheetOpen]);
 
   const zoom = (step: number) => {
     rendererRef.current?.zoomBy(step);
