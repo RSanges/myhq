@@ -25,7 +25,7 @@ Every error has the same shape and an HTTP status:
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
-| `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs were already started today (local day, all agents). |
+| `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs (or `maxRunsPerDay` of `myhq.json`, which wins) were already started today (local day, all agents). |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
@@ -35,6 +35,8 @@ Every error has the same shape and an HTTP status:
 | `AGENT_PROPOSAL_INVALID` | 422 | Approving an agent proposal that fails validation, or that would make its room invalid (for example a working directory outside the home). Nothing is written; the item stays pending. An agent proposal for a room the home no longer has is `ROOM_NOT_FOUND` (422). |
 | `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
+| `SETTINGS_FILE_INVALID` | 409 | A save of the settings page that writes `myhq.json` while the file is not valid JSON or not a JSON object. Nothing is written; the file is left for the user to fix. |
+| `SETTINGS_GROUP_NOT_FOUND` | 404 | `PUT /api/settings/<group>` with a group that is not `layout`, `limits`, `notifications` or `rooms`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
 The `message` is in English and meant for logs; the interface shows its own
@@ -883,6 +885,71 @@ optional: `{ "date": "2026-11-02" }`, yesterday in `HQ_TIMEZONE` by default.
 ```
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `EXPORT_NOT_CONFIGURED` (404).
+
+### `GET /api/settings`
+
+The settings the page `/reglages` shows, read fresh from `myhq.json`, the
+`room.json` files and the database (`home-layout.md`, "The settings page").
+Secrets are never part of it.
+
+```json
+{
+  "settings": {
+    "layout": "floor-per-project",
+    "language": { "value": "fr", "options": ["fr", "en"] },
+    "timeZone": { "file": null, "effective": "Europe/Paris", "source": "env", "fallback": "Europe/Paris" },
+    "scheduler": { "file": true, "effective": true, "source": "file", "fallback": false, "running": true },
+    "maxRunsPerDay": { "file": null, "effective": 12, "source": "env", "fallback": 12 },
+    "notifyTypes": { "selected": ["brief"], "known": ["mail_alert", "blog_post"] },
+    "rooms": [
+      {
+        "name": "demo",
+        "color": "#ff3d7f",
+        "shared": false,
+        "agents": [
+          { "id": "scout", "name": "Scout", "model": "sonnet", "armed": true, "hasRoutines": true, "maxBudgetUsd": 2, "notifySummary": false }
+        ]
+      }
+    ],
+    "invalidRooms": [],
+    "defaultMaxBudgetUsd": 1,
+    "errors": []
+  }
+}
+```
+
+- `timeZone`, `scheduler` and `maxRunsPerDay` carry the value in force
+  (`effective`), the value of the `myhq.json` key (`file`, null when unset),
+  where the effective one comes from (`source`: `file`, `env`, `default`, and
+  `system` for the time zone of the machine) and what applies without the key
+  (`fallback`). `running` tells that this process holds the scheduler lock.
+- `armed` is the state in force (the database wins over `room.json`).
+- `errors` lists the keys of `myhq.json` that are invalid, one line each; those
+  keys are ignored (the environment or the default applies).
+
+### `PUT /api/settings/<group>`
+
+Saves one group of the settings page and returns every setting, in the shape
+above. `<group>` is one of the four below; the body is validated with zod, unknown
+fields are refused, and nothing is written when anything is invalid. Files are
+written atomically (temporary file, then rename), keep their unknown keys and use
+2-space JSON. The changes apply without a restart.
+
+| Group | Body | Writes |
+|---|---|---|
+| `layout` | `{ "layout": "room-per-project", "language": "fr", "timeZone": "Europe/Paris" }` (`timeZone` null removes the key) | `floor.layout`, `language`, `timeZone` of `myhq.json` |
+| `limits` | `{ "scheduler": true, "maxRunsPerDay": 12 }` (each may be null: the key is removed and the environment applies) | `scheduler`, `maxRunsPerDay` of `myhq.json`; the scheduler starts or stops at once |
+| `notifications` | `{ "notifyTypes": ["brief"], "summaries": [{ "room": "demo", "agent": "scout", "summary": true }] }` | `notifyTypes` of `myhq.json` (removed when empty); `notifyRuns: "summary"` of the agents named (removed with `false`) |
+| `rooms` | `{ "rooms": [{ "name": "demo", "color": "#ff3d7f", "agents": [{ "id": "scout", "model": "opus", "armed": true, "maxBudgetUsd": 2 }] }] }` (`color` and `maxBudgetUsd` may be null) | `color` of the room, `model` and `maxBudgetUsd` of the agents in `room.json`; the armed state of an agent whose value changed, through the same mechanism as `PATCH /api/rooms/[room]/agents/[agent]` |
+
+`model` is `opus`, `sonnet` or `haiku`; `color` a hex colour (`#rgb` or `#rrggbb`);
+`maxBudgetUsd` a number above 0; `maxRunsPerDay` an integer from 0; `timeZone` an
+IANA name; `language` a BCP 47 tag; `notifyTypes` snake_case. In `rooms`, only what
+differs from the current state is written, and every room is checked (it exists,
+the edited file still passes the room schema) before any file is.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
+`SETTINGS_FILE_INVALID`, `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`.
 
 ## Not in the API
 

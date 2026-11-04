@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { Env, HqConfig } from "../server/config";
+import { liveConfig, type Env, type HqConfig } from "../server/config";
 import type { Db } from "../server/db";
 import { runsToday } from "../server/runner";
 import { strings } from "../ui/strings";
@@ -154,7 +154,7 @@ export class Preamble {
   async build(preamble: PreambleConfig, at = new Date()): Promise<string> {
     let core: string[] = [];
     try {
-      core = corePreamble(this.deps.db, this.deps.config, preamble.fields, at);
+      core = corePreamble(this.deps.db, liveConfig(this.deps.config), preamble.fields, at);
     } catch (error) {
       this.deps.log(`preamble: core facts not read: ${error instanceof Error ? error.message : String(error)}`);
     }

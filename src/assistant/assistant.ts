@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Env, HqConfig } from "../server/config";
+import { liveConfig, type Env, type HqConfig } from "../server/config";
 import { markApprovalSeen } from "../server/approvals";
 import type { Db, RunRow } from "../server/db";
 import { getState, type ApprovalDto } from "../server/feed";
@@ -378,8 +378,9 @@ export class Assistant {
 
   private statusText(): string {
     const t = strings.assistant.status;
-    const usage = getUsage(this.deps.db, this.deps.config.maxRunsPerDay, this.deps.config.weeklyBudgetUsd);
-    const state = getState(this.deps.db, loadHome(this.deps.config.home), schedulerInfo(this.deps.config));
+    const config = liveConfig(this.deps.config);
+    const usage = getUsage(this.deps.db, config.maxRunsPerDay, config.weeklyBudgetUsd);
+    const state = getState(this.deps.db, loadHome(config.home), schedulerInfo(config));
     const agents = state.rooms.flatMap((room) =>
       room.agents.map((agent) => {
         const line = t.agent({ room: room.name, agent: agent.name, state: strings.team.state[agent.state] });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { HqConfig } from "./config";
+import { liveConfig, type HqConfig } from "./config";
 import { DEFAULT_LANGUAGE, readHomeSettings } from "./home-settings";
 import { getDbAt, type Db, type MessageRow, type RunRow } from "./db";
 import { HqError } from "./errors";
@@ -119,7 +119,7 @@ export function startDailyExport(config: HqConfig): void {
   if (globalForExport.__myhqExport) return;
   const check = () => {
     try {
-      const file = exportIfDue(config, getDbAt(config.dbPath));
+      const file = exportIfDue(liveConfig(config), getDbAt(config.dbPath));
       if (file) console.log(`[export] ${file}`);
     } catch (error) {
       console.error(`[export] ${(error as Error).message}`);

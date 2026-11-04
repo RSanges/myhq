@@ -640,7 +640,7 @@ The type import is erased at load time; its path only matters to your editor
 ## myhq.json
 
 Settings of the home that are not secrets. Optional: without the file, or
-without a section, the feature is off. Other keys are ignored.
+without a section, the feature is off. Other keys are ignored (and kept as they are when MyHQ rewrites the file from the settings page, see below).
 
 ```json
 {
@@ -648,6 +648,9 @@ without a section, the feature is off. Other keys are ignored.
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
   "reception": { "room": "assistant" },
   "floor": { "layout": "room-per-project" },
+  "scheduler": true,
+  "timeZone": "Europe/Paris",
+  "maxRunsPerDay": 12,
   "catalog": { "dirs": ["../notes/projects"] },
   "onboarding": { "sprite": "sprites/reception.png" },
   "notifyTypes": ["brief", "mail_alert"],
@@ -668,6 +671,9 @@ without a section, the feature is off. Other keys are ignored.
 | `reception.room` | no | The floor (`/room`) that draws the reception desk and the receptionist, the onboarding agent (see `architecture.md`, section 7). Only that floor has the counter in its lobby, the receptionist's chip in the strip under the floor and its sheet (with the « Ajouter une salle » form and the recent onboarding runs); the others keep a plain lobby. Default: the room called `assistant` when the home has one, otherwise the first room. A name that is not a room of the home falls back to the default. |
 | `floor.layout` | no | How `/room` draws the home (see `architecture.md`, section 7). `"floor-per-project"` (the default): a floor per room of the home, chosen with the buttons at the top, each a template of offices, a lobby with your desk and the tray, a meeting room and a kitchen. `"room-per-project"`: one floor for the whole home, where each room is a suite of its own (its walls, its workstations sized from its number of agents, a coffee nook for a big team, your own empty desk with a pile of what that room waits for: a click opens « À signer » filtered to the room), with a lobby for the reception, on a grid joined by branching corridors; the floor pans, the overview fits it whole and the buttons at the top centre the view on a room. Read apart from the rest of the file: a missing or invalid `floor` (an unknown layout) falls back to the default, with the reason in the log, and leaves every other setting as it is. |
 | `catalog.dirs` | no | Extra read-only folders of the technology catalogue the receptionist bases an agent proposal on (`architecture.md`, "Proposing a missing agent"), relative to the home or absolute, 20 at most. Besides the target repositories of the rooms, which are always in it, each folder is summarized in the run prompt (its own `package.json`, `pyproject.toml` and README, then each top-level Markdown note with its YAML frontmatter, for example notes whose `stack:` lists the technologies you use) and given to the run as `--add-dir`, read-only. A folder that does not exist is named as missing. Read apart from the rest of the file: an invalid `catalog` gives no extra folder, with the reason in the log, and leaves every other setting as it is. Default: none. |
+| `scheduler` | no | `true` or `false`: whether the routines of `room.json` start runs on their own. When the key is set it wins over `HQ_SCHEDULER`; without it the variable applies (default off). See "Settings that also exist as environment variables" below. |
+| `timeZone` | no | IANA time zone of the routines and of the daily export (`Europe/Paris`). Wins over `HQ_TIMEZONE`; without it the variable applies, then the time zone of the machine. |
+| `maxRunsPerDay` | no | Daily cap of runs, all agents together (an integer, 0 or more; 0 stops every run). Wins over `HQ_MAX_RUNS_PER_DAY`; without it the variable applies (default 12). |
 | `onboarding.sprite` | no | Old top-down sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`). Still accepted and served, but **no longer drawn**: the isometric floor always draws the receptionist shipped with MyHQ, `public/sprites/iso-receptionist.png` (headset). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 
@@ -676,6 +682,55 @@ without a section, the feature is off. Other keys are ignored.
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
 log (and every item keeps the pending flow).
+
+### Settings that also exist as environment variables
+
+Three settings that are not secrets can live in `myhq.json` as well as in
+`.env.local`: `scheduler` (`HQ_SCHEDULER`), `timeZone` (`HQ_TIMEZONE`) and
+`maxRunsPerDay` (`HQ_MAX_RUNS_PER_DAY`). The order is always the same:
+
+1. the key of `myhq.json`, when it is set and valid;
+2. the environment variable, when it is set;
+3. the default (scheduler off, time zone of the machine, 12 runs a day).
+
+Each of these keys is parsed apart from the others and from the rest of the
+file: an invalid value (a time zone that does not exist, `"scheduler": "yes"`, a
+negative cap) is logged once and ignored, so the variable applies for that key
+only, and every other key of the file keeps working. A `myhq.json` that is not a
+JSON object is ignored as a whole for these three keys.
+
+They are read again when they are needed, so a change needs **no restart**: a
+run checks the cap when it starts, the scheduler is started or stopped at its
+next tick (every 15 seconds, or at once when the change comes from the settings
+page), the daily export and the Telegram assistant use the new time zone and cap
+the next time they look. Secrets and tokens (`HQ_TELEGRAM_BOT_TOKEN`,
+`HQ_CLAUDE_OAUTH_TOKEN`, `HQ_TRIGGER_TOKEN`) and every other `HQ_*` variable stay
+in `.env.local`, and changing those needs a restart.
+
+### The settings page (`/reglages`)
+
+`/reglages`, linked from the header of the desk, edits the home in four groups,
+each with its own « Enregistrer » button and its own confirmation or error:
+
+| Group | What it writes |
+|---|---|
+| Disposition et langue | `floor.layout`, `language` (French or English, plus the current tag when it is another one) and `timeZone` of `myhq.json`. An empty time zone removes the key (the variable applies again). |
+| Planificateur et plafonds | `scheduler` and `maxRunsPerDay` of `myhq.json`. « Selon l'environnement » or an empty cap removes the key. The scheduler starts or stops at once. |
+| Notifications | `notifyTypes` of `myhq.json` (the types seen in the database and in the « What you submit » lists of the roles, plus any type typed in) and `notifyRuns: "summary"` of each agent in its `room.json`. |
+| Salles et agents | `color` of each `room.json`, then `model` and `maxBudgetUsd` of each agent. The armed state of the routines goes through the existing mechanism (the database wins over `armed` of `room.json`, see `api.md`). |
+
+The files stay the source of truth, so editing them by hand keeps working. Every
+write is checked with zod first (the whole group, then each file of the group,
+before anything is written), goes through a temporary file in the same folder
+and a rename, keeps the keys it does not know (and their order) and writes
+2-space JSON with a final newline. A `myhq.json` that cannot be read back is
+never overwritten: the save fails with `SETTINGS_FILE_INVALID` and the file is
+left for you to fix. A file that already holds the values sent is not rewritten.
+Comments cannot exist in JSON, so none is lost; the one cosmetic change is that
+short arrays are written one item per line.
+
+Secrets are neither shown nor editable on the page, which only says that they
+live in `.env.local`.
 
 ### The desk objects (`desk`)
 

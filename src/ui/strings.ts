@@ -18,6 +18,7 @@ export const strings = {
     invalidRoomsTitle: "Salles invalides",
     roadmapLink: "Feuille de route",
     roomLink: "L'étage",
+    settingsLink: "Réglages",
     /** In the tab title, after the number of items to validate. */
     watchCount: (count: number) => `${count} à regarder`,
   },
@@ -126,6 +127,117 @@ export const strings = {
     /** Title of the room proposal item: French for a French home, English otherwise. */
     proposalTitle: (language: string, room: string) =>
       language.toLowerCase().split("-")[0] === "fr" ? `Proposition de salle : ${room}` : `Room proposal: ${room}`,
+  },
+  /** The settings page, /reglages. */
+  settings: {
+    pageTitle: "Réglages | MyHQ",
+    title: "Réglages",
+    back: "Retour au bureau",
+    loading: "Chargement...",
+    loadFailed: "Impossible de charger les réglages.",
+    retry: "Réessayer",
+    intro: "Chaque groupe s'enregistre seul. Tout ce qui est sur cette page s'applique sans redémarrage ; les pages déjà ouvertes se mettent à jour au prochain chargement.",
+    save: "Enregistrer",
+    saving: "Enregistrement...",
+    saved: "Enregistré. C'est déjà pris en compte.",
+    saveFailed: "Rien n'a été enregistré.",
+    /** The files of the home stay the source of truth: the page only edits them. */
+    problemsTitle: "Problèmes dans myhq.json",
+    problemsHint: "Ces clés sont ignorées : la valeur de l'environnement ou la valeur par défaut s'applique. Enregistrer le groupe concerné les remplace par une valeur valide.",
+    invalidRoomsTitle: "Salles invalides (à corriger dans leur room.json)",
+    errors: {
+      SETTINGS_FILE_INVALID: "myhq.json est illisible ou n'est pas un objet JSON : rien n'a été écrit. Corrige-le à la main, puis réessaie.",
+      SETTINGS_GROUP_NOT_FOUND: "Ce groupe de réglages n'existe pas.",
+    } as Record<string, string>,
+    sources: {
+      file: "Défini dans myhq.json.",
+      env: (name: string) => `Vient de la variable ${name} (.env.local).`,
+      default: "Valeur par défaut.",
+      system: "Fuseau de la machine.",
+    },
+    layout: {
+      title: "Disposition et langue",
+      hint: "Comment l'étage est dessiné, la langue des textes des agents et le fuseau des routines.",
+      layoutLegend: "Disposition de l'étage",
+      options: {
+        "floor-per-project": {
+          label: "Un étage par projet",
+          hint: "Chaque salle a son étage, choisi avec les boutons en haut de l'étage.",
+        },
+        "room-per-project": {
+          label: "Une salle par projet",
+          hint: "Un seul étage pour tout le bureau, où chaque projet a sa salle.",
+        },
+      },
+      language: "Langue",
+      languageHint: "Langue des textes que les agents écrivent (propositions, rôles). L'interface reste en français pour l'instant.",
+      languageNames: { fr: "Français", en: "English" } as Record<string, string>,
+      timeZone: "Fuseau horaire",
+      timeZoneHint: "Fuseau des routines et de l'export quotidien. Laisse vide pour reprendre HQ_TIMEZONE, ou le fuseau de la machine.",
+      timeZoneFallback: (zone: string) => `Sans valeur : ${zone}`,
+      timeZonePlaceholder: "Europe/Paris",
+      timeZoneInvalid: "Un fuseau IANA comme Europe/Paris.",
+    },
+    limits: {
+      title: "Planificateur et plafonds",
+      hint: "Les routines des agents (cron) et le nombre de tours par jour.",
+      scheduler: "Planificateur",
+      schedulerEnv: (on: boolean) => `Selon l'environnement (${on ? "activé" : "désactivé"})`,
+      schedulerOn: "Activé",
+      schedulerOff: "Désactivé",
+      schedulerHint: "Activé, les routines des agents armés démarrent des tours toutes seules. Désactivé, rien ne démarre seul, quoi que disent les agents.",
+      schedulerState: (p: { enabled: boolean; running: boolean }) =>
+        p.enabled
+          ? p.running
+            ? "Le planificateur tourne dans ce processus."
+            : "Activé, mais tenu par un autre processus MyHQ."
+          : "Le planificateur est arrêté.",
+      cap: "Plafond de tours par jour",
+      capHint: "Tous les agents ensemble, par jour local. 0 bloque tous les tours. Laisse vide pour reprendre HQ_MAX_RUNS_PER_DAY.",
+      capFallback: (n: number) => `Sans valeur : ${n}`,
+      capInvalid: "Un nombre entier, 0 ou plus.",
+    },
+    notifications: {
+      title: "Notifications",
+      hint: "Ce qui part sur Telegram sans que tu aies rien demandé.",
+      typesTitle: "Alertes d'information",
+      typesHint: "Un item de ces types n'attend aucune décision : il part en entier sur Telegram et reste sous « À regarder » jusqu'à ce que tu l'aies vu.",
+      typesEmpty: "Aucun type rencontré pour l'instant : ajoute-en un ci-dessous.",
+      typeAdd: "Ajouter un type",
+      typeAddLabel: "Autre type (snake_case)",
+      typeAddPlaceholder: "mail_alert",
+      typeInvalid: "Des minuscules, des chiffres et des _, en commençant par une lettre.",
+      runsTitle: "Résumés de tours",
+      runsHint: "Quand un tour de cet agent se termine bien, son résumé part sur Telegram. C'est ainsi qu'un agent de brief livre son texte.",
+      runsEmpty: "Aucune salle valide.",
+      summary: "Résumé sur Telegram",
+    },
+    rooms: {
+      title: "Salles et agents",
+      hint: "La couleur de chaque salle, puis le modèle, les routines et le budget de chaque agent.",
+      color: "Couleur",
+      colorPicker: (room: string) => `Couleur de la salle ${room}`,
+      colorHex: (room: string) => `Code hexadécimal de la salle ${room}`,
+      colorNone: "Sans couleur",
+      colorInvalid: "Un code comme #ff3d7f ou #f37.",
+      neutral: "Neutre",
+      shared: "Salle partagée",
+      model: "Modèle",
+      modelNames: { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" } as Record<string, string>,
+      armed: "Routines armées",
+      armedOn: "Armées",
+      armedOff: "Désarmées",
+      armedHint: "L'armement est gardé par MyHQ et l'emporte sur room.json.",
+      noRoutine: "Aucune routine",
+      budget: "Budget par tour (USD)",
+      budgetDefault: (usd: number) => `Sans valeur : ${usd}`,
+      budgetInvalid: "Un nombre plus grand que 0.",
+      empty: "Aucune salle valide dans ce dossier.",
+    },
+    secrets: {
+      title: "Jetons et secrets",
+      body: "Les jetons (Telegram, Claude, déclencheur) et toutes les autres variables HQ_* vivent dans .env.local : ils ne sont ni affichés ni modifiables ici. Les changer demande de redémarrer MyHQ.",
+    },
   },
   /** Rendered Markdown: the labels of what it draws. */
   markdown: {

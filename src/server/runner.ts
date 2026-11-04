@@ -4,7 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { recordBotMessage } from "./chat-history";
 import { ClaudeEngine, writeMcpConfig } from "./claude-engine";
-import { getConfig, type Env, type HqConfig } from "./config";
+import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
@@ -297,11 +297,13 @@ export function launchRun(params: {
         );
       }
       const today = runsToday(db);
-      if (today >= config.maxRunsPerDay) {
+      // The cap is read again here: a caller may hold a configuration older than myhq.json.
+      const cap = liveConfig(config).maxRunsPerDay;
+      if (today >= cap) {
         throw new HqError(
           "DAILY_CAP_REACHED",
           429,
-          `Daily cap reached: ${today} of ${config.maxRunsPerDay} runs today (HQ_MAX_RUNS_PER_DAY).`,
+          `Daily cap reached: ${today} of ${cap} runs today (HQ_MAX_RUNS_PER_DAY, or maxRunsPerDay in myhq.json).`,
         );
       }
       const at = now();

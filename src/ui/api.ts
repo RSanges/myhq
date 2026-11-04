@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import type { Annotation } from "@/server/annotations";
 import { roadmapSchema, type Roadmap } from "@/server/roadmap-schema";
+import { settingsResponseSchema, type SettingsView } from "@/server/settings-schema";
 import { strings } from "./strings";
 import {
   approvalResponseSchema,
@@ -77,6 +78,14 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
 export const fetchState = (): Promise<State> => request("/api/state", stateSchema);
 
 export const fetchRoadmap = (): Promise<Roadmap> => request("/api/roadmap", roadmapSchema);
+
+export const fetchSettings = async (): Promise<SettingsView> =>
+  (await request("/api/settings", settingsResponseSchema)).settings;
+
+/** Saves one group of the settings page and returns every setting as it is now. */
+export async function saveSettingsGroup(group: "layout" | "limits" | "notifications" | "rooms", body: unknown): Promise<SettingsView> {
+  return (await request(`/api/settings/${group}`, settingsResponseSchema, jsonInit("PUT", body))).settings;
+}
 
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
 

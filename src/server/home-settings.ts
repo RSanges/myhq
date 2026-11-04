@@ -8,6 +8,15 @@ import { DEFAULT_FLOOR_LAYOUT, FLOOR_LAYOUTS, type FloorLayoutMode } from "../ui
 
 export const DEFAULT_LANGUAGE = "en";
 
+/** A BCP 47 language tag such as `fr` or `en`. */
+export const languageTagSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "a BCP 47 language tag such as fr or en");
+
+/** An approval type, in snake_case (an entry of `notifyTypes`). */
+export const approvalTypeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/, "an approval type in snake_case");
+
 /**
  * `<home>/myhq.json`: settings of the home that are not secrets. Optional;
  * other keys are ignored, so that the file can grow.
@@ -17,11 +26,7 @@ export const homeSettingsSchema = z.looseObject({
    * Language of the texts the agents write for this home (BCP 47 tag such as
    * `fr` or `en`). Read by the onboarding run; defaults to English.
    */
-  language: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "a BCP 47 language tag such as fr or en")
-    .default(DEFAULT_LANGUAGE),
+  language: languageTagSchema.default(DEFAULT_LANGUAGE),
   export: z
     .strictObject({
       /** Folder of the daily export, relative to the home or absolute. */
@@ -47,7 +52,7 @@ export const homeSettingsSchema = z.looseObject({
       sprite: z.string().trim().min(1).optional(),
     })
     .optional(),
-  notifyTypes: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,62}$/, "an approval type in snake_case")).default([]),
+  notifyTypes: z.array(approvalTypeSchema).default([]),
 });
 
 export type HomeSettings = z.infer<typeof homeSettingsSchema>;

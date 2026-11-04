@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
-import type { HqConfig } from "./config";
+import { liveConfig, type HqConfig } from "./config";
 import { nextFire, parseCron } from "./cron";
 import { getDbAt, now, type Db, type FiringOutcome, type FiringRow, type RunRow } from "./db";
 import { HqError } from "./errors";
@@ -166,11 +166,11 @@ export class Scheduler {
     private readonly log: (message: string) => void = (m) => console.log(`[scheduler] ${m}`),
   ) {}
 
-  /** Fires what is due at `at`, and returns the journal rows written. */
-  tick(at: Date = new Date()): FiringDto[] {
+  /** Fires what is due at `at`, and returns the journal rows written. `config` is the current one (time zone, daily cap). */
+  tick(at: Date = new Date(), config: HqConfig = this.config): FiringDto[] {
     let home: Home;
     try {
-      home = loadHome(this.config.home);
+      home = loadHome(config.home);
     } catch (error) {
       this.log(`home not readable: ${(error as Error).message}`);
       return [];
@@ -185,17 +185,17 @@ export class Scheduler {
           seen.add(key);
           const slot = this.slots.get(key);
           if (!slot) {
-            this.slots.set(key, { next: nextRoutineFire(routine, at, this.config.timeZone) });
+            this.slots.set(key, { next: nextRoutineFire(routine, at, config.timeZone) });
             return;
           }
           if (!slot.next || at.getTime() < slot.next.getTime()) return;
           const due = slot.next;
-          slot.next = nextRoutineFire(routine, at, this.config.timeZone);
+          slot.next = nextRoutineFire(routine, at, config.timeZone);
           if (at.getTime() - due.getTime() > LATE_LIMIT_MS) {
             this.log(`${room.name}/${agent.id} "${routine.cron}" was due at ${due.toISOString()}: too late, skipped`);
             return;
           }
-          const firing = fireRoutine(this.config, this.db, room, agent, routine, due, this.deps);
+          const firing = fireRoutine(config, this.db, room, agent, routine, due, this.deps);
           const run = firing.runId ? ` (run #${firing.runId})` : "";
           this.log(`${room.name}/${agent.id} "${routine.cron}": ${firing.outcome}${run}`);
           fired.push(firing);
@@ -207,45 +207,86 @@ export class Scheduler {
   }
 }
 
-const globalForScheduler = globalThis as unknown as {
-  __myhqScheduler?: { scheduler: Scheduler; timer: ReturnType<typeof setInterval>; lock: Lock } | null;
+type RunningScheduler = { scheduler: Scheduler; lock: Lock };
+type SchedulerHost = {
+  config: HqConfig;
+  timer: ReturnType<typeof setInterval>;
+  running: RunningScheduler | null;
+  /** The lock of another process was reported already. */
+  lockedElsewhere: boolean;
 };
 
-/** Whether this process runs the routines (HQ_SCHEDULER=on and the lock taken). */
+const globalForScheduler = globalThis as unknown as { __myhqSchedulerHost?: SchedulerHost };
+
+/** Whether this process runs the routines (the scheduler is on and the lock taken). */
 export function schedulerRunning(): boolean {
-  return Boolean(globalForScheduler.__myhqScheduler);
+  return Boolean(globalForScheduler.__myhqSchedulerHost?.running);
+}
+
+function currentConfig(host: SchedulerHost): HqConfig {
+  try {
+    return liveConfig(host.config);
+  } catch {
+    return host.config;
+  }
 }
 
 /**
- * Starts the scheduler once per process, only when HQ_SCHEDULER=on, and in
- * one process per home only (a lock file in `data/`).
+ * Brings the scheduler in line with the configuration as it is now
+ * (HQ_SCHEDULER, overridden by `scheduler` in myhq.json), then ticks it: the
+ * scheduler starts or stops without a restart. It runs in one process per
+ * home only (a lock file in `data/`).
+ */
+function reconcile(host: SchedulerHost, at: Date = new Date()): void {
+  const config = currentConfig(host);
+  if (config.scheduler && !host.running) {
+    const lock = acquireLock(path.join(config.dataDir, "scheduler.lock"));
+    if (!lock) {
+      if (!host.lockedElsewhere) console.log("[scheduler] another MyHQ process already runs the routines of this home");
+      host.lockedElsewhere = true;
+      return;
+    }
+    host.lockedElsewhere = false;
+    host.running = { scheduler: new Scheduler(config, getDbAt(config.dbPath)), lock };
+    console.log(`[scheduler] on, time zone ${config.timeZone}`);
+  } else if (!config.scheduler && host.running) {
+    host.running.lock.release();
+    host.running = null;
+    console.log("[scheduler] off: routines do not start runs");
+  }
+  if (!config.scheduler) host.lockedElsewhere = false;
+  host.running?.scheduler.tick(at, config);
+}
+
+/**
+ * Starts the scheduler once per process. It runs only while the scheduler is
+ * on (HQ_SCHEDULER=on, or `scheduler` in myhq.json, which wins); the check is
+ * repeated at each tick, so that switching it needs no restart.
  */
 export function startScheduler(config: HqConfig): Scheduler | null {
-  if (globalForScheduler.__myhqScheduler !== undefined) return globalForScheduler.__myhqScheduler?.scheduler ?? null;
-  if (!config.scheduler) {
-    console.log("[scheduler] off (HQ_SCHEDULER): routines do not start runs");
-    globalForScheduler.__myhqScheduler = null;
-    return null;
-  }
-  const lock = acquireLock(path.join(config.dataDir, "scheduler.lock"));
-  if (!lock) {
-    console.log("[scheduler] another MyHQ process already runs the routines of this home");
-    globalForScheduler.__myhqScheduler = null;
-    return null;
-  }
-  const scheduler = new Scheduler(config, getDbAt(config.dbPath));
-  scheduler.tick();
+  const existing = globalForScheduler.__myhqSchedulerHost;
+  if (existing) return existing.running?.scheduler ?? null;
   const timer = setInterval(() => {
     try {
-      scheduler.tick();
+      reconcile(host);
     } catch (error) {
       console.error("[scheduler] tick failed", error);
     }
   }, TICK_MS);
   timer.unref();
-  globalForScheduler.__myhqScheduler = { scheduler, timer, lock };
-  console.log(`[scheduler] on, time zone ${config.timeZone}`);
-  return scheduler;
+  const host: SchedulerHost = { config, timer, running: null, lockedElsewhere: false };
+  globalForScheduler.__myhqSchedulerHost = host;
+  if (!currentConfig(host).scheduler) {
+    console.log("[scheduler] off (HQ_SCHEDULER, scheduler in myhq.json): routines do not start runs");
+  }
+  reconcile(host);
+  return host.running?.scheduler ?? null;
+}
+
+/** Applies a change of the scheduler setting now rather than at the next tick. Does nothing when the scheduler was never started. */
+export function reconcileScheduler(): void {
+  const host = globalForScheduler.__myhqSchedulerHost;
+  if (host) reconcile(host);
 }
 
 /** What the interface and the assistant show about the scheduler. */

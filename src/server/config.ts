@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { readRuntimeOverrides } from "./runtime-settings";
 import { isValidTimeZone, systemTimeZone } from "./time";
 
 /**
@@ -51,6 +52,12 @@ export type HqConfig = {
   onboardingMaxBudgetUsd: number;
   /** HQ_TRIGGER_TOKEN: required by POST /api/runs for a request that carries a `reason`. Null when not set. */
   triggerToken: string | null;
+  /**
+   * The values of `scheduler`, `timeZone` and `maxRunsPerDay` before the
+   * overrides of `myhq.json` (environment, else default). Set by getConfig;
+   * liveConfig starts from them to read the file again.
+   */
+  fromEnv?: Pick<HqConfig, "scheduler" | "timeZone" | "maxRunsPerDay">;
 };
 
 function emptyToUndefined(env: Env): Record<string, string | undefined> {
@@ -75,7 +82,7 @@ export function getConfig(env: Env = process.env): HqConfig {
   // The home is read at runtime, never bundled: keep it out of output tracing.
   const home = path.resolve(/* turbopackIgnore: true */ repoRoot, vars.MYHQ_HOME);
   const dataDir = path.join(home, "data");
-  return {
+  return withHomeOverrides({
     repoRoot,
     home,
     dataDir,
@@ -90,7 +97,41 @@ export function getConfig(env: Env = process.env): HqConfig {
     weeklyBudgetUsd: vars.HQ_WEEKLY_BUDGET_USD ?? null,
     onboardingMaxBudgetUsd: vars.HQ_ONBOARDING_MAX_BUDGET_USD,
     triggerToken: vars.HQ_TRIGGER_TOKEN ?? null,
+  });
+}
+
+const reportedErrors = new Set<string>();
+
+/**
+ * Applies the runtime settings of `<home>/myhq.json` (`scheduler`,
+ * `timeZone`, `maxRunsPerDay`) over the values taken from the environment.
+ * A key that is invalid is logged once and ignored.
+ */
+function withHomeOverrides(base: HqConfig): HqConfig & { fromEnv: NonNullable<HqConfig["fromEnv"]> } {
+  const { overrides, errors } = readRuntimeOverrides(base.home);
+  for (const message of errors) {
+    if (reportedErrors.has(message)) continue;
+    reportedErrors.add(message);
+    console.error(`[config] ${message}: the environment applies`);
+  }
+  return {
+    ...base,
+    scheduler: overrides.scheduler ?? base.scheduler,
+    timeZone: overrides.timeZone ?? base.timeZone,
+    maxRunsPerDay: overrides.maxRunsPerDay ?? base.maxRunsPerDay,
+    fromEnv: { scheduler: base.scheduler, timeZone: base.timeZone, maxRunsPerDay: base.maxRunsPerDay },
   };
+}
+
+/**
+ * The same configuration with `myhq.json` read again, for what lives longer
+ * than a request (the scheduler, the export timer, the Telegram assistant):
+ * a setting changed in the file or on /reglages applies without a restart.
+ * Without `fromEnv` (a hand-made configuration), its own values are the
+ * fallback.
+ */
+export function liveConfig(config: HqConfig): HqConfig & { fromEnv: NonNullable<HqConfig["fromEnv"]> } {
+  return withHomeOverrides({ ...config, ...config.fromEnv });
 }
 
 /** True when `target` is `base` itself or a path inside it. */
