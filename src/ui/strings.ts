@@ -217,6 +217,12 @@ export const strings = {
       typeAddLabel: "Autre type (snake_case)",
       typeAddPlaceholder: "mail_alert",
       typeInvalid: "Des minuscules, des chiffres et des _, en commençant par une lettre.",
+      quietTitle: "Heures calmes",
+      quietHint: "Pendant cette plage (fuseau du bureau), les alertes d'information sont retenues, puis envoyées ensemble en un seul message à la fin. Une alerte que son agent marque urgente part tout de suite. Les items restent sur le bureau dans tous les cas.",
+      quietEnabled: "Retenir les alertes pendant les heures calmes",
+      quietStart: "Début",
+      quietEnd: "Fin",
+      quietInvalid: "Le début et la fin doivent être deux heures différentes.",
       runsTitle: "Résumés de tours",
       runsHint: "Quand un tour de cet agent se termine bien, son résumé part sur Telegram. C'est ainsi qu'un agent de brief livre son texte.",
       runsEmpty: "Aucune salle valide.",
@@ -696,6 +702,9 @@ export const strings = {
     /** First line of an informational item (notifyTypes), followed by its body. */
     notification: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
       `MyHQ : ${p.title} (#${p.id})\n${p.room} / ${p.agent} : ${p.type}`,
+    /** Heading of the informational items held during the quiet hours (myhq.json quietHours), sent together at their end. */
+    quietDigest: (p: { count: number; start: string; end: string }) =>
+      `MyHQ : ${p.count} alertes arrivées pendant les heures calmes (de ${p.start} à ${p.end})`,
     runFailed: (p: { room: string; agent: string; runId: number; summary: string }) =>
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
     /** Last line of an alert about an approval or a failed run, when HQ_PUBLIC_URL is set. */

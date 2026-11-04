@@ -105,7 +105,7 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). |
-| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). |
+| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -953,6 +953,22 @@ of the home send text on their own, in both modes:
   `hq_pending`, and never triggers `onApproval` nor wakes an agent. For a mail
   alert: the user reads it, there is nothing to decide. The MCP server finds the home's
   `myhq.json` from `HQ_DB_PATH` (`<home>/data/hq.db`).
+- `quietHours` in `myhq.json` (`{ "start": "21:00", "end": "08:00" }`, wall
+  clock of the home's time zone): during the range, the sweep
+  (`notifyPendingApprovals`, `src/server/notify.ts`) leaves the informational
+  items unsent and unmarked (`notified_at` stays null), except those whose
+  payload says `"urgent": true`, which go at once. The first sweep after the
+  end of the range sends the items created before that end as one text: a
+  heading (`strings.notify.quietDigest`), then each item in full with its link,
+  without « Vu » buttons, cut only past 4000 characters; a single item held
+  goes the usual way, with its button. Since the sweeps otherwise run only
+  during and after runs, the app also sweeps every minute while the key is set
+  (`startQuietHours`, started by `src/instrumentation.ts`, the key read again
+  each time). The desk is not affected: an item held is under « À regarder »
+  from the moment it is submitted. Pending approvals, failure alerts and run
+  summaries are never held. The range is read apart from the rest of the file
+  (`src/server/quiet-hours.ts`), from the home of the database
+  (`<home>/data/hq.db`), so no caller passes it.
 - `notifyRuns: "summary"` on an agent in `room.json`: when its run ends
   `done`, its summary is sent as a plain message (Markdown marks removed, cut
   at 4000 characters). This is how a morning brief or an evening recap agent

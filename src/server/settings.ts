@@ -14,6 +14,7 @@ import {
   schedulerSettingSchema,
   timeZoneSettingSchema,
 } from "./runtime-settings";
+import { quietHoursSchema, readQuietHours } from "./quiet-hours";
 import { isArmed, reconcileScheduler, schedulerRunning, setArmed } from "./routines";
 import type { SettingsView } from "./settings-schema";
 
@@ -45,9 +46,13 @@ export const limitsInputSchema = z.strictObject({
   maxRunsPerDay: maxRunsSettingSchema.nullable(),
 });
 
-/** « Notifications »: `notifyTypes`, and `notifyRuns` of the agents named (`summary` false removes it). */
+/**
+ * « Notifications »: `notifyTypes`, `notifyRuns` of the agents named (`summary`
+ * false removes it), and `quietHours` (null removes it, absent keeps it).
+ */
 export const notificationsInputSchema = z.strictObject({
   notifyTypes: z.array(approvalTypeSchema).max(200),
+  quietHours: quietHoursSchema.nullable().optional(),
   summaries: z
     .array(z.strictObject({ room: idSchema, agent: idSchema, summary: z.boolean() }))
     .max(1000)
@@ -214,7 +219,10 @@ export function saveNotifications(config: HqConfig, input: NotificationsInput): 
   }
   editRooms(loadHome(config.home), edits);
   const types = [...new Set(input.notifyTypes)];
-  writeHomeKeys(config.home, { notifyTypes: types.length > 0 ? types : undefined });
+  writeHomeKeys(config.home, {
+    notifyTypes: types.length > 0 ? types : undefined,
+    ...(input.quietHours !== undefined ? { quietHours: input.quietHours ?? undefined } : {}),
+  });
 }
 
 export function saveRooms(config: HqConfig, db: Db, input: RoomsInput): void {
@@ -329,6 +337,9 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
     else errors.push(`myhq.json notifyTypes: ${issues(parsed.error)}`);
   }
 
+  const quiet = readQuietHours(live.home);
+  if (quiet.error && !raw.error) errors.push(quiet.error);
+
   const home = loadHome(live.home);
   const known = knownApprovalTypes(db, home).filter((type) => !selected.includes(type));
 
@@ -355,6 +366,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
       fallback: fromEnv.maxRunsPerDay,
     },
     notifyTypes: { selected, known },
+    quietHours: quiet.quietHours,
     rooms: home.rooms.map((room) => ({
       name: room.name,
       color: room.color,

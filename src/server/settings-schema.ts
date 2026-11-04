@@ -42,6 +42,8 @@ export const settingsViewSchema = z.object({
     /** Types seen in the database and in the roles of the home, not yet selected or not. */
     known: z.array(z.string()),
   }),
+  /** `quietHours` of myhq.json, null when it is not set (or invalid, reported in `errors`). */
+  quietHours: z.object({ start: z.string(), end: z.string() }).nullable(),
   rooms: z.array(
     z.object({
       name: z.string(),

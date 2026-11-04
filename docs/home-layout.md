@@ -719,6 +719,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
   "catalog": { "dirs": ["../notes/projects"] },
   "onboarding": { "sprite": "sprites/reception.png" },
   "notifyTypes": ["brief", "mail_alert"],
+  "quietHours": { "start": "21:00", "end": "08:00" },
   "desk": {
     "objects": [
       { "id": "signer", "object": "pile", "label": "À signer", "source": "approvals" },
@@ -741,6 +742,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `maxRunsPerDay` | no | Daily cap of runs, all agents together (an integer, 0 or more; 0 stops every run). Wins over `HQ_MAX_RUNS_PER_DAY`; without it the variable applies (default 12). |
 | `onboarding.sprite` | no | Old top-down sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`). Still accepted and served, but **no longer drawn**: the isometric floor always draws the receptionist shipped with MyHQ, `public/sprites/iso-receptionist.png` (headset). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
+| `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item in full with its link, without « Vu » buttons (cut in several messages only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
 
 | `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone. |
 
@@ -781,7 +783,7 @@ each with its own « Enregistrer » button and its own confirmation or error:
 |---|---|
 | Disposition et langue | `floor.layout`, `language` (French or English, plus the current tag when it is another one) and `timeZone` of `myhq.json`. An empty time zone removes the key (the variable applies again). |
 | Planificateur et plafonds | `scheduler` and `maxRunsPerDay` of `myhq.json`. « Selon l'environnement » or an empty cap removes the key. The scheduler starts or stops at once. |
-| Notifications | `notifyTypes` of `myhq.json` (the types seen in the database and in the « What you submit » lists of the roles, plus any type typed in) and `notifyRuns: "summary"` of each agent in its `room.json`. |
+| Notifications | `notifyTypes` and `quietHours` of `myhq.json` (the types seen in the database and in the « What you submit » lists of the roles, plus any type typed in; the quiet hours as a switch and two times, off removes the key) and `notifyRuns: "summary"` of each agent in its `room.json`. |
 | Salles et agents | `color` of each `room.json`, then `model` and `maxBudgetUsd` of each agent. The armed state of the routines goes through the existing mechanism (the database wins over `armed` of `room.json`, see `api.md`). |
 
 The files stay the source of truth, so editing them by hand keeps working. Every

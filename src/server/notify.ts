@@ -6,10 +6,13 @@ import { splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { appendLine, approvalLinkLine, withLine } from "./public-url";
+import { isQuiet, isUrgentPayload, lastQuietEnd, readQuietHours } from "./quiet-hours";
+import { readRuntimeOverrides } from "./runtime-settings";
 import { telegramMediaFor, type TelegramMedia } from "./telegram-media";
+import { isValidTimeZone, systemTimeZone } from "./time";
 import { strings } from "../ui/strings";
-import type { Env } from "./config";
-import type { Db } from "./db";
+import type { Env, HqConfig } from "./config";
+import { getDbAt, type Db } from "./db";
 
 type Fetch = typeof fetch;
 
@@ -116,6 +119,37 @@ export async function notify(
 /** The app's alert sender, reading the Telegram variables of the process. */
 export const sendAlert: Send = (text, options) => notify(text, process.env, fetch, options);
 
+/** An item the sweep may send: a pending approval or an informational item. */
+type SweptRow = {
+  id: number;
+  room: string;
+  for_room: string | null;
+  type: string;
+  title: string;
+  body: string;
+  payload: string;
+  status: string;
+  created_at: string;
+  agent: string;
+};
+
+/**
+ * The quiet hours in force for the home of `db` at `at`: null without
+ * `quietHours` in myhq.json. The database lives in `<home>/data/hq.db`, and
+ * the time zone is the home's (`timeZone` of myhq.json, then HQ_TIMEZONE, then
+ * the machine's).
+ */
+function quietHoursAt(db: Db, env: Env, at: Date): { quiet: boolean; lastEnd: Date; range: { start: string; end: string } } | null {
+  const home = path.dirname(path.dirname(db.name));
+  const { quietHours, error } = readQuietHours(home);
+  if (error) console.error(`[notify] ${error}: alerts are not held`);
+  if (!quietHours) return null;
+  const fromEnv = env.HQ_TIMEZONE?.trim();
+  const timeZone =
+    readRuntimeOverrides(home).overrides.timeZone ?? (fromEnv && isValidTimeZone(fromEnv) ? fromEnv : systemTimeZone());
+  return { quiet: isQuiet(at, quietHours, timeZone), lastEnd: lastQuietEnd(at, quietHours, timeZone), range: quietHours };
+}
+
 /**
  * Notifies every pending approval not notified yet, and every informational
  * item (a type of `notifyTypes`, born `unseen` by hq_submit; the ones stored
@@ -129,31 +163,54 @@ export const sendAlert: Send = (text, options) => notify(text, process.env, fetc
  * « Ouvrir : <url>/bureau#approval-<id> ». A pending item with files lists them, and
  * its alert carries the first video, image or sound Telegram takes (see
  * telegram-media.ts); otherwise it stays text, with its link.
+ *
+ * With `quietHours` in myhq.json, an informational item that is not marked
+ * urgent (`"urgent": true` in its payload) is left unsent while the range
+ * lasts; the first sweep after its end sends the items held together as one
+ * text (several messages only past 4000 characters, without « Vu » buttons:
+ * they stay under « À regarder »), or a single item the usual way. Pending
+ * approvals are never held. The app process also sweeps every minute while
+ * quiet hours are set (see `startQuietHours`), so that the held items leave
+ * at the end of the range without waiting for a run.
  */
-export async function notifyPendingApprovals(db: Db, send: Send = sendAlert, env: Env = process.env): Promise<void> {
+export async function notifyPendingApprovals(
+  db: Db,
+  send: Send = sendAlert,
+  env: Env = process.env,
+  at: Date = new Date(),
+): Promise<void> {
   const rows = db
     .prepare(
-      `SELECT a.id, a.room, a.for_room, a.type, a.title, a.body, a.status, COALESCE(g.name, a.agent_id) AS agent
+      `SELECT a.id, a.room, a.for_room, a.type, a.title, a.body, a.payload, a.status, a.created_at,
+         COALESCE(g.name, a.agent_id) AS agent
        FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
        WHERE a.notified_at IS NULL AND (a.status IN ('pending', 'unseen')
          OR (a.status = 'approved' AND a.decision_note = ? AND a.decided_at = a.created_at))
        ORDER BY a.id`,
     )
-    .all(NOTIFICATION_NOTE) as {
-    id: number;
-    room: string;
-    for_room: string | null;
-    type: string;
-    title: string;
-    body: string;
-    status: string;
-    agent: string;
-  }[];
+    .all(NOTIFICATION_NOTE) as SweptRow[];
+  const quiet = quietHoursAt(db, env, at);
+  const due: SweptRow[] = [];
+  const held: SweptRow[] = [];
+  for (const row of rows) {
+    if (quiet && row.status !== "pending" && !isUrgentPayload(row.payload)) {
+      // Left unmarked during the range: a later sweep sends it.
+      if (quiet.quiet) continue;
+      if (Date.parse(row.created_at) < quiet.lastEnd.getTime()) {
+        held.push(row);
+        continue;
+      }
+    }
+    due.push(row);
+  }
+  // A single item held is sent the usual way, with its « Vu » button.
+  if (held.length === 1) due.push(...held.splice(0));
+  due.sort((a, b) => a.id - b.id);
   const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
   const filesOf = db.prepare("SELECT id, name, mime, size FROM approval_files WHERE approval_id = ? ORDER BY id");
   // MyHQ keeps the copies of the files in the data directory, next to the database.
   const dataDir = path.dirname(db.name);
-  for (const found of rows) {
+  for (const found of due) {
     // Marked first so that two concurrent sweeps never send the same item twice.
     if (mark.run(new Date().toISOString(), found.id).changes === 0) continue;
     // A delivery of a shared room says where it goes: « creation pour planygo ».
@@ -178,4 +235,46 @@ ${strings.attachments.telegramLine(files.map((file) => file.name))}` : head;
     }
     if (sent) recordBotMessage(db, withLine(full, link), "notification");
   }
+  if (held.length > 0 && quiet) await sendHeld(db, held, quiet.range, send, env);
+}
+
+/** The informational items held during the quiet hours, as one text: a heading, then each item in full with its link. */
+async function sendHeld(db: Db, rows: SweptRow[], range: { start: string; end: string }, send: Send, env: Env): Promise<void> {
+  const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
+  const at = new Date().toISOString();
+  const mine = rows.filter((row) => mark.run(at, row.id).changes > 0);
+  if (mine.length === 0) return;
+  const sections = mine.map((found) => {
+    const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
+    return withLine(`${strings.notify.notification(row)}\n\n${row.body}`, approvalLinkLine(row.id, env));
+  });
+  const full = [strings.notify.quietDigest({ count: mine.length, ...range }), ...sections].join("\n\n");
+  let sent = false;
+  for (const part of splitMessage(full)) sent = (await send(part)) || sent;
+  if (sent) recordBotMessage(db, full, "notification");
+}
+
+/** How often the app sweeps while `quietHours` is set, so that the items held leave at the end of the range. */
+export const QUIET_SWEEP_MS = 60_000;
+
+const globalForQuiet = globalThis as unknown as { __myhqQuietHours?: ReturnType<typeof setInterval> };
+
+/**
+ * Starts the quiet-hours sweep once per process: every minute, when myhq.json
+ * sets `quietHours` (read again each time, so no restart is needed), the
+ * notification sweep runs, which sends the items held once the range is over.
+ * Without the key it does nothing.
+ */
+export function startQuietHours(config: HqConfig): void {
+  if (globalForQuiet.__myhqQuietHours) return;
+  const check = () => {
+    try {
+      if (!readQuietHours(config.home).quietHours) return;
+      notifyPendingApprovals(getDbAt(config.dbPath)).catch((error: unknown) => console.error("[notify] quiet-hours sweep failed", error));
+    } catch (error) {
+      console.error("[notify] quiet-hours sweep failed", error);
+    }
+  };
+  globalForQuiet.__myhqQuietHours = setInterval(check, QUIET_SWEEP_MS);
+  globalForQuiet.__myhqQuietHours.unref();
 }
