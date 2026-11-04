@@ -572,8 +572,10 @@ After each chat reply that succeeds, MyHQ reads the `*.json` files of the
 directory, in name order. For each valid one it creates a pending task (source
 `chat`) for that agent with the given text, starts a run at once if the agent
 is free and the daily cap allows (the run takes the task from its mailbox,
-reason `chat` or the given one), then deletes the file. A busy agent or the cap
-leave the task waiting for the agent's next run. A file that is not valid JSON,
+reason `chat` or the given one), then deletes the file. A busy agent, a busy
+shared resource or the cap leave the task waiting for the agent's next run, and
+MyHQ adds a line to the chat's reply to say so (the chat wrote its answer before
+knowing); a task that waited for the cap starts by itself after the daily reset. A file that is not valid JSON,
 does not match the shape or names an unknown room or agent is logged and moved
 to `<dir>/rejected/`. Other files are left alone. The agent keeps its own tools
 and the approval queue: the request only gives it work.

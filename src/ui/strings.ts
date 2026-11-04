@@ -702,6 +702,16 @@ export const strings = {
     open: (url: string) => `Ouvrir : ${url}`,
     /** Last line of a brief or a summary, when HQ_PUBLIC_URL is set. */
     desk: (url: string) => `Bureau : ${url}`,
+    /** Last line of the cap alert, when HQ_PUBLIC_URL is set. */
+    settings: (url: string) => `Réglages : ${url}`,
+    /** Sent once a day, the first time a start is refused for the daily cap. */
+    capReached: (p: { cap: number; waiting: number }) =>
+      [
+        `MyHQ : plafond de ${p.cap} tours atteint pour aujourd'hui`,
+        p.waiting === 0
+          ? "Aucun agent ne peut démarrer avant la remise à zéro du compteur (minuit)."
+          : `${p.waiting === 1 ? "1 tâche attend" : `${p.waiting} tâches attendent`} un tour : elles partiront toutes seules à la remise à zéro du compteur (minuit). Tu peux relever le plafond dans les réglages.`,
+      ].join("\n"),
   },
   /** The hub: the desk drawn as a scene at the top of `/` (src/ui/hub.tsx). */
   hub: {
@@ -904,6 +914,15 @@ export const strings = {
       `Commentaire pour l'agent sur l'item #${id} ? Réponds par un message (la question reste valable une heure).`,
     questionExpired: (id: number) => `Ma question sur l'item #${id} date de plus d'une heure, je l'ai abandonnée.`,
     runStarted: (p: { id: number; room: string; agent: string }) => `Tour #${p.id} lancé pour ${p.room} / ${p.agent}.`,
+    /** Closes the reply of a turn whose request to an agent created a task but could not start its run. */
+    requestWaits: {
+      cap: (p: { taskId: number; agent: string; cap: number }) =>
+        `Noté (tâche #${p.taskId}), mais ${p.agent} ne peut pas tourner avant minuit : plafond de ${p.cap} tours atteint. La tâche partira toute seule à la remise à zéro du compteur.`,
+      busy: (p: { taskId: number; agent: string }) =>
+        `Noté (tâche #${p.taskId}), mais ${p.agent} est occupé : elle sera prise dès la fin de son tour en cours.`,
+      resource: (p: { taskId: number; agent: string; resource?: string }) =>
+        `Noté (tâche #${p.taskId}), mais ${p.agent} attend que ${p.resource ? `la ressource « ${p.resource} »` : "une ressource partagée"} soit libre : elle sera prise dès la fin du tour qui l'occupe.`,
+    },
     status: {
       today: (runs: number, cost: string) => `Aujourd'hui : ${runs} tour(s), ${cost}`,
       week: (runs: number, cost: string) => `Cette semaine : ${runs} tour(s), ${cost}`,
@@ -962,7 +981,10 @@ export const strings = {
       pendingItem: (p: { id: number; agent: string; type: string; title: string }) =>
         `- n° ${p.id}, ${p.agent}, ${p.type} : ${p.title}`,
       pendingMore: (count: number) => (count === 1 ? "- et 1 autre" : `- et ${count} autres`),
-      runs: (count: number, max: number) => `Tours d'agents aujourd'hui : ${count} sur ${max}.`,
+      runs: (count: number, max: number) =>
+        count >= max
+          ? `Tours d'agents aujourd'hui : ${count} sur ${max}. Plafond atteint : aucun agent ne peut démarrer avant minuit, une demande qui lui est confiée reste en attente. Dis-le au propriétaire, ne promets pas que le travail est en cours.`
+          : `Tours d'agents aujourd'hui : ${count} sur ${max}.`,
       lastExchange: (when: string) => `Dernier échange : ${when}.`,
       lastExchangeNow: "à l'instant",
       lastExchangeMinutes: (minutes: number) => `il y a ${minutes} min`,

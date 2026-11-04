@@ -6,7 +6,7 @@ import { getDbAt, now, type Db, type FiringOutcome, type FiringRow, type RunRow 
 import { HqError } from "./errors";
 import { acquireLock, type Lock } from "./lock";
 import { loadHome, syncHome, type Agent, type Home, type Room, type Routine } from "./rooms";
-import { findAgent, startRun, type RunnerDeps, type StartRunRequest } from "./runner";
+import { findAgent, resumeWaitingTasks, startRun, type RunnerDeps, type StartRunRequest } from "./runner";
 
 // --- Armed state ---------------------------------------------------------------
 
@@ -291,6 +291,20 @@ function reconcile(host: SchedulerHost, at: Date = new Date()): void {
 }
 
 /**
+ * Wakes the tasks that waited for the daily cap as soon as the counter allows
+ * a run again (the day changed, or the cap was raised): see `resumeWaitingTasks`.
+ * Runs at each tick of the timer and at startup, scheduler on or off.
+ */
+function resumeWaiting(host: SchedulerHost): void {
+  try {
+    const config = currentConfig(host);
+    resumeWaitingTasks(config, getDbAt(config.dbPath));
+  } catch (error) {
+    console.error("[scheduler] resuming the waiting tasks failed", error);
+  }
+}
+
+/**
  * Starts the scheduler once per process. It runs only while the scheduler is
  * on (HQ_SCHEDULER=on, or `scheduler` in myhq.json, which wins); the check is
  * repeated at each tick, so that switching it needs no restart.
@@ -304,6 +318,7 @@ export function startScheduler(config: HqConfig): Scheduler | null {
     } catch (error) {
       console.error("[scheduler] tick failed", error);
     }
+    resumeWaiting(host);
   }, TICK_MS);
   timer.unref();
   const host: SchedulerHost = { config, timer, running: null, lockedElsewhere: false };
@@ -312,6 +327,7 @@ export function startScheduler(config: HqConfig): Scheduler | null {
     console.log("[scheduler] off (HQ_SCHEDULER, scheduler in myhq.json): routines do not start runs");
   }
   reconcile(host);
+  resumeWaiting(host);
   return host.running?.scheduler ?? null;
 }
 

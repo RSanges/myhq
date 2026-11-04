@@ -184,9 +184,11 @@ test("a retry that cannot start alerts the first failure", async () => {
   await waitForRun(db, first.id);
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number }).n, 1);
-  assert.equal(sent.length, 1);
-  assert.match(sent[0]!, new RegExp(`#${first.id}`));
-  assert.match(sent[0]!, /The retry could not start: Daily cap reached/);
+  // The refused retry also sends the once-a-day alert of the cap (cap-alert.ts), besides the run's failure.
+  assert.equal(sent.length, 2);
+  const failure = sent.find((text) => text.includes(`#${first.id}`));
+  assert.match(failure ?? "", /The retry could not start: Daily cap reached/);
+  assert.ok(sent.some((text) => text.startsWith("MyHQ : plafond de 1 tours atteint")));
 });
 
 test("todayLine gives the weekday in full, in the home's language and time zone", () => {

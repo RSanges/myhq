@@ -4,6 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { recordBotMessage } from "./chat-history";
 import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
+import { alertCapReached } from "./cap-alert";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
@@ -294,6 +295,25 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
 export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"]);
 
 /**
+ * Wakes the agents whose tasks wait for the daily cap, once the counter allows
+ * a run again: the day changed (the count is by calendar day), or the cap was
+ * raised. Does nothing while the cap is reached. Same order and rules as
+ * `wakeAgents` (it calls it), so a task is never woken twice and a failing
+ * agent is not woken in a loop. Called at each tick of the scheduler's timer,
+ * whether the scheduler is on or not: the check is one query when nothing waits.
+ * Never throws; returns the runs started.
+ */
+export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
+  try {
+    if (runsToday(db) >= liveConfig(config).maxRunsPerDay) return [];
+    return wakeAgents(config, db, deps);
+  } catch (error) {
+    console.error("[runner] resuming the tasks that waited for the cap failed", error);
+    return [];
+  }
+}
+
+/**
  * Records and starts a run of any agent, room agent or MyHQ's own (onboarding),
  * after the agent lock, its shared resources (`RESOURCE_BUSY` while another
  * run holds one of them) and the daily cap. `prompt` receives the run id and
@@ -342,6 +362,8 @@ export function launchRun(params: {
       // The cap is read again here: a caller may hold a configuration older than myhq.json.
       const cap = liveConfig(config).maxRunsPerDay;
       if (today >= cap) {
+        // The first refusal of the day tells the owner, once, how many tasks wait (after the transaction is over).
+        queueMicrotask(() => void alertCapReached({ config, db, send: deps.send ?? sendAlert, env: deps.env }));
         throw new HqError(
           "DAILY_CAP_REACHED",
           429,

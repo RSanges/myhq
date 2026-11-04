@@ -26,7 +26,7 @@ import { askChat, chatEnv, composeChatInput, type ChatOutcome, type ChatRunner }
 import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type ChatConfig } from "./home-config";
 import { PendingQuestions } from "./pending";
 import { Preamble } from "./preamble";
-import { CHAT_REASON, processChatRequests } from "./requests";
+import { CHAT_REASON, processChatRequests, type WaitingRequest } from "./requests";
 import { readSettings } from "./settings";
 import { runShell } from "./shell";
 import { setArmed } from "../server/routines";
@@ -84,6 +84,15 @@ export type ChatServiceDeps = {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The line that tells the owner a request to an agent is noted but cannot start its run now. */
+export function requestWaitLine(waiting: WaitingRequest): string {
+  const t = strings.assistant.requestWaits;
+  const base = { taskId: waiting.taskId, agent: waiting.agentName };
+  if (waiting.cause === "cap") return t.cap({ ...base, cap: waiting.cap ?? 0 });
+  if (waiting.cause === "resource") return t.resource({ ...base, ...(waiting.resource ? { resource: waiting.resource } : {}) });
+  return t.busy(base);
 }
 
 /**
@@ -309,6 +318,19 @@ export class ChatService {
           }
         }
       }
+      // The requests to the agents start their runs now, before the reply is built: the chat wrote its answer
+      // without knowing whether the run could start, so a task that has to wait is said by the core's own line.
+      if (chat.requestsDir) {
+        const waiting: WaitingRequest[] = [];
+        processChatRequests(chat.requestsDir, {
+          config: this.deps.config,
+          db: this.deps.db,
+          startRun: this.deps.startRun,
+          log: this.log,
+          onWait: (request) => waiting.push(request),
+        });
+        lines.push(...waiting.map(requestWaitLine));
+      }
       // The notes (held actions dropped or expired) are part of what the user reads, so they are kept with it.
       const answer = [...notes, outcome.text.trim() || t.chat.empty, ...(lines.length ? [lines.join("\n")] : [])].join("\n\n");
       const messages = [
@@ -324,14 +346,6 @@ export class ChatService {
         choices: extractChoices(outcome.text),
       };
       await done(result);
-      if (chat.requestsDir) {
-        processChatRequests(chat.requestsDir, {
-          config: this.deps.config,
-          db: this.deps.db,
-          startRun: this.deps.startRun,
-          log: this.log,
-        });
-      }
       await this.afterReply(chat.afterReply, chat.cwd);
       return result;
     }

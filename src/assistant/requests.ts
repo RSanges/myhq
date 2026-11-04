@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { HqConfig } from "../server/config";
+import { liveConfig, type HqConfig } from "../server/config";
 import { now, type Db, type RunRow } from "../server/db";
 import { HqError } from "../server/errors";
+import { resourceHolder } from "../server/resources";
 import { findAgent, reasonSchema, startRun as defaultStartRun, WAKE_TASK, WAITS, type StartRunRequest } from "../server/runner";
 
 /** Run reason when a request does not give one. */
@@ -19,15 +20,45 @@ const requestSchema = z.strictObject({
 
 export const REJECTED_DIR = "rejected";
 
+/** Why the run of a request did not start: the task waits. */
+export type WaitCause = "cap" | "busy" | "resource";
+
+/** A request whose task was created but whose run could not start now. */
+export type WaitingRequest = {
+  taskId: number;
+  room: string;
+  agentId: string;
+  agentName: string;
+  cause: WaitCause;
+  /** The daily cap, for `cap`. */
+  cap?: number;
+  /** The shared resource another run holds, for `resource`. */
+  resource?: string;
+};
+
 export type RequestsDeps = {
   config: HqConfig;
   db: Db;
   startRun?: (request: StartRunRequest) => RunRow;
   log: (message: string) => void;
+  /** Called for each request whose task waits (busy agent, busy resource, daily cap), so that the caller can say so. */
+  onWait?: (waiting: WaitingRequest) => void;
 };
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** What the wait of a request is made of, read from the error that refused its start. */
+function waitingOf(deps: RequestsDeps, taskId: number, request: { room: string; agent: string }, error: HqError): WaitingRequest {
+  const { agent } = findAgent(deps.config, request.room, request.agent);
+  const base = { taskId, room: request.room, agentId: agent.id, agentName: agent.name };
+  if (error.code === "DAILY_CAP_REACHED") return { ...base, cause: "cap", cap: liveConfig(deps.config).maxRunsPerDay };
+  if (error.code === "RESOURCE_BUSY") {
+    const holder = resourceHolder(deps.db, agent.resources);
+    return { ...base, cause: "resource", ...(holder ? { resource: holder.resource } : {}) };
+  }
+  return { ...base, cause: "busy" };
 }
 
 /** `name`, or `base (2).ext`... so that a rejected file never overwrites another. */
@@ -63,8 +94,9 @@ function readRequest(config: HqConfig, file: string): z.infer<typeof requestSche
  * Hands the chat's requests to the agents. Each `*.json` file of `dir` holds
  * `{ room, agent, task, reason? }`: MyHQ creates a pending task for that agent
  * with the text, starts a run at once (reason `chat`, or the given one) that
- * takes it from the mailbox, then deletes the file. A busy agent or the daily
- * cap leave the task for the agent's next run. A file that cannot be read,
+ * takes it from the mailbox, then deletes the file. A busy agent, a busy
+ * resource or the daily cap leave the task for the agent's next run, and
+ * `onWait` is told so (the chat then says it to the owner). A file that cannot be read,
  * does not match the shape or names an unknown agent is logged and moved to
  * `<dir>/rejected/`. Never throws. Returns the number of tasks created.
  */
@@ -123,6 +155,13 @@ export function processChatRequests(dir: string, deps: RequestsDeps): number {
       deps.log(`chat request ${name}: task #${taskId} for ${request.room}/${request.agent}, run #${run.id} started`);
     } catch (error) {
       const waits = error instanceof HqError && WAITS.has(error.code);
+      if (waits) {
+        try {
+          deps.onWait?.(waitingOf(deps, taskId, request, error));
+        } catch (waitError) {
+          deps.log(`chat request ${name}: wait not reported: ${describe(waitError)}`);
+        }
+      }
       deps.log(
         `chat request ${name}: task #${taskId} for ${request.room}/${request.agent} ${
           waits ? "waits for the agent's next run" : "created, run not started"

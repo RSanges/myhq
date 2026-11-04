@@ -40,6 +40,15 @@ export function deskLinkLine(env: Env = process.env): string | null {
   return base ? strings.notify.desk(`${base}${DESK_PATH}`) : null;
 }
 
+/** The settings page, where the daily cap can be raised. */
+export const SETTINGS_PATH = "/reglages";
+
+/** « Réglages : <url>/reglages », or null without HQ_PUBLIC_URL. */
+export function settingsLinkLine(env: Env = process.env): string | null {
+  const base = publicUrl(env);
+  return base ? strings.notify.settings(`${base}${SETTINGS_PATH}`) : null;
+}
+
 /** `text` followed by a line (a blank line between), or `text` itself when there is no line. */
 export function withLine(text: string, line: string | null): string {
   return line ? `${text}\n\n${line}` : text;

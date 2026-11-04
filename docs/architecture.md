@@ -484,11 +484,38 @@ each run. Consequences:
 - Same agent lock, shared resources and daily cap as any run. A busy agent,
   or one whose resource another run holds, is woken again when that run ends
   (its task is newer than the agent's last run); with the cap reached, the
-  task waits for the agent's next run.
+  task waits (see "The daily cap" below).
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.
 - Two agents with the default `onMessage` writing to each other keep waking
   each other until the daily cap; `"queue"` on one of them breaks the loop.
+
+#### The daily cap
+
+The cap counts the runs started on the local calendar day (`runsToday`), all
+agents together. When it is reached, every start is refused with
+`DAILY_CAP_REACHED` and the tasks stay pending. Three things make that visible
+and temporary:
+
+- **Resuming.** `resumeWaitingTasks` (`src/server/runner.ts`) is called at each
+  tick of the scheduler's timer (every 15 s, and once at startup), scheduler on
+  or off. It does nothing while `runsToday` is at the cap; as soon as it is not
+  (the day changed, or the cap was raised on `/reglages`), it calls `wakeAgents`,
+  so the waiting tasks are woken in the same order (task id) and under the same
+  rules (`onApproval`, `onMessage`, `onRevise`, the lock, the resources, and the
+  cap again: tasks beyond it wait for the next day). The check is stateless, so
+  a restart of the app after midnight resumes them as well. A run that ends
+  still calls `wakeAgents` itself, which is what frees a busy agent or
+  resource.
+- **One alert a day.** The first refusal for the cap of a day sends a Telegram
+  alert (`src/server/cap-alert.ts`): the cap, the number of pending tasks, and
+  when `HQ_PUBLIC_URL` is set a line `Réglages : <url>/reglages`. The day is
+  marked by an empty file in `<data>/cap-alerts/<YYYY-MM-DD>` (day in
+  `HQ_TIMEZONE`, created exclusively, older markers removed). A send that fails
+  or is not configured removes the marker, so a later refusal tries again.
+- **The chat is told.** The core's facts given to the chat (`runs` field of the
+  preamble) say "Plafond atteint" once the cap is reached, with the instruction
+  not to promise that the work is in progress.
 
 #### Revising a room proposal
 
@@ -859,7 +886,12 @@ order:
    run starts at once under the usual lock and cap (reason `chat`, or the
    given one); the file is deleted, a malformed one is moved to
    `<dir>/rejected/`. This is how the chat hands an action to an agent without
-   holding its tools. The optional `afterReply` command runs after each
+   holding its tools. The requests are handled before the reply is built,
+   because the chat writes its answer without knowing whether the run could
+   start: when it could not (busy agent, busy shared resource, daily cap), the
+   core appends a factual French line to the reply, as for the actions (« Noté
+   (tâche #161), mais Agenda ne peut pas tourner avant minuit : plafond de 60
+   tours atteint... »). The history keeps what the user read. The optional `afterReply` command runs after each
    reply, its output logged only.
 
 **One pipeline, two channels.** The chat turn (step 4 above, the actions, the
