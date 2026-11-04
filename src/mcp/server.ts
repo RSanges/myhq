@@ -5,6 +5,7 @@
  * written by the runner). It reads its context from HQ_DB_PATH, HQ_RUN_ID,
  * HQ_AGENT_ID and HQ_ROOM, and writes directly to SQLite.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -35,8 +36,13 @@ function respond(run: () => unknown): ToolResult {
 }
 
 async function main(): Promise<void> {
-  // This file is started by path (see hqMcpServerCommand): the templates are two levels up.
-  const templatesDir = path.resolve(path.dirname(process.argv[1] ?? "."), "..", "..", "templates", "roles");
+  // This file is started by path (see hqMcpServerCommand). The frozen build carries its own copy of the
+  // templates next to it; from the sources they are two levels up.
+  const here = path.dirname(process.argv[1] ?? ".");
+  const frozenTemplates = path.join(here, "templates", "roles");
+  const templatesDir = fs.existsSync(frozenTemplates)
+    ? frozenTemplates
+    : path.resolve(here, "..", "..", "templates", "roles");
   const ctx = { ...readContext(process.env), templatesDir };
   const db = openDb(ctx.dbPath);
   const server = new McpServer({ name: "hq", version: "0.1.0" });

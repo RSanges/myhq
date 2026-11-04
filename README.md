@@ -160,6 +160,12 @@ From then on, closing the terminal does not stop the app. Useful commands:
 `pm2 status`, `pm2 logs myhq`, `pm2 restart myhq`. After pulling new code:
 `npm install`, `npm run build`, then `pm2 restart myhq`.
 
+`npm run build` also writes a frozen copy of the HQ MCP server that every agent
+run starts (`build/mcp/`, ignored by Git). Agents therefore run the code of the
+last build, not whatever is in the repository folder at that moment (such as
+uncommitted work). Without that copy (development) the runner uses the sources
+and logs a warning.
+
 ### Restart at boot on Windows
 
 pm2 has no startup hook on Windows: a scheduled task runs `pm2 resurrect` when

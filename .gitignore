@@ -10,3 +10,4 @@ data/
 /coverage/
 *.tsbuildinfo
 next-env.d.ts
+/build/

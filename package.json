@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 4242 -H 127.0.0.1",
-    "build": "next build",
+    "build": "next build && tsx scripts/build-mcp.ts",
     "start": "next start -p 4242 -H 127.0.0.1",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "build:mcp": "tsx scripts/build-mcp.ts",
     "mcp": "tsx src/mcp/server.ts",
     "init": "tsx scripts/init.ts"
   },
@@ -28,6 +29,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.4",
     "tailwindcss": "^4",

@@ -117,6 +117,24 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
 
+**The server runs from a frozen copy.** Each run starts this server, and it
+opens the database in service and migrates it. Started from the sources of the
+repository folder, it would run whatever is in that folder at that moment:
+the uncommitted code of an agent (or of the developer) working there would run
+in production. So `npm run build` ends with `scripts/build-mcp.ts` (esbuild,
+a development dependency), which bundles `src/mcp/server.ts` and the app
+modules it imports into `build/mcp/server.mjs`, next to a copy of
+`templates/roles` (the folder is ignored by Git). The npm packages stay
+external and are read from `node_modules` (`better-sqlite3` is native). The
+runner (`hqMcpServerCommand`) starts that copy with `node build/mcp/server.mjs`,
+so a deployment is what runs, until the next `npm run build`. The new copy is
+built beside the old one and swapped in, and a failed build keeps the old one.
+When the copy is missing (development, tests) the runner falls back to the
+sources through tsx and logs a warning once per process (`no frozen HQ MCP
+server`): seeing it in the service's logs means the build was not run. The
+assistant's chat never starts this server (its per-turn config holds only the
+chat's own servers), and `npm run mcp` still runs the sources by hand.
+
 ### Routines
 
 An internal scheduler (`src/server/routines.ts`) starts runs at set times from
@@ -528,6 +546,8 @@ through the approval queue.
 - **App**: Next.js 16, TypeScript (strict), Tailwind. Not deployed: `npm run dev`
   during development, then a local service for real use (`next build`, then
   `next start -p 4242`, managed by pm2 with an `ecosystem.config.cjs` file).
+  `npm run build` also freezes the HQ MCP server that every run starts (see
+  "The HQ MCP server").
   Closing the terminal or rebooting the machine must not stop the app: on
   Windows a scheduled task restarts pm2 at boot, on Linux `pm2 startup` does it.
   The app listens on localhost only until remote access is decided.

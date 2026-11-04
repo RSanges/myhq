@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { mcpBundleEntry } from "../mcp/bundle";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } from "./engine";
 import type { Env } from "./config";
 import { HqError } from "./errors";
@@ -28,8 +29,30 @@ export function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}... [${text.length - limit} more characters]`;
 }
 
-/** Command that starts the HQ MCP server, with absolute paths (the agent runs elsewhere). */
-export function hqMcpServerCommand(repoRoot: string): { command: string; args: string[] } {
+const warnedSources = new Set<string>();
+
+/**
+ * Command that starts the HQ MCP server, with absolute paths (the agent runs elsewhere).
+ *
+ * It runs the frozen copy made by `npm run build` (build/mcp/server.mjs), so
+ * that the code of the working directory, which an agent may be editing, never
+ * runs against the database in service. Without that copy (development,
+ * tests) it falls back to the sources and says so once per process, since in
+ * production this means unreviewed code could run.
+ */
+export function hqMcpServerCommand(
+  repoRoot: string,
+  warn: (message: string) => void = (message) => console.warn(message),
+): { command: string; args: string[] } {
+  const bundle = mcpBundleEntry(repoRoot);
+  if (fs.existsSync(bundle)) return { command: process.execPath, args: [bundle] };
+  if (!warnedSources.has(bundle)) {
+    warnedSources.add(bundle);
+    warn(
+      `[runner] WARNING: no frozen HQ MCP server at ${bundle}; agents will run the sources of ${repoRoot}, ` +
+        "uncommitted changes included. Run `npm run build` (or `npm run build:mcp`) to freeze a copy.",
+    );
+  }
   const loader = path.join(repoRoot, "node_modules", "tsx", "dist", "loader.mjs");
   return {
     command: process.execPath,
