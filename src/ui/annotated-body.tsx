@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { cutQuote, type Annotation } from "@/server/annotations";
 import { insertAnnotation, locateQuotes, plainText, quoteOf, rangeOffsets, type Mark, type Span } from "./annotate";
 import { parseMarkdown } from "./markdown";
@@ -254,8 +254,8 @@ export function AnnotatedBody({
           {floating && !editing && (
             <button
               type="button"
-              className={`${buttonClass("primary")} absolute z-10 shadow-md`}
-              style={{ top: floating.top, left: floating.left }}
+              className={`${buttonClass("primary")} ann-float absolute z-10 shadow-md`}
+              style={{ "--ann-top": `${floating.top}px`, "--ann-left": `${floating.left}px` } as CSSProperties}
               onPointerDown={(event) => {
                 event.preventDefault();
                 holdRef.current = true;

@@ -11,12 +11,14 @@ import { pendingTitle, selectAgents, selectHistory, selectPending } from "./mode
 import { strings } from "./strings";
 import { Team } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
+import { useDeepLink } from "./use-deep-link";
 import { useHq } from "./use-hq";
 import { useMediaQuery } from "./use-media-query";
 
 export function Dashboard() {
   const { model, dispatch, connection, loadError, usageFailed, retry, subscribeChat } = useHq();
   const chat = useChatToggle();
+  const target = useDeepLink();
   const wide = useMediaQuery("(min-width: 40rem)");
   const pending = useMemo(() => selectPending(model), [model]);
   const history = useMemo(() => selectHistory(model), [model]);
@@ -75,12 +77,12 @@ export function Dashboard() {
             <Meter usage={model.usage} failed={usageFailed} />
           </div>
           <div className="order-1 min-w-0">
-            <Desk pending={pending} history={history} dispatch={dispatch} />
+            <Desk pending={pending} history={history} dispatch={dispatch} target={target} />
           </div>
           <div className="order-3 min-w-0 space-y-6">
             <Team agents={agents} invalidRooms={model.invalidRooms} scheduler={model.scheduler} dispatch={dispatch} />
             <RoutineJournal firings={model.firings} agents={agents} />
-            <Feed events={model.events} messages={model.messages} agents={agents} />
+            <Feed events={model.events} messages={model.messages} agents={agents} target={target} />
           </div>
         </div>
       )}

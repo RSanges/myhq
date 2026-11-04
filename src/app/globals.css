@@ -2337,3 +2337,45 @@ body {
     opacity: 0.7;
   }
 }
+
+/* An item or a feed row reached by a deep link (#approval-<id>, #run-<id>): ringed for a moment. */
+.deep-target {
+  scroll-margin-top: 1rem;
+}
+
+.deep-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  animation: deep-flash 2.4s ease-out;
+}
+
+@keyframes deep-flash {
+  from {
+    background-color: var(--accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-flash {
+    animation: none;
+  }
+}
+
+/* « Annoter » floats under the end of the selection with a mouse. On a touch screen the native handles and the
+   selection menu sit there, so it docks at the bottom of the screen instead, under the thumb. */
+.ann-float {
+  top: var(--ann-top);
+  left: var(--ann-left);
+}
+
+@media (pointer: coarse) {
+  .ann-float {
+    position: fixed;
+    top: auto;
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    left: 50%;
+    translate: -50% 0;
+    min-width: 11rem;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);
+  }
+}

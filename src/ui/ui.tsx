@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 type Variant = "primary" | "danger" | "neutral";
 
 const base =
-  "inline-flex min-h-10 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-10 pointer-coarse:min-h-12 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
 
 const variants: Record<Variant, string> = {
   primary: "border-accent bg-accent text-accent-fg hover:opacity-90",

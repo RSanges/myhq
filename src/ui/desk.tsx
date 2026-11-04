@@ -6,11 +6,13 @@ import { AnnotatedBody } from "./annotated-body";
 import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
 import { decideApproval, errorText } from "./api";
 import { HandoverControls } from "./copy-button";
+import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
 import { formatDateTime } from "./format";
 import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, type Action } from "./model";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
 import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
+import type { DeepLinkTarget } from "./use-deep-link";
 
 type Dispatch = (action: Action) => void;
 type NoteMode = "rejected" | "revise";
@@ -60,10 +62,13 @@ function PendingCard({
   onApproved,
   annotations,
   onAnnotations,
+  flash,
 }: {
   approval: Approval;
   dispatch: Dispatch;
   onApproved: (approval: Approval) => void;
+  /** Reached by a deep link: ringed for a moment. */
+  flash: boolean;
   /** The remarks made on the body so far: kept by the desk until the decision is sent. */
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
@@ -138,7 +143,10 @@ function PendingCard({
   const fieldId = `note-${approval.id}`;
 
   return (
-    <li className="space-y-3 rounded-lg border border-line bg-card p-4">
+    <li
+      id={approvalAnchor(approval.id)}
+      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${flash ? "deep-flash" : ""}`}
+    >
       <ApprovalHeader approval={approval} />
       <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
       {mode === null ? (
@@ -306,16 +314,31 @@ function HistoryCard({
   dispatch,
   annotations,
   onAnnotations,
+  flash,
+  expandNonce,
 }: {
   approval: Approval;
   dispatch: Dispatch;
   /** The remarks drafted for a revision of this item, kept by the desk until sent. */
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
+  /** Reached by a deep link: ringed for a moment. */
+  flash: boolean;
+  /** Changes each time a deep link asks for the body to be opened. */
+  expandNonce: number;
 }) {
   const [revising, setRevising] = useState(false);
+  const [open, setOpen] = useState(expandNonce > 0);
+  const [seenNonce, setSeenNonce] = useState(expandNonce);
+  if (seenNonce !== expandNonce) {
+    setSeenNonce(expandNonce);
+    setOpen(true);
+  }
   return (
-    <li className="space-y-3 rounded-lg border border-line bg-card p-4">
+    <li
+      id={approvalAnchor(approval.id)}
+      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${flash ? "deep-flash" : ""}`}
+    >
       <ApprovalHeader approval={approval} />
       <p className="flex flex-wrap items-center gap-2 text-sm">
         <Badge tone={decisionTone[approval.status]}>{strings.desk.decision[approval.status]}</Badge>
@@ -359,7 +382,7 @@ function HistoryCard({
               {strings.desk.requestRevision}
             </button>
           )}
-          <details>
+          <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
             <summary className="cursor-pointer text-sm text-muted">{strings.desk.openContent}</summary>
             <div className="mt-2 space-y-3">
               <ApprovalContent
@@ -375,7 +398,10 @@ function HistoryCard({
   );
 }
 
-type Tab = "pending" | "history";
+type Tab = DeskTab;
+
+/** How long an item reached by a deep link stays ringed. */
+const FLASH_MS = 2_400;
 
 const NO_ANNOTATIONS: Annotation[] = [];
 
@@ -383,12 +409,38 @@ export function Desk({
   pending,
   history,
   dispatch,
+  target,
 }: {
   pending: Approval[];
   history: Approval[];
   dispatch: Dispatch;
+  /** The deep link of the address bar, if any (#approval-<id>). */
+  target: DeepLinkTarget | null;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
+  const [flash, setFlash] = useState<{ id: number; nonce: number } | null>(null);
+  const [expand, setExpand] = useState({ id: 0, nonce: 0 });
+  const [handled, setHandled] = useState<number | null>(null);
+  // A deep link is followed once, as soon as the desk holds the data: the right tab, the item opened and ringed.
+  // An id the desk does not know is ignored. The hash stays in the address, so later refreshes of the data change nothing.
+  if (target && handled !== target.nonce) {
+    setHandled(target.nonce);
+    const hit = resolveApprovalLink(target.link, [...pending, ...history]);
+    if (hit) {
+      setTab(hit.tab);
+      setFlash({ id: hit.id, nonce: target.nonce });
+      setExpand((current) => ({ id: hit.id, nonce: current.nonce + 1 }));
+    }
+  }
+  useEffect(() => {
+    if (flash === null) return;
+    document.getElementById(approvalAnchor(flash.id))?.scrollIntoView({
+      block: "start",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+    const timer = window.setTimeout(() => setFlash(null), FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
   // Remarks made on pending items, kept here (not in the cards) until the decision is sent: a tab switch or a refresh keeps them.
   const [drafts, setDrafts] = useState<Record<number, Annotation[]>>({});
   // An approved item that points to a thread, a branch to push or a CLAUDE.md block is now the user's: show it in the history.
@@ -396,7 +448,7 @@ export function Desk({
     if (payloadUrl(approval.payload) || branchHandover(approval) || claudeMdHandover(approval)) setTab("history");
   };
   const tabClass = (active: boolean) =>
-    `min-h-10 rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+    `min-h-10 pointer-coarse:min-h-12 rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
       active ? "bg-soft" : "text-muted hover:bg-soft"
     }`;
 
@@ -440,6 +492,7 @@ export function Desk({
                   onApproved={showHandover}
                   annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
                   onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
+                  flash={flash?.id === approval.id}
                 />
               ))}
             </ul>
@@ -455,6 +508,8 @@ export function Desk({
                 dispatch={dispatch}
                 annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
                 onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
+                flash={flash?.id === approval.id}
+                expandNonce={expand.id === approval.id ? expand.nonce : 0}
               />
             ))}
           </ul>

@@ -77,16 +77,19 @@ export function HandoverControls({ approval, prominent }: { approval: Approval; 
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className={prominent ? buttonClass("primary") : "break-all text-accent underline underline-offset-2"}
+      className={buttonClass(prominent ? "primary" : "neutral")}
     >
-      {prominent ? strings.desk.openLink : `${strings.desk.openLink} : ${url}`}
+      {strings.desk.openLink}
     </a>
   );
   if (!prominent) {
     return (
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-2 text-sm">
-        <CopyButton text={approval.body} id={String(approval.id)} />
-        {link}
+      <div className="space-y-2 text-sm">
+        <div className="flex flex-wrap items-start gap-2">
+          <CopyButton text={approval.body} id={String(approval.id)} />
+          {link}
+        </div>
+        <p className="break-all text-xs text-muted">{url}</p>
       </div>
     );
   }
