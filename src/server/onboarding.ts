@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { getConfig, type HqConfig } from "./config";
-import type { RunRow, TaskRow } from "./db";
+import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { loadHome, toPosix, type Agent, type Model, type Room } from "./rooms";
+import { ROOM_PROPOSAL } from "./proposal";
 import { launchRun, type RunnerDeps } from "./runner";
 import { onboardingTask, RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 import { strings } from "../ui/strings";
@@ -79,6 +80,8 @@ export function buildOnboardingPrompt(p: {
   language?: string;
   templatesDir: string;
   mailbox: TaskRow[];
+  /** The proposals the user sent back, for the revision tasks of the mailbox. */
+  previous?: PreviousProposal[];
 }): string {
   const templates = listRoleTemplates(p.templatesDir);
   const language = p.language ?? DEFAULT_LANGUAGE;
@@ -114,11 +117,102 @@ export function buildOnboardingPrompt(p: {
     "Leave out \"role\" and \"armed\": MyHQ writes roles/<id>.md and leaves every routine disarmed.",
     "Ids are lowercase letters, digits, '-' or '_'.",
   ];
-  if (p.mailbox.length > 0) {
+  const previous = p.previous ?? [];
+  const revised = new Set(previous.map((r) => r.taskId));
+  for (const proposal of previous) {
+    lines.push(
+      "",
+      `REVISION RUN. The user sent your previous proposal #${proposal.approvalId} back (${proposal.status}).`,
+      `Previous proposal #${proposal.approvalId}: "${proposal.title}"${proposal.proposed ? `, ${proposal.proposed}` : ""}.`,
+      "Summary of what you proposed:",
+      ...proposal.summary.split("\n").map((line) => `> ${line}`),
+      "",
+      `The user's revision of #${proposal.approvalId}:`,
+      proposal.revision,
+      "",
+      `Produce a new room_proposal for this same repository that answers each remark above (the remarks quote passages of your previous proposal). Submit it with hq_submit as a new item: #${proposal.approvalId} cannot be edited. Then call hq_task_update with done. The room name must not be one of the rooms that already exist.`,
+    );
+  }
+  const others = p.mailbox.filter((task) => !revised.has(task.id));
+  if (others.length > 0) {
     lines.push("", "Revision requests from the user (apply those about this repository, ignore the others):");
-    for (const task of p.mailbox) lines.push(`- ${task.text}`);
+    for (const task of others) lines.push(`- ${task.text}`);
   }
   return lines.join("\n");
+}
+
+/** A proposal the user sent back, as the revision run reads it. */
+export type PreviousProposal = {
+  taskId: number;
+  approvalId: number;
+  title: string;
+  /** The state of the item (`revise` or `rejected`). */
+  status: string;
+  /** The room and agents it proposed, or null when its payload is unreadable. */
+  proposed: string | null;
+  /** What the agent wrote of it (its own body, without the files MyHQ appended), cut. */
+  summary: string;
+  /** The user's revision: the text of the task (remarks then general note). */
+  revision: string;
+  /** The room name it proposed, to be suggested again. */
+  roomName: string | null;
+};
+
+const SUMMARY_MAX = 3_000;
+
+/** The room.json part of a stored proposal, read defensively. */
+function proposedRoom(payload: string): { name: string | null; targetRepo: string | null; proposed: string | null } {
+  try {
+    const room = (JSON.parse(payload) as { room?: { name?: unknown; targetRepo?: unknown; agents?: unknown } }).room;
+    const name = typeof room?.name === "string" ? room.name : null;
+    const targetRepo = typeof room?.targetRepo === "string" ? room.targetRepo : null;
+    const agents: string[] = [];
+    if (Array.isArray(room?.agents)) {
+      for (const a of room.agents as { id?: unknown; model?: unknown }[]) {
+        if (typeof a?.id === "string") agents.push(`${a.id} (${String(a.model ?? "?")})`);
+      }
+    }
+    const proposed = name ? `room "${name}"${agents.length > 0 ? ` with agents ${agents.join(", ")}` : ""}` : null;
+    return { name, targetRepo, proposed };
+  } catch {
+    return { name: null, targetRepo: null, proposed: null };
+  }
+}
+
+/** The room proposal a revision task of the onboarding agent is about, or null. */
+function proposalOf(db: Db, task: TaskRow): ApprovalRow | null {
+  if (task.source !== "revise" || task.ref_id === null) return null;
+  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(task.ref_id) as ApprovalRow | undefined;
+  return row?.type === ROOM_PROPOSAL ? row : null;
+}
+
+/**
+ * The repository a revision task of the onboarding agent is about, as an
+ * absolute path (the `targetRepo` of the proposal, relative to the home), or
+ * null for a task that is not a revision of a room proposal.
+ */
+export function revisionTarget(config: HqConfig, db: Db, task: TaskRow): string | null {
+  const row = proposalOf(db, task);
+  const targetRepo = row ? proposedRoom(row.payload).targetRepo : null;
+  return targetRepo ? path.resolve(config.home, targetRepo) : null;
+}
+
+function previousProposal(db: Db, task: TaskRow): PreviousProposal | null {
+  const row = proposalOf(db, task);
+  if (!row) return null;
+  const room = proposedRoom(row.payload);
+  // The stored body is the agent's text then the files MyHQ appended ("## room.json" and the rest).
+  const own = row.body.split(/\n## room\.json\n/)[0]!.trim();
+  return {
+    taskId: task.id,
+    approvalId: row.id,
+    title: row.title,
+    status: row.status,
+    proposed: room.proposed,
+    summary: own.length > SUMMARY_MAX ? `${own.slice(0, SUMMARY_MAX)}...` : own,
+    revision: task.text,
+    roomName: room.name,
+  };
 }
 
 /** MyHQ's onboarding agent for one target repository. */
@@ -149,12 +243,19 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
   };
 }
 
-export type OnboardingDeps = RunnerDeps & { model?: Model };
+export type OnboardingDeps = RunnerDeps & {
+  model?: Model;
+  /** Stored on the run (`runs.reason`): `revise` for a run that answers a revision. Default: none. */
+  reason?: string;
+};
 
 /**
  * Starts an onboarding run for a target repository (a path relative to the
  * home, or absolute), with the same lock and daily cap as any run. Throws
- * TARGET_NOT_FOUND when the path is not a directory.
+ * TARGET_NOT_FOUND when the path is not a directory. The run takes the
+ * pending tasks of the onboarding agent that are about this repository (the
+ * revisions of its proposals) or about none; those about another repository
+ * stay in the mailbox for their own run.
  */
 export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps: OnboardingDeps = {}): RunRow {
   const config = deps.config ?? getConfig();
@@ -170,22 +271,86 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
   room.agents.push(agent);
   const targetRepo = toPosix(path.relative(config.home, target)) || ".";
   const task = onboardingTask(targetRepo);
+  const db = getDbAt(config.dbPath);
+  const claimIds = (
+    db
+      .prepare("SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'")
+      .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[]
+  )
+    .filter((t) => {
+      const about = revisionTarget(config, db, t);
+      return about === null || about === target;
+    })
+    .map((t) => t.id);
   return launchRun({
     config,
     deps,
     room,
     agent,
     task,
-    prompt: (runId, mailbox) =>
-      buildOnboardingPrompt({
+    reason: deps.reason ?? null,
+    claimIds,
+    prompt: (runId, mailbox) => {
+      const previous = mailbox.flatMap((t) => previousProposal(db, t) ?? []);
+      // A revision run proposes the same room name again, unless a room took it since.
+      const proposed = previous.find((r) => r.roomName && !existingRooms.includes(r.roomName))?.roomName;
+      return buildOnboardingPrompt({
         runId,
         target,
         targetRepo,
-        roomName: suggestRoomName(path.basename(target)),
+        roomName: proposed ?? suggestRoomName(path.basename(target)),
         existingRooms,
         language,
         templatesDir: roleTemplatesDir(config.repoRoot),
         mailbox,
-      }),
+        previous,
+      });
+    },
   });
+}
+
+/**
+ * Starts the onboarding runs that pending revisions ask for. The onboarding
+ * agent is not a room agent (wakeAgents does not know it): a revision (or a
+ * rejection with a note) of a `room_proposal` gives it a task, and this
+ * function runs it, at once, on the repository of that proposal, with reason
+ * `revise`. One run per repository, the oldest revision first; it takes the
+ * revisions of that repository together. Same lock and daily cap as any run:
+ * a busy agent or the cap leave the task pending, and the next wake-up (the
+ * end of a run, the next decision, the next start of the app) tries again.
+ * A revision whose repository is gone is blocked with a note. As for the other
+ * agents, a repository is not woken again by a revision older than its last
+ * onboarding run, so that a failing run is not retried in a loop.
+ */
+export function wakeOnboarding(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
+  const pending = db
+    .prepare("SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND source = 'revise' AND status = 'pending' ORDER BY id")
+    .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[];
+  const started: RunRow[] = [];
+  const done = new Set<string>();
+  for (const task of pending) {
+    const target = revisionTarget(config, db, task);
+    if (target === null || done.has(target)) continue;
+    done.add(target);
+    if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+      db.prepare("UPDATE tasks SET status = 'blocked', note = ?, updated_at = ? WHERE id = ?").run(
+        `The repository ${target} is not a directory.`,
+        now(),
+        task.id,
+      );
+      continue;
+    }
+    const targetRepo = toPosix(path.relative(config.home, target)) || ".";
+    const last = db
+      .prepare("SELECT MAX(started_at) AS at FROM runs WHERE room = ? AND agent_id = ? AND task = ?")
+      .get(ONBOARDING_ROOM, ONBOARDING_AGENT, onboardingTask(targetRepo)) as { at: string | null };
+    if (last.at !== null && task.created_at <= last.at) continue;
+    try {
+      started.push(startOnboarding({ path: targetRepo }, { ...deps, config, reason: "revise" }));
+    } catch (error) {
+      if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "DAILY_CAP_REACHED")) continue;
+      console.error(`[onboarding] could not start the revision run for ${targetRepo}`, error);
+    }
+  }
+  return started;
 }

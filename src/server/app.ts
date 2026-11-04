@@ -1,6 +1,7 @@
 import { getConfig, type HqConfig } from "./config";
 import { getDbAt, type Db } from "./db";
 import { loadHome, syncHome, type Home } from "./rooms";
+import { wakeOnboarding } from "./onboarding";
 import { recoverInterruptedRuns } from "./runner";
 
 const globalForApp = globalThis as unknown as { __myhqStarted?: Set<string> };
@@ -20,6 +21,13 @@ export function app(): { config: HqConfig; db: Db } {
     if (recovered > 0) console.warn(`[myhq] ${recovered} interrupted run(s) marked as failed`);
     const home = loadAndSyncHome(config, db);
     console.log(`[myhq] home ${config.home}: ${home.rooms.length} room(s)`);
+    // Revisions of room proposals asked while the app was down (or busy) run now.
+    try {
+      const resumed = wakeOnboarding(config, db);
+      if (resumed.length > 0) console.log(`[myhq] ${resumed.length} onboarding revision run(s) started`);
+    } catch (error) {
+      console.error("[myhq] onboarding revisions could not be resumed", error);
+    }
   }
   return { config, db };
 }

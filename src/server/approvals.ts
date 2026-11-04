@@ -40,8 +40,10 @@ export function revisionTaskText(
   type: string,
   note: string | null,
   annotations: readonly Annotation[],
+  /** The item was rejected, not sent back: the user's note still tells what to change. */
+  rejected = false,
 ): string {
-  const head = `Revise your submission #${id} "${title}" (${type}).`;
+  const head = `Revise your submission #${id} "${title}" (${type})${rejected ? ", which the user rejected" : ""}.`;
   if (annotations.length === 0) return `${head} User's note: ${note}`;
   return `${head} User's remarks:
 ${decisionText(note, annotations)}`;
@@ -68,7 +70,10 @@ function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" |
  * it has. Any other decision on a decided item is `APPROVAL_ALREADY_DECIDED`.
  * A revision wakes the agent at once (`wakeAgents`, reason `revise`) unless it
  * has `onRevise: "queue"`; the wake-up needs `config`, the callers of the app
- * always give it.
+ * always give it. A `room_proposal` is the onboarding agent's, which is no room
+ * agent: a revision, and a rejection too (its note says what to change),
+ * gives it the same task and relaunches onboarding on the proposal's
+ * repository (see `wakeOnboarding`).
  *
  * Approving a `room_proposal` writes the room in the home first (see
  * proposal.ts): when that fails, the item stays pending and the error is
@@ -132,7 +137,8 @@ export function decideApproval(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), id);
-      if (decision.decision === "revise") {
+      if (decision.decision === "rejected" && row.type === ROOM_PROPOSAL) wakeFor = config ?? null;
+      if (decision.decision === "revise" || (decision.decision === "rejected" && row.type === ROOM_PROPOSAL)) {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,
@@ -140,7 +146,7 @@ export function decideApproval(
           row.room,
           row.agent_id,
           id,
-          revisionTaskText(id, row.title, row.type, note, annotations),
+          revisionTaskText(id, row.title, row.type, note, annotations, decision.decision === "rejected"),
           at,
           at,
         );

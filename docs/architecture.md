@@ -259,6 +259,7 @@ last run started, of source:
 | `message` (`hq_message`) | `message` | unless `onMessage: "queue"` |
 | `approval` (an approved item) | `approval` | when `onApproval: "task"` (with `"queue"` the task waits; without the field there is no task) |
 | `chat` (a request of the chat) | `chat` | always |
+| `revise` of a `room_proposal` | `revise` | the onboarding agent, always (see below) |
 
 A task typed to an agent in the conversation panel (`desk`) starts its run
 directly. The run's task is "Handle the pending tasks of your mailbox", and the
@@ -274,6 +275,32 @@ each run. Consequences:
   so the agent is not woken again in a loop: they wait for its next run.
 - Two agents with the default `onMessage` writing to each other keep waking
   each other until the daily cap; `"queue"` on one of them breaks the loop.
+
+#### Revising a room proposal
+
+The onboarding agent (`_hq/onboarding`) is in no room of the home and runs
+only for a path (`POST /api/onboarding`), so the wake-up above does not know
+it. `wakeOnboarding` (`src/server/onboarding.ts`), called by `wakeAgents`,
+covers it. A `revise` decision on a `room_proposal`, or a rejection (its
+note says what to change), creates a `revise` task for `_hq/onboarding`
+(the text is the remarks then the general note, as for any revision) and
+relaunches onboarding at once, with reason `revise`, on the repository of the
+proposal (its `room.targetRepo`, relative to the home). The run prompt starts
+with `REVISION RUN`: it gives the previous proposal (title, room and agents,
+the text its agent wrote) and the user's revision, and asks for a new
+`room_proposal` that answers each remark. The new proposal is a new item
+(the old one stays sent back), and approving it still refuses a room name that
+exists. Consequences:
+
+- Same lock (one onboarding run at a time) and daily cap as any run. A busy
+  onboarding agent is woken again when its run ends. A run takes the
+  revisions of its own repository only; the others wait for their turn.
+- A revision is not woken again by a failing run (the task is older than that
+  run, per repository), as for the other agents.
+- A pending revision is also taken when the app starts (`app()`, once per
+  process), so a revision decided while the app was down or busy runs after the
+  next restart without manual action.
+- A revision whose repository is gone is blocked, with a note.
 
 ### Why a run started
 
@@ -383,7 +410,8 @@ is itself submitted to the user's approval.
    (never over an existing room), loads it back, creates the worktree of each
    agent that has one (`git worktree add`, branch `hq/<agent>`), and syncs the
    home: the room is live without a restart. Rejection and revision work as
-   for any item (a revision note reaches the next onboarding run).
+   for any item (a revision or a rejection with a note relaunches onboarding at
+   once on the same repository, see "Revising a room proposal").
 3. **Initialize the target project (minimal and standard).** The same
    onboarding item proposes a short "HQ agents" block for the project's
    `CLAUDE.md`: how to run the tests, where the docs live, what is forbidden

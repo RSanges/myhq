@@ -6,10 +6,11 @@ import { test } from "node:test";
 import { hqSubmit, ToolError } from "../src/mcp/tools";
 import { parseStreamLine } from "../src/server/claude-engine";
 import { decideApproval } from "../src/server/approvals";
-import { getDbAt, type ApprovalRow, type Db } from "../src/server/db";
+import { app } from "../src/server/app";
+import { getDbAt, type ApprovalRow, type Db, type RunRow, type TaskRow } from "../src/server/db";
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
-import { ONBOARDING_AGENT, ONBOARDING_ROOM, startOnboarding, suggestRoomName } from "../src/server/onboarding";
+import { ONBOARDING_AGENT, ONBOARDING_ROOM, startOnboarding, suggestRoomName, wakeOnboarding } from "../src/server/onboarding";
 import { normalizeRoomProposal } from "../src/server/proposal";
 import { loadHome } from "../src/server/rooms";
 import { roleTemplatesDir } from "../src/server/templates";
@@ -295,4 +296,213 @@ test("a role sent as content (translated by the agent) replaces the instantiated
   const roles = (JSON.parse(row.payload) as { roles: Record<string, { content: string }> }).roles;
   assert.equal(roles.dev!.content, "# Acme : développeur\n\nTu corriges les bugs d'Acme.\n");
   assert.match(roles.watch!.content, /^# Acme: /);
+});
+
+// A revision of a room proposal: the onboarding agent is in no room of the home,
+// so wakeAgents does not know it; wakeOnboarding relaunches it on the same repository.
+
+const send = async () => true;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function until(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition not met");
+    await sleep(10);
+  }
+}
+
+const endEvent = (status: "done" | "failed"): RunEvent => ({
+  type: "end",
+  status,
+  reason: status === "done" ? "success" : "spawn_error",
+  summary: status === "done" ? "ok" : "boom",
+  usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+  costUsd: 0,
+});
+
+const submitProposal = (ctx: ReturnType<typeof setup>["ctx"], db: Db, targetRepo: string, name = "acme") =>
+  hqSubmit(db, ctx, {
+    type: "room_proposal",
+    title: `Room proposal: ${name}`,
+    body: "Two agents for Acme.",
+    payload: proposal(targetRepo, name) as unknown as Record<string, unknown>,
+  }).approvalId;
+
+const revisionRuns = (db: Db) =>
+  db.prepare("SELECT * FROM runs WHERE room = ? AND reason = 'revise' ORDER BY id").all(ONBOARDING_ROOM) as RunRow[];
+
+const reviseTasks = (db: Db) =>
+  db.prepare("SELECT * FROM tasks WHERE room = ? AND source = 'revise' ORDER BY id").all(ONBOARDING_ROOM) as TaskRow[];
+
+test("a revision of a room proposal relaunches onboarding on the same repository, with the previous proposal and the remarks", async () => {
+  const { config, repo, db, targetRepo, ctx } = setup();
+  const id = submitProposal(ctx, db, targetRepo);
+  const seen: RunInput[] = [];
+  decideApproval(
+    db,
+    id,
+    { decision: "revise", note: "Fewer agents.", annotations: [{ quote: "Two agents", comment: "One is enough." }] },
+    config,
+    { engine: submittingEngine(db, proposal(targetRepo), seen), send },
+  );
+
+  const [run] = revisionRuns(db);
+  assert.ok(run, "a run started at once, with the reason revise");
+  assert.equal(run.agent_id, ONBOARDING_AGENT);
+  assert.equal(run.task, `Propose a room for the repository ${targetRepo}.`);
+  assert.equal((await waitForRun(db, run.id)).status, "done");
+
+  const input = seen[0]!;
+  assert.equal(input.workDir, repo);
+  assert.match(input.prompt, new RegExp(`"targetRepo": "${targetRepo.replace(/\./g, "\\.")}"`));
+  assert.match(input.prompt, /REVISION RUN\. The user sent your previous proposal #\d+ back \(revise\)/);
+  assert.match(input.prompt, /"Room proposal: acme", room "acme" with agents dev \(opus\), watch \(haiku\)/);
+  assert.match(input.prompt, /> Two agents for Acme\./);
+  assert.doesNotMatch(input.prompt, /> ## room\.json/);
+  assert.match(input.prompt, /À propos de « Two agents » : One is enough\./);
+  assert.match(input.prompt, /Remarque générale : Fewer agents\./);
+  assert.match(input.prompt, /answers each remark/);
+  assert.match(input.prompt, /Suggested room name: "acme"/);
+
+  // The revision task was taken by the run; the new proposal is a new item, the old one stays sent back.
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["done"]);
+  const items = db.prepare("SELECT id, status FROM approvals ORDER BY id").all() as { id: number; status: string }[];
+  assert.deepEqual(items.map((i) => i.status), ["revise", "pending"]);
+  // Approving the new one writes the room; a later proposal with the same name is still refused.
+  decideApproval(db, items[1]!.id, { decision: "approved" }, config);
+  assert.ok(loadHome(config.home).rooms.some((r) => r.name === "acme"));
+  const again = submitProposal(ctx, db, targetRepo);
+  assert.throws(
+    () => decideApproval(db, again, { decision: "approved" }, config),
+    (e: unknown) => e instanceof HqError && e.code === "ROOM_EXISTS",
+  );
+});
+
+test("a rejection of a room proposal, with its note, relaunches onboarding too; other items do not", async () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const seen: RunInput[] = [];
+  const id = submitProposal(ctx, db, targetRepo);
+  decideApproval(db, id, { decision: "rejected", note: "Too many agents." }, config, {
+    engine: submittingEngine(db, proposal(targetRepo), seen),
+    send,
+  });
+  const [run] = revisionRuns(db);
+  assert.ok(run);
+  await waitForRun(db, run.id);
+  assert.match(seen[0]!.prompt, /which the user rejected/);
+  assert.match(seen[0]!.prompt, /\(rejected\)/);
+  assert.match(seen[0]!.prompt, /Too many agents\./);
+
+  const other = Number(
+    db
+      .prepare(
+        "INSERT INTO approvals (room, agent_id, type, title, body, status, created_at) VALUES ('demo', 'scout', 'mail_reply', 't', 'b', 'pending', ?)",
+      )
+      .run(new Date().toISOString()).lastInsertRowid,
+  );
+  decideApproval(db, other, { decision: "rejected", note: "No." }, config, { send });
+  assert.equal(revisionRuns(db).length, 1);
+  assert.equal(reviseTasks(db).length, 1);
+});
+
+test("a revision while onboarding is busy waits, and runs when the busy run ends", async () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const other = makeRepo();
+  const otherRepo = path.relative(config.home, other).split(path.sep).join("/");
+  const seen: RunInput[] = [];
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const engine: Engine = {
+    name: "claude",
+    async *run(input) {
+      seen.push(input);
+      if (seen.length === 1) await gate;
+      yield endEvent("done");
+    },
+  };
+  const first = startOnboarding({ path: otherRepo }, { config, engine, send });
+  const id = submitProposal(ctx, db, targetRepo);
+  const elsewhere = submitProposal(ctx, db, otherRepo, "other");
+  decideApproval(db, id, { decision: "revise", note: "Change it." }, config, { engine, send });
+  decideApproval(db, elsewhere, { decision: "revise", note: "Change that one." }, config, { engine, send });
+
+  // One onboarding run at a time: both revisions wait.
+  assert.equal(revisionRuns(db).length, 0);
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending", "pending"]);
+  assert.equal(seen.length, 1);
+
+  release();
+  await waitForRun(db, first.id);
+  await until(() => revisionRuns(db).length === 2);
+  const runs = revisionRuns(db);
+  // The oldest revision first, each on its own repository: they never share a run.
+  assert.deepEqual(runs.map((r) => r.task), [
+    `Propose a room for the repository ${targetRepo}.`,
+    `Propose a room for the repository ${otherRepo}.`,
+  ]);
+  for (const run of runs) await waitForRun(db, run.id);
+  assert.match(seen[1]!.prompt, /Change it./);
+  assert.doesNotMatch(seen[1]!.prompt, /Change that one./);
+  assert.match(seen[2]!.prompt, /Change that one./);
+  assert.doesNotMatch(seen[2]!.prompt, /Change it./);
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["done", "done"]);
+});
+
+test("the daily cap leaves a revision pending, and a failing revision run is not retried in a loop", async () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const id = submitProposal(ctx, db, targetRepo);
+  const failing: Engine = {
+    name: "claude",
+    async *run() {
+      yield endEvent("failed");
+    },
+  };
+  decideApproval(db, id, { decision: "revise", note: "Change it." }, { ...config, maxRunsPerDay: 1 }, { engine: failing, send });
+  // The setup run already counts for today: nothing started.
+  assert.equal(revisionRuns(db).length, 0);
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending"]);
+
+  wakeOnboarding(config, db, { engine: failing, send });
+  await until(() => revisionRuns(db).length === 1);
+  await waitForRun(db, revisionRuns(db)[0]!.id);
+  await sleep(100);
+  assert.equal(revisionRuns(db).length, 1, "the failed run did not wake itself again");
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending"]);
+});
+
+test("a revision whose repository is gone is blocked, not retried", () => {
+  const { config, db, ctx } = setup();
+  const id = submitProposal(ctx, db, "../vanished-project");
+  decideApproval(db, id, { decision: "revise", note: "Change it." }, config, { send });
+  assert.equal(revisionRuns(db).length, 0);
+  const [task] = reviseTasks(db);
+  assert.equal(task!.status, "blocked");
+  assert.match(task!.note ?? "", /vanished-project/);
+});
+
+test("at startup, a pending revision of the onboarding agent runs without manual action", async () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const id = submitProposal(ctx, db, targetRepo);
+  // Decided while the app was down, or without a config: the task exists, nothing ran.
+  decideApproval(db, id, { decision: "revise", note: "Change it." });
+  assert.equal(revisionRuns(db).length, 0);
+  assert.deepEqual(reviseTasks(db).map((t) => t.status), ["pending"]);
+
+  const saved = { home: process.env.MYHQ_HOME, bin: process.env.HQ_CLAUDE_BIN };
+  process.env.MYHQ_HOME = config.home;
+  process.env.HQ_CLAUDE_BIN = "claude-binary-not-installed-in-tests";
+  try {
+    app();
+  } finally {
+    if (saved.home === undefined) delete process.env.MYHQ_HOME;
+    else process.env.MYHQ_HOME = saved.home;
+    if (saved.bin === undefined) delete process.env.HQ_CLAUDE_BIN;
+    else process.env.HQ_CLAUDE_BIN = saved.bin;
+  }
+  const [run] = revisionRuns(db);
+  assert.ok(run, "the sweep of the start started the run");
+  assert.equal(run.task, `Propose a room for the repository ${targetRepo}.`);
+  // No binary: the run fails, which proves it was really launched.
+  assert.equal((await waitForRun(db, run.id)).status, "failed");
 });

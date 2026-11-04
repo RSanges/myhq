@@ -9,6 +9,7 @@ import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
+import { wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
@@ -193,6 +194,8 @@ function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
  * throws for a busy agent or the cap; returns the runs started.
  */
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
+  // MyHQ's own onboarding agent is in no room of the home: its revisions are woken apart.
+  const onboarding = wakeOnboarding(config, db, deps);
   const candidates = db
     .prepare(
       `SELECT t.room, t.agent_id, t.source FROM tasks t
@@ -202,9 +205,9 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
        ORDER BY t.id`,
     )
     .all() as WakeCandidate[];
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return onboarding;
   const home = loadHome(config.home);
-  const started: RunRow[] = [];
+  const started: RunRow[] = [...onboarding];
   const done = new Set<string>();
   for (const candidate of candidates) {
     const key = `${candidate.room}/${candidate.agent_id}`;
@@ -237,6 +240,8 @@ export function launchRun(params: {
   task: string;
   /** Stored on the run (`runs.reason`); null for a run started by hand or a routine. */
   reason?: string | null;
+  /** Only these pending tasks of the agent go into the run's mailbox. Default: all of them. */
+  claimIds?: number[];
   prompt: (runId: number, mailbox: TaskRow[]) => string;
 }): RunRow {
   const { config, deps, room, agent, task } = params;
@@ -276,12 +281,15 @@ export function launchRun(params: {
         `INSERT INTO tasks (room, agent_id, source, text, status, run_id, created_at, updated_at)
          VALUES (?, ?, 'manual', ?, 'in_progress', ?, ?, ?)`,
       ).run(room.name, agent.id, task, runId, at, at);
+      const only = params.claimIds;
       const claimed = db
         .prepare(
           `UPDATE tasks SET status = 'in_progress', run_id = ?, updated_at = ?
-           WHERE room = ? AND agent_id = ? AND status = 'pending' RETURNING *`,
+           WHERE room = ? AND agent_id = ? AND status = 'pending'${
+             only ? ` AND id IN (${only.map(() => "?").join(", ")})` : ""
+           } RETURNING *`,
         )
-        .all(runId, at, room.name, agent.id) as TaskRow[];
+        .all(runId, at, room.name, agent.id, ...(only ?? [])) as TaskRow[];
       return {
         run: db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as RunRow,
         mailbox: claimed.sort((a, b) => a.id - b.id),
