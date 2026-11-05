@@ -107,7 +107,7 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 | `hq_message(to, text, room?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
-| `hq_read_decisions()` | Read the user's decisions not yet seen by this agent. |
+| `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
 | `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, `forRoom`, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
@@ -116,6 +116,24 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
+
+**The database is shared by several processes.** The app and the HQ MCP
+server of every run open the same SQLite file, each connection in WAL mode
+with a busy timeout of 10 s (`openDb`, `BUSY_TIMEOUT_MS`, set before anything
+else). The timeout only covers a statement that starts outside a transaction
+or a `BEGIN IMMEDIATE`: a deferred transaction that reads, then writes, fails
+at once with `SQLITE_BUSY` ("database is locked") when another process wrote
+in between, whatever the timeout. So every transaction that writes after a
+read is `.immediate()` (`hq_read_decisions`, `hq_submit`, `hq_message`, the
+decisions, the start of a run). A tool that meets a database error returns an
+explicit error result (`toolErrorText`): it says that nothing was read or
+written, that it is not an empty result, and to call the tool again, never to
+submit the item a second time. `hq_submit` also refuses an obvious duplicate:
+an item of the same agent with the same type, title and body that is still
+waiting (`pending`, `unseen`) or was approved in the last 24 hours is not
+stored again; the answer gives its id, its status, `duplicate: true` and a
+note. The receptionist's proposals are not concerned (they are checked when
+approved).
 
 **The server runs from a frozen copy.** Each run starts this server, and it
 opens the database in service and migrates it. Started from the sources of the
@@ -524,8 +542,52 @@ each run. Consequences:
   task waits (see "The daily cap" below).
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.
-- Two agents with the default `onMessage` writing to each other keep waking
-  each other until the daily cap; `"queue"` on one of them breaks the loop.
+- A run interrupted because MyHQ stopped (`cancelled`, see "Stopping and
+  restarting") does not count, once: the tasks it gives back wake the agent
+  again after the restart. A task whose resumed run is interrupted again (two
+  interruptions since it was created) waits for the agent's next run, so an
+  app that crashes during a run does not resume it in a loop.
+- A message from an agent wakes its recipient at most once per window per pair
+  of agents (`HQ_MESSAGE_WAKE_MINUTES`, 10 by default, 0 to wake at each
+  message): when a run of the recipient started for a message (reason
+  `message`) took a message of the same sender less than a window ago, the new
+  message waits in the mailbox. Another task of the recipient (another
+  sender, a revision, a chat request) still wakes it, and its run takes the
+  waiting message too; otherwise the scheduler's tick (every 15 s, see "The
+  daily cap") wakes it once the window is over. Two agents that answer each
+  other ("received", "still waiting") then wake each other once per window,
+  not at each message; `"queue"` on one of them stops it altogether.
+
+#### Stopping and restarting
+
+A stop of the app (pm2 `stop` or `restart`, Ctrl+C) waits for the runs in
+progress (`installShutdown`, `src/server/runner.ts`). On SIGINT, SIGTERM or the
+`shutdown` message that pm2 sends with `shutdown_with_message` (on Windows a
+signal kills a process outright, so `ecosystem.config.cjs` sets it), no run
+starts any more (`SHUTTING_DOWN`, 503: a wake-up leaves the task pending, a
+routine journals an error), the runs in progress get
+`HQ_SHUTDOWN_GRACE_SECONDS` (90 s by default) to end, then the ones still
+going are interrupted: `cancelled`, summary « Interrupted: MyHQ stopped during
+the run. », no failure alert, their mailbox tasks back to `pending` and their
+own instruction `blocked`, as for a failed run. Then the process exits. A
+second signal exits at once. Next.js would stop the server on its own on these
+signals: `NEXT_MANUAL_SIG_HANDLE=true` (in `ecosystem.config.cjs`) leaves them
+to MyHQ, and pm2's `kill_timeout` (100 s) must stay above the grace.
+
+A process killed outright leaves its runs `running` and their tasks
+`in_progress`. At startup, `app()` first takes the home for its process
+(`data/app.lock`, the pid of the owner; a lock of a dead process is taken
+over), then closes those runs as `cancelled` and gives back every task still
+`in_progress` whose run is not in progress (interrupted, failed, or none):
+`recoverInterruptedRuns` and `releaseOrphanTasks`. The first tick of the
+scheduler then wakes them by the rules above. A second MyHQ started on the same
+home while the first one still runs (pm2 starting an instance while an earlier
+one holds the port) does not own it: it leaves the runs of the first one alone
+and wakes nobody.
+
+`GET /api/runs/active` lists the runs in progress and says whether the app is
+stopping; `npm run wait-idle` polls it until nothing runs, so that a deployment
+starts in a quiet moment (`README.md`, "Running as a service").
 
 #### The daily cap
 

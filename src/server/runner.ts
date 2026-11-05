@@ -80,21 +80,47 @@ function promptLanguage(home: string): string {
   }
 }
 
-type ActiveRun = { controller: AbortController; reason: "timeout" | null; mcpConfigPath: string | null };
+/**
+ * Why a run was stopped by the app: its timeout, or the app stopping (the run
+ * is then `cancelled`, an interruption, see `releaseOrphanTasks`).
+ */
+type ActiveRun = { controller: AbortController; reason: "timeout" | "shutdown" | null; mcpConfigPath: string | null };
 
-const globalForRunner = globalThis as unknown as {
-  __myhqRunner?: { active: Map<number, ActiveRun>; dbPath: string | null; exitHook: boolean };
+type RunnerState = {
+  active: Map<number, ActiveRun>;
+  /** The executions in progress, until their end is recorded and their alerts are sent. */
+  executing: Set<Promise<void>>;
+  dbPath: string | null;
+  exitHook: boolean;
+  /** Set once the app is asked to stop: no run starts any more (`SHUTTING_DOWN`). */
+  stopping: boolean;
+  shutdownHook: boolean;
 };
 
-function runnerState() {
-  globalForRunner.__myhqRunner ??= { active: new Map(), dbPath: null, exitHook: false };
+const globalForRunner = globalThis as unknown as { __myhqRunner?: RunnerState };
+
+function runnerState(): RunnerState {
+  globalForRunner.__myhqRunner ??= {
+    active: new Map(),
+    executing: new Set(),
+    dbPath: null,
+    exitHook: false,
+    stopping: false,
+    shutdownHook: false,
+  };
   return globalForRunner.__myhqRunner;
 }
 
+/** The summary of a run interrupted because MyHQ stopped during it (status `cancelled`). */
+export const INTERRUPTED_SUMMARY = "Interrupted: MyHQ stopped during the run.";
+
 /**
- * When the app stops (pm2 restart, Ctrl+C), the runs in progress are marked
- * `cancelled` and their processes killed. Synchronous on purpose: it runs in
- * the process `exit` event.
+ * When the process exits with runs still in progress (the grace of a stop is
+ * over, or the process was told to exit without one), they are marked
+ * `cancelled`, their tasks are given back (`releaseOrphanTasks`) and their
+ * processes killed. Synchronous on purpose: it runs in the process `exit`
+ * event. A process killed outright (no `exit` event) is caught up at the next
+ * start by `recoverInterruptedRuns`.
  */
 function installExitHook(dbPath: string): void {
   const state = runnerState();
@@ -108,20 +134,112 @@ function installExitHook(dbPath: string): void {
       "UPDATE runs SET status = 'cancelled', ended_at = ?, summary = ? WHERE id = ? AND status = 'running'",
     );
     for (const [runId, run] of state.active) {
-      cancel.run(now(), "MyHQ stopped during the run.", runId);
+      cancel.run(now(), INTERRUPTED_SUMMARY, runId);
       run.controller.abort();
       if (run.mcpConfigPath) removeMcpConfig(run.mcpConfigPath);
     }
+    releaseOrphanTasks(db);
   });
 }
 
-/** Runs left `running` by a crash of the app are closed as failed at startup. */
-export function recoverInterruptedRuns(db: Db): number {
+/**
+ * Gives back the tasks left `in_progress` by a run that is no longer in
+ * progress (interrupted, failed, or gone), as the end of a failed run does:
+ * the run's own instruction (`manual`) is blocked with a note, the mailbox
+ * tasks go back to `pending`, to be woken by the usual rules (`wakeAgents`).
+ */
+export function releaseOrphanTasks(db: Db): { requeued: number; blocked: number } {
+  const orphan =
+    "status = 'in_progress' AND (run_id IS NULL OR NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = tasks.run_id AND r.status = 'running'))";
+  const at = now();
   return db
-    .prepare(
-      "UPDATE runs SET status = 'failed', ended_at = ?, summary = ? WHERE status = 'running'",
-    )
-    .run(now(), "Interrupted: MyHQ stopped during the run.").changes;
+    .transaction(() => ({
+      blocked: db
+        .prepare(`UPDATE tasks SET status = 'blocked', note = COALESCE(note, ?), updated_at = ? WHERE source = 'manual' AND ${orphan}`)
+        .run(INTERRUPTED_SUMMARY, at).changes,
+      requeued: db
+        .prepare(`UPDATE tasks SET status = 'pending', run_id = NULL, updated_at = ? WHERE source <> 'manual' AND ${orphan}`)
+        .run(at).changes,
+    }))
+    .immediate();
+}
+
+/**
+ * At startup, in the one process that owns the home (see `app()`): the runs a
+ * crash or a forced stop left `running` are closed as `cancelled`
+ * (interrupted), and the tasks they held are given back. Returns the runs
+ * closed and the tasks given back.
+ */
+export function recoverInterruptedRuns(db: Db): { runs: number; requeued: number; blocked: number } {
+  const runs = db
+    .prepare("UPDATE runs SET status = 'cancelled', ended_at = ?, summary = ? WHERE status = 'running'")
+    .run(now(), INTERRUPTED_SUMMARY).changes;
+  return { runs, ...releaseOrphanTasks(db) };
+}
+
+/** Whether the app was asked to stop: no run starts any more. */
+export function isStopping(): boolean {
+  return runnerState().stopping;
+}
+
+/**
+ * Stops starting runs, waits up to `graceMs` for the runs in progress to end,
+ * then interrupts the ones still going (`cancelled`, their tasks given back to
+ * be woken again at the next start) and waits for their end to be recorded.
+ * Returns how many runs ended on their own and how many were interrupted.
+ */
+export async function stopRuns(graceMs: number, pollMs = 250): Promise<{ ended: number; interrupted: number }> {
+  const state = runnerState();
+  state.stopping = true;
+  const before = state.active.size;
+  const deadline = Date.now() + graceMs;
+  while (state.active.size > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
+  }
+  const interrupted = state.active.size;
+  for (const run of state.active.values()) {
+    run.reason = "shutdown";
+    run.controller.abort();
+  }
+  // The end of an interrupted run is recorded as soon as its process is gone: a few seconds at most.
+  await Promise.race([
+    Promise.allSettled([...state.executing]),
+    new Promise((resolve) => setTimeout(resolve, 5_000).unref()),
+  ]);
+  return { ended: before - interrupted, interrupted };
+}
+
+/**
+ * Makes a stop of the app wait for the runs in progress: on SIGINT, SIGTERM
+ * or the `shutdown` message of pm2 (`shutdown_with_message`, the only way to
+ * stop a process gently on Windows), no run starts any more, the runs in
+ * progress get `config.shutdownGraceMs` to end, then the process exits. A
+ * second signal exits at once. Next.js stops the server on its own on these
+ * signals unless NEXT_MANUAL_SIG_HANDLE is set (ecosystem.config.cjs sets it).
+ * Installed once per process, by the server only.
+ */
+export function installShutdown(config: HqConfig, exit: (code: number) => void = (code) => process.exit(code)): void {
+  const state = runnerState();
+  if (state.shutdownHook) return;
+  state.shutdownHook = true;
+  const stop = (why: string) => {
+    if (state.stopping) {
+      console.warn(`[runner] ${why} again: exiting now`);
+      exit(1);
+      return;
+    }
+    const seconds = Math.round(config.shutdownGraceMs / 1000);
+    console.log(`[runner] ${why}: no new run, waiting up to ${seconds} s for ${state.active.size} run(s) in progress`);
+    void stopRuns(config.shutdownGraceMs)
+      .then(({ ended, interrupted }) => console.log(`[runner] stopping: ${ended} run(s) ended, ${interrupted} interrupted`))
+      .catch((error: unknown) => console.error("[runner] stopping the runs failed", error))
+      .finally(() => exit(0));
+  };
+  process.on("SIGINT", () => stop("SIGINT"));
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  process.on("message", (message) => {
+    if (message === "shutdown") stop("shutdown message");
+  });
 }
 
 export function runsToday(db: Db): number {
@@ -227,7 +345,14 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
   });
 }
 
-type WakeCandidate = { room: string; agent_id: string; source: "approval" | "message" | "revise" | "chat" };
+type WakeCandidate = {
+  room: string;
+  agent_id: string;
+  source: "approval" | "message" | "revise" | "chat";
+  /** For a message: who sent it. */
+  from_room: string | null;
+  from_agent: string | null;
+};
 
 /** Whether a task of this source wakes the agent: every one does unless the agent opted out (`queue`). */
 function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
@@ -253,18 +378,26 @@ function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
  * is taken by the agent's next run, and an agent still busy is woken again
  * when its run ends (the app calls this after each decision, on each tool
  * result and at the end of each run). Tasks given back by a failed run are
- * older than that run, so a failing agent is not woken in a loop. Never
- * throws for a busy agent or the cap; returns the runs started.
+ * older than that run, so a failing agent is not woken in a loop. A run
+ * interrupted because MyHQ stopped (`cancelled`) does not count, once: its
+ * tasks, given back, wake the agent again after the restart, and a second
+ * interruption of the same tasks leaves them for the agent's next run. A
+ * message from an agent wakes its recipient at most once per
+ * `config.messageWakeIntervalMs` per pair of agents (see `pairWokeRecently`):
+ * the next ones wait, and the scheduler's tick wakes them once the window is
+ * over. Never throws for a busy agent or the cap; returns the runs started.
  */
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   // MyHQ's own onboarding agent is in no room of the home: its revisions are woken apart.
   const onboarding = wakeOnboarding(config, db, deps);
   const candidates = db
     .prepare(
-      `SELECT t.room, t.agent_id, t.source FROM tasks t
+      `SELECT t.room, t.agent_id, t.source, t.from_room, t.from_agent FROM tasks t
        WHERE t.status = 'pending' AND t.source IN ('approval', 'message', 'revise', 'chat')
-         AND t.created_at > COALESCE(
-           (SELECT MAX(r.started_at) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id), '')
+         AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
+           AND r.started_at >= t.created_at AND r.status <> 'cancelled')
+         AND (SELECT COUNT(*) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
+           AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1
        ORDER BY t.id`,
     )
     .all() as WakeCandidate[];
@@ -272,12 +405,15 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const home = loadHome(config.home);
   const started: RunRow[] = [...onboarding];
   const done = new Set<string>();
+  const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
   for (const candidate of candidates) {
     const key = `${candidate.room}/${candidate.agent_id}`;
     if (done.has(key)) continue;
     const agent = home.rooms.find((r) => r.name === candidate.room)?.agents.find((a) => a.id === candidate.agent_id);
     if (!agent) continue;
     if (!wakesAgent(agent, candidate.source)) continue;
+    // Another task of the agent may still wake it, and its run then takes this one too.
+    if (candidate.source === "message" && config.messageWakeIntervalMs > 0 && pairWokeRecently(db, candidate, since)) continue;
     done.add(key);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
@@ -291,8 +427,28 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   return started;
 }
 
+/**
+ * Whether a message of the same sender already woke this recipient since
+ * `since`: a run started for a message (reason `message`) took one of that
+ * sender's messages. Two agents answering each other ("received", "waiting")
+ * then wake each other once per window, not at each message.
+ */
+function pairWokeRecently(db: Db, candidate: WakeCandidate, since: string): boolean {
+  if (!candidate.from_room || !candidate.from_agent) return false;
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM runs r JOIN tasks m ON m.run_id = r.id
+         WHERE r.room = ? AND r.agent_id = ? AND r.reason = 'message' AND r.started_at > ?
+           AND m.source = 'message' AND m.from_room = ? AND m.from_agent = ?
+         LIMIT 1`,
+      )
+      .get(candidate.room, candidate.agent_id, since, candidate.from_room, candidate.from_agent) !== undefined
+  );
+}
+
 /** Errors that leave a woken task pending, to be taken by a later run. */
-export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"]);
+export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED", "SHUTTING_DOWN"]);
 
 /**
  * Wakes the agents whose tasks wait for the daily cap, once the counter allows
@@ -334,6 +490,9 @@ export function launchRun(params: {
   attempt?: number;
 }): RunRow {
   const { config, deps, room, agent, task } = params;
+  if (runnerState().stopping) {
+    throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: the run of "${agent.id}" starts after the restart.`);
+  }
   const db = getDbAt(config.dbPath);
   installExitHook(config.dbPath);
   const engine = deps.engine ?? new ClaudeEngine(config.claudeBin);
@@ -403,9 +562,15 @@ export function launchRun(params: {
   const prompt = `${params.prompt(run.id, mailbox)}\n\n${today}`;
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
   const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
-  void execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps, retry }).catch((error) => {
-    console.error(`[runner] run #${run.id} crashed`, error);
-  });
+  const execution = execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps, retry }).catch(
+    (error) => {
+      console.error(`[runner] run #${run.id} crashed`, error);
+    },
+  );
+  // A stop of the app waits for it (stopRuns).
+  const executing = runnerState().executing;
+  executing.add(execution);
+  void execution.finally(() => executing.delete(execution));
   return run;
 }
 
@@ -557,13 +722,18 @@ async function execute(p: ExecuteParams): Promise<void> {
   let status: RunStatus = end?.status ?? "failed";
   let summary = end?.summary ?? "The engine ended without a result.";
   const retryDelayMs = p.deps.mcpRetryDelayMs ?? MCP_RETRY_DELAY_MS;
-  const retrying = mcpDown && p.retry !== null;
+  const retrying = mcpDown && p.retry !== null && active.reason !== "shutdown";
   if (mcpDown) {
     summary += retrying ? ` Retried once in ${Math.round(retryDelayMs / 1000)} s.` : " Second attempt: no retry.";
   }
   if (active.reason === "timeout") {
     status = "failed";
     summary = `Timed out after ${Math.round(config.runTimeoutMs / 60_000)} minutes (HQ_RUN_TIMEOUT_MINUTES).`;
+  }
+  if (active.reason === "shutdown") {
+    // Not a failure: the tasks go back to the queue and wake the agent again after the restart (wakeAgents).
+    status = "cancelled";
+    summary = INTERRUPTED_SUMMARY;
   }
   const usage = end?.usage ?? ZERO_USAGE;
   const at = now();

@@ -136,9 +136,12 @@ soon as its run ends; when the cap is reached, the task waits in its mailbox
 for its next run. Either way the task is listed in the prompt of the run that
 takes it, under "Pending tasks from your mailbox". A run that fails gives its
 mailbox tasks back, and they wait for the next run rather than waking the
-agent in a loop. Two agents that write to each other with the default
-`onMessage` keep waking each other: only the daily cap stops them, so set
-`"queue"` on an agent that converses rather than answers.
+agent in a loop. A message from one agent wakes its recipient at most once
+every 10 minutes per pair of agents (`HQ_MESSAGE_WAKE_MINUTES`, 0 to wake at
+each message): two agents that answer each other ("received", "still
+waiting") no longer wake each other at each message, the next messages wait
+in the mailbox for the recipient's next run (`architecture.md`, "Wake-ups").
+Set `"queue"` on an agent that converses rather than answers.
 
 An agent that sends approved mails could be declared like this (the
 `courrier` server and its tools belong to the home):

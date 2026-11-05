@@ -132,6 +132,29 @@ type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K
 
 export class ToolError extends Error {}
 
+/** A `better-sqlite3` error (`SqliteError`): it carries an SQLite result code such as SQLITE_BUSY. */
+function sqliteCode(error: unknown): string | null {
+  if (!(error instanceof Error) || error.name !== "SqliteError") return null;
+  const code = (error as Error & { code?: unknown }).code;
+  return typeof code === "string" ? code : "SQLITE_ERROR";
+}
+
+/**
+ * The text of a failed tool call, given back to the agent as an error result.
+ * A database error says so explicitly, and that nothing was read or written:
+ * an agent once took a busy database for an empty queue and submitted its
+ * item a second time.
+ */
+export function toolErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = sqliteCode(error);
+  if (code === null) return `Error: ${message}`;
+  if (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED")) {
+    return `Error: the office database is busy (${code}: ${message}). Nothing was read or written: this is not an empty result. Call the same tool again in a moment; never conclude from this error that an item is missing, and do not submit anything a second time.`;
+  }
+  return `Error: office database error (${code}: ${message}). Nothing was read or written: this is not an empty result.`;
+}
+
 /**
  * The rooms of the home as last synced (syncHome writes them all with the
  * same `synced_at`): a room removed from the home is no longer one of them.
@@ -179,19 +202,21 @@ export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
     ? `Message from ${ctx.agentId} of room "${ctx.room}" (answer with hq_message to "${ctx.agentId}", room "${ctx.room}"): ${parsed.text}`
     : `Message from ${ctx.agentId}: ${parsed.text}`;
   const at = now();
-  return db.transaction(() => {
-    const message = db
-      .prepare(
-        "INSERT INTO messages (room, from_agent, to_agent, to_room, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(ctx.room, ctx.agentId, parsed.to, elsewhere ? room : null, parsed.text, ctx.runId, at);
-    const messageId = Number(message.lastInsertRowid);
-    db.prepare(
-      `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, from_room, from_agent, created_at, updated_at)
-       VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?, ?, ?)`,
-    ).run(room, parsed.to, messageId, text, ctx.room, ctx.agentId, at, at);
-    return { messageId };
-  })();
+  return db
+    .transaction(() => {
+      const message = db
+        .prepare(
+          "INSERT INTO messages (room, from_agent, to_agent, to_room, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(ctx.room, ctx.agentId, parsed.to, elsewhere ? room : null, parsed.text, ctx.runId, at);
+      const messageId = Number(message.lastInsertRowid);
+      db.prepare(
+        `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, from_room, from_agent, created_at, updated_at)
+         VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?, ?, ?)`,
+      ).run(room, parsed.to, messageId, text, ctx.room, ctx.agentId, at, at);
+      return { messageId };
+    })
+    .immediate();
 }
 
 /** The shared rooms of the home and their agents: the studios any agent may order from. Read-only. */
@@ -247,7 +272,16 @@ function assertNotRejected(db: Db, ctx: HqContext, payload: unknown): void {
   }
 }
 
-export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
+/** What hq_submit answers: the item's id and status; for a duplicate, the existing item and a note. */
+export type SubmitResult = {
+  approvalId: number;
+  status: ApprovalRow["status"];
+  files?: number;
+  duplicate?: true;
+  note?: string;
+};
+
+export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): SubmitResult {
   const parsed = z.object(inputs.hq_submit).parse(args);
   let { body, payload } = parsed;
   // A shared room delivers to the room that ordered: the item goes to that room's pile.
@@ -315,32 +349,72 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // The item and the copies of its files are one: a failed copy leaves neither.
-  const approvalId = db.transaction(() => {
-    const result = insert.run(
-      ctx.room,
-      ctx.agentId,
-      ctx.runId,
-      parsed.type,
-      parsed.title,
-      body,
-      JSON.stringify(payload ?? {}),
-      informational ? "unseen" : "pending",
-      null,
-      null,
-      informational ? at : null,
-      forRoom,
-      at,
-    );
-    const id = Number(result.lastInsertRowid);
-    // MyHQ keeps its database in the data directory of the home.
-    storeAttachments(db, path.dirname(path.resolve(ctx.dbPath)), id, files);
-    return id;
-  })();
+  // Immediate: the check for a duplicate and the insert see the same queue.
+  const stored = db
+    .transaction((): { id: number; duplicate: ApprovalRow["status"] | null } => {
+      // The receptionist's proposals are checked when they are approved (ROOM_EXISTS, AGENT_EXISTS).
+      const proposal = parsed.type === ROOM_PROPOSAL || parsed.type === AGENT_PROPOSAL;
+      const twin = proposal ? undefined : sameItem(db, ctx, parsed.type, parsed.title, body);
+      if (twin) return { id: twin.id, duplicate: twin.status };
+      const result = insert.run(
+        ctx.room,
+        ctx.agentId,
+        ctx.runId,
+        parsed.type,
+        parsed.title,
+        body,
+        JSON.stringify(payload ?? {}),
+        informational ? "unseen" : "pending",
+        null,
+        null,
+        informational ? at : null,
+        forRoom,
+        at,
+      );
+      const id = Number(result.lastInsertRowid);
+      // MyHQ keeps its database in the data directory of the home.
+      storeAttachments(db, path.dirname(path.resolve(ctx.dbPath)), id, files);
+      return { id, duplicate: null };
+    })
+    .immediate();
+  if (stored.duplicate !== null) {
+    return {
+      approvalId: stored.id,
+      status: stored.duplicate,
+      duplicate: true,
+      note: `Item #${stored.id} is this same item (same type, title and body), ${stored.duplicate}: nothing new was submitted. Refer to #${stored.id}; read its decision with hq_read_decisions.`,
+    };
+  }
+  const approvalId = stored.id;
   return {
     approvalId,
     ...(files.length > 0 ? { files: files.length } : {}),
     status: informational ? ("unseen" as const) : ("pending" as const),
   };
+}
+
+/** How long an approved item still counts as the same one for a submission of the same content. */
+const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * An item of this agent with the same type, title and body that is still
+ * waiting (pending, or informational and unseen), or was approved in the last
+ * 24 hours: submitting it again is a duplicate (a run that could not read its
+ * decisions once submitted its script a second time). Body compared without
+ * the blanks around it.
+ */
+function sameItem(db: Db, ctx: HqContext, type: string, title: string, body: string): Pick<ApprovalRow, "id" | "status"> | undefined {
+  const since = new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT id, status, body FROM approvals
+       WHERE room = ? AND agent_id = ? AND type = ? AND title = ?
+         AND (status IN ('pending', 'unseen') OR (status = 'approved' AND decided_at >= ?))
+       ORDER BY id`,
+    )
+    .all(ctx.room, ctx.agentId, type, title, since) as Pick<ApprovalRow, "id" | "status" | "body">[];
+  const twin = rows.find((row) => row.body.trim() === body.trim());
+  return twin ? { id: twin.id, status: twin.status } : undefined;
 }
 
 const SUGGESTION_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -397,28 +471,32 @@ export function hqTaskUpdate(db: Db, ctx: HqContext, args: Args<"hq_task_update"
 }
 
 export function hqReadDecisions(db: Db, ctx: HqContext) {
-  return db.transaction(() => {
-    const rows = db
-      .prepare(
-        `SELECT * FROM approvals WHERE room = ? AND agent_id = ?
-         AND status NOT IN ('pending', 'unseen', 'seen') AND seen_by_agent_at IS NULL ORDER BY decided_at, id`,
-      )
-      .all(ctx.room, ctx.agentId) as ApprovalRow[];
-    const markSeen = db.prepare("UPDATE approvals SET seen_by_agent_at = ? WHERE id = ?");
-    const at = now();
-    for (const row of rows) markSeen.run(at, row.id);
-    return {
-      decisions: rows.map((row) => ({
-        approvalId: row.id,
-        type: row.type,
-        title: row.title,
-        decision: row.status,
-        note: decisionText(row.decision_note, parseAnnotations(row.annotations)),
-        decidedAt: row.decided_at,
-        payload: JSON.parse(row.payload) as unknown,
-      })),
-    };
-  })();
+  // Immediate: a deferred transaction that reads, then marks the rows seen, fails at once
+  // (SQLITE_BUSY, whatever the busy timeout) when another process wrote in between.
+  return db
+    .transaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT * FROM approvals WHERE room = ? AND agent_id = ?
+           AND status NOT IN ('pending', 'unseen', 'seen') AND seen_by_agent_at IS NULL ORDER BY decided_at, id`,
+        )
+        .all(ctx.room, ctx.agentId) as ApprovalRow[];
+      const markSeen = db.prepare("UPDATE approvals SET seen_by_agent_at = ? WHERE id = ?");
+      const at = now();
+      for (const row of rows) markSeen.run(at, row.id);
+      return {
+        decisions: rows.map((row) => ({
+          approvalId: row.id,
+          type: row.type,
+          title: row.title,
+          decision: row.status,
+          note: decisionText(row.decision_note, parseAnnotations(row.annotations)),
+          decidedAt: row.decided_at,
+          payload: JSON.parse(row.payload) as unknown,
+        })),
+      };
+    })
+    .immediate();
 }
 
 /**

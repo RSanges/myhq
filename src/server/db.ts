@@ -534,12 +534,24 @@ function migrate(db: Db): void {
   }
 }
 
+/**
+ * How long a connection waits for another one's write lock before SQLITE_BUSY.
+ * Several processes write to the same file (the app, one HQ MCP server per
+ * run), and every write is short. The wait only applies when a statement
+ * starts without a transaction or with BEGIN IMMEDIATE: a deferred transaction
+ * that reads first and writes next fails at once when another connection
+ * wrote in between, so every transaction that writes after a read is
+ * `.immediate()`.
+ */
+export const BUSY_TIMEOUT_MS = 10_000;
+
 /** Opens (and creates on first use) the SQLite database, then migrates it. */
 export function openDb(dbPath: string): Db {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
+  // First, so that even switching the journal mode waits for a busy file.
+  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.pragma("journal_mode = WAL");
-  db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   migrate(db);
   return db;

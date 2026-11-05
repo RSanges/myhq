@@ -2,6 +2,9 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { app } = await import("./server/app");
     const { config } = app();
+    // A stop (pm2 restart) waits for the runs in progress, up to HQ_SHUTDOWN_GRACE_SECONDS.
+    const { installShutdown } = await import("./server/runner");
+    installShutdown(config);
     const { startScheduler } = await import("./server/routines");
     startScheduler(config);
     const { startDailyExport } = await import("./server/export");

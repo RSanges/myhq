@@ -159,7 +159,25 @@ pm2 save                     # remember the process list for resurrect
 
 From then on, closing the terminal does not stop the app. Useful commands:
 `pm2 status`, `pm2 logs myhq`, `pm2 restart myhq`. After pulling new code:
-`npm install`, `npm run build`, then `pm2 restart myhq`.
+
+```sh
+npm install
+npm run wait-idle            # waits until no run is in progress (GET /api/runs/active)
+npm run build
+pm2 restart myhq
+```
+
+A restart never cuts a run on purpose: pm2 sends a `shutdown` message
+(`shutdown_with_message` in `ecosystem.config.cjs`), MyHQ starts no new run,
+waits up to `HQ_SHUTDOWN_GRACE_SECONDS` (90 s) for the runs in progress, then
+interrupts the ones still going, whose tasks wake their agents again after the
+restart. pm2's `kill_timeout` (100 s) must stay above that grace. pm2 reads
+these settings when the app is started from the file: after a change of
+`ecosystem.config.cjs`, run `pm2 delete myhq`, `pm2 start ecosystem.config.cjs`
+and `pm2 save` once (in a quiet moment, `npm run wait-idle` first). Check with
+`pm2 status` that pm2 tracks the process that holds the port: two MyHQ on the
+same home are refused at startup (`data/app.lock`), the second one only logs
+`another MyHQ process (pid ...) runs this home`.
 
 `npm run build` also writes a frozen copy of the HQ MCP server that every agent
 run starts (`build/mcp/`, ignored by Git). Agents therefore run the code of the

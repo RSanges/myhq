@@ -27,6 +27,7 @@ Every error has the same shape and an HTTP status:
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs (or `maxRunsPerDay` of `myhq.json`, which wins) were already started today (local day, all agents). |
+| `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts until it is back. |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
@@ -53,9 +54,11 @@ French text per `code`.
 | Agent `state` (in `/api/state`) | `working` (a run is in progress), `failed` (its last run failed), `idle` |
 | Firing `outcome` | `started`, `skipped_busy` (agent lock, or a shared resource held by another run), `skipped_cap` (daily cap), `skipped_unarmed`, `error` |
 
-A run is `cancelled` when the app stops during the run, and `failed` when the
-engine reports an error, the budget (`--max-budget-usd`) is exceeded, the run
-times out (`HQ_RUN_TIMEOUT_MINUTES`) or the app crashed during it.
+A run is `cancelled` when it was interrupted because the app stopped during it
+(the grace of a stop was over, or the app crashed or was killed: summary
+« Interrupted: MyHQ stopped during the run. »), and `failed` when the engine
+reports an error, the budget (`--max-budget-usd`) is exceeded or the run times
+out (`HQ_RUN_TIMEOUT_MINUTES`).
 
 All timestamps are ISO 8601 strings in UTC (`2026-11-02T16:18:11.256Z`). Ids
 are integers.
@@ -385,8 +388,19 @@ Response `202`:
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `UNAUTHORIZED` (401),
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
-`RESOURCE_BUSY` (409), `DAILY_CAP_REACHED` (429). The token, the lock, the
-shared resources and the cap are checked before anything is started.
+`RESOURCE_BUSY` (409), `DAILY_CAP_REACHED` (429), `SHUTTING_DOWN` (503). The
+token, the lock, the shared resources and the cap are checked before anything
+is started.
+
+### `GET /api/runs/active`
+
+The runs in progress, oldest first (whatever process started them), and
+whether the app is stopping. Read-only; a deployment waits on it
+(`npm run wait-idle`).
+
+```json
+{ "running": 1, "stopping": false, "runs": [{ "id": 12, "status": "running", "...": "Run shape" }] }
+```
 
 ### `GET /api/events`
 

@@ -670,6 +670,15 @@ export const strings = {
     message: (to: string) => `  message envoyé à ${to}`,
     finished: (runId: number, status: string) => `Tour #${runId} terminé : ${status}.`,
   },
+  /** `npm run wait-idle` (scripts/wait-idle.ts), in the terminal, before a deployment. */
+  waitIdle: {
+    usage: "Usage : npm run wait-idle -- [--timeout <secondes>] [--url http://127.0.0.1:4242]",
+    idle: "Aucun tour en cours : tu peux déployer.",
+    running: (runs: string) => `Tours en cours : ${runs}. J'attends qu'ils finissent...`,
+    timeout:
+      "Délai dépassé, des tours sont encore en cours : le redémarrage les attendra (HQ_SHUTDOWN_GRACE_SECONDS) puis les interrompra.",
+    unreachable: (url: string) => `MyHQ ne répond pas sur ${url} : aucun tour n'y tourne.`,
+  },
   errors: {
     generic: "Une erreur est survenue.",
     network: "Le serveur est injoignable.",

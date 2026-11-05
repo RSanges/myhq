@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { homeOwnedElsewhere } from "./app";
 import { liveConfig, type HqConfig } from "./config";
 import { describeCron, nextFire, parseCron, type CronSummary } from "./cron";
 import { getDbAt, now, type Db, type FiringOutcome, type FiringRow, type RunRow } from "./db";
@@ -298,6 +299,8 @@ function reconcile(host: SchedulerHost, at: Date = new Date()): void {
 function resumeWaiting(host: SchedulerHost): void {
   try {
     const config = currentConfig(host);
+    // A second process on the same home (see app()) must not start runs that die with it.
+    if (homeOwnedElsewhere(config.dbPath)) return;
     resumeWaitingTasks(config, getDbAt(config.dbPath));
   } catch (error) {
     console.error("[scheduler] resuming the waiting tasks failed", error);

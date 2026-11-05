@@ -40,6 +40,8 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     maxRunsPerDay: 12,
     defaultMaxBudgetUsd: 1,
     runTimeoutMs: 60_000,
+    shutdownGraceMs: 1_000,
+    messageWakeIntervalMs: 10 * 60_000,
     // Never the real binary: a wake-up that no test scripted must fail at once, not spend tokens.
     claudeBin: "claude-binary-not-installed-in-tests",
     scheduler: false,

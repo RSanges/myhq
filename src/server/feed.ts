@@ -126,6 +126,11 @@ export const toRun = (r: RunRow): RunDto => ({
   reason: r.reason ?? null,
 });
 
+/** The runs in progress, oldest first, whatever process started them (`GET /api/runs/active`). */
+export function runsInProgress(db: Db): RunDto[] {
+  return (db.prepare("SELECT * FROM runs WHERE status = 'running' ORDER BY id").all() as RunRow[]).map(toRun);
+}
+
 export const toEvent = (r: EventRow): EventDto => ({
   id: r.id,
   runId: r.run_id,

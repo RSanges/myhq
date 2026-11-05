@@ -22,16 +22,17 @@ import {
   hqTaskUpdate,
   inputs,
   readContext,
+  toolErrorText,
 } from "./tools";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
+/** A tool's answer, or its error: a database error is an explicit error, never an empty result. */
 function respond(run: () => unknown): ToolResult {
   try {
     return { content: [{ type: "text", text: JSON.stringify(run()) }] };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+    return { content: [{ type: "text", text: toolErrorText(error) }], isError: true };
   }
 }
 
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
     "hq_submit",
     {
       description:
-        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and stays on the desk under « À regarder » until they have seen it: it never waits for a decision, so it comes back with the status unseen and nothing to read back. An agent of a shared room delivers an order with `forRoom`, the room that ordered: the item shows in that room's pile, and the decisions still come back to you. A render to validate (video, image, sound, 3D part, PDF) goes in `attachments`, with paths relative to your working directory: the owner sees and plays it on the desk and on Telegram.",
+        "Submit an item to the user's approval queue. This is the only way to get anything published: never publish yourself. A room_proposal payload is checked at once: on an error, fix it and submit again. A type the home declares informational is delivered to the user at once and stays on the desk under « À regarder » until they have seen it: it never waits for a decision, so it comes back with the status unseen and nothing to read back. An agent of a shared room delivers an order with `forRoom`, the room that ordered: the item shows in that room's pile, and the decisions still come back to you. A render to validate (video, image, sound, 3D part, PDF) goes in `attachments`, with paths relative to your working directory: the owner sees and plays it on the desk and on Telegram. The same item (type, title and body) still waiting or approved in the last 24 hours is not submitted twice: the answer gives its id with `duplicate: true`.",
       inputSchema: inputs.hq_submit,
     },
     async (args) => respond(() => hqSubmit(db, ctx, args)),
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     "hq_read_decisions",
     {
       description:
-        "Read the user's decisions (approved, rejected, revise) on your submissions that you have not seen yet.",
+        "Read the user's decisions (approved, rejected, revise) on your submissions that you have not seen yet. Each decision is given once: the run that reads it acts on it.",
       inputSchema: inputs.hq_read_decisions,
     },
     async () => respond(() => hqReadDecisions(db, ctx)),
@@ -102,7 +103,7 @@ async function main(): Promise<void> {
     "hq_pending",
     {
       description:
-        "List the items waiting for the user's decision, in every room, oldest first: id, room, agent, type, title and submission time (no body). Read-only.",
+        "List the items waiting for the user's decision, in every room, oldest first: id, room, agent, type, title and submission time (no body). Read-only. An item already decided (approved, rejected, sent back) is no longer listed: an item missing from this list was decided, not lost; read your own decisions with hq_read_decisions.",
       inputSchema: inputs.hq_pending,
     },
     async () => respond(() => hqPending(db)),

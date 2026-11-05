@@ -11,7 +11,8 @@
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "build:mcp": "tsx scripts/build-mcp.ts",
     "mcp": "tsx src/mcp/server.ts",
-    "init": "tsx scripts/init.ts"
+    "init": "tsx scripts/init.ts",
+    "wait-idle": "tsx scripts/wait-idle.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

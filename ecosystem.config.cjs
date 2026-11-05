@@ -27,12 +27,19 @@ module.exports = {
       cwd: __dirname,
       script: "node_modules/next/dist/bin/next",
       args: `start -p ${port()} -H 127.0.0.1`,
-      env: { NODE_ENV: "production" },
+      // NEXT_MANUAL_SIG_HANDLE: MyHQ, not Next.js, handles the stop signals (it waits for the runs first).
+      env: { NODE_ENV: "production", NEXT_MANUAL_SIG_HANDLE: "true" },
       autorestart: true,
       restart_delay: 5000,
       max_restarts: 20,
-      // Leaves time to mark the runs in progress as cancelled.
-      kill_timeout: 10000,
+      // A stop or a restart is sent as a "shutdown" message rather than a signal: on Windows a
+      // signal kills the process outright. MyHQ then starts no run, waits up to
+      // HQ_SHUTDOWN_GRACE_SECONDS (90 s by default) for the runs in progress, interrupts the
+      // others (their tasks are woken again after the restart) and exits.
+      shutdown_with_message: true,
+      // Must stay above HQ_SHUTDOWN_GRACE_SECONDS plus a few seconds, or pm2 kills the process
+      // before the runs are recorded (they are then recovered at the next start).
+      kill_timeout: 100000,
     },
   ],
 };
