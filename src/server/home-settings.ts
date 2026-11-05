@@ -140,3 +140,42 @@ export function readFloorLayout(home: string): { layout: FloorLayoutMode; error:
 
 /** The decision note of an informational item (a type of `notifyTypes`), stored already approved. */
 export const NOTIFICATION_NOTE = "notification";
+
+/** The `projectsRoot` of myhq.json: the folder the room browser is limited to. */
+export const projectsRootSchema = z.string().trim().min(1).max(1_000);
+
+const reportedProjectsRootErrors = new Set<string>();
+
+/**
+ * The folder the room browser (`GET /api/fs/dirs`) is limited to, as an
+ * absolute path: `projectsRoot` of myhq.json (relative to the home, or
+ * absolute), else the parent folder of the home, where the repositories are
+ * usually kept. Read apart from the rest of the file (like `floor`): an
+ * invalid value falls back to the default, with the reason logged once, and
+ * never breaks the other settings. Never throws.
+ */
+export function readProjectsRoot(home: string): string {
+  const fallback = path.dirname(path.resolve(home));
+  const file = path.join(home, "myhq.json");
+  const report = (message: string) => {
+    if (reportedProjectsRootErrors.has(message)) return;
+    reportedProjectsRootErrors.add(message);
+    console.error(`[fs] ${message}: the parent folder of the home applies`);
+  };
+  let raw: unknown;
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    report(`myhq.json is not valid JSON: ${(error as Error).message}`);
+    return fallback;
+  }
+  const value = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).projectsRoot : undefined;
+  if (value === undefined) return fallback;
+  const parsed = projectsRootSchema.safeParse(value);
+  if (!parsed.success) {
+    report("myhq.json: projectsRoot must be a non-empty string");
+    return fallback;
+  }
+  return path.resolve(home, parsed.data);
+}

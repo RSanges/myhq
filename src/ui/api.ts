@@ -12,6 +12,7 @@ import {
   closeResponseSchema,
   deskSchema,
   deskSeenSchema,
+  dirListingSchema,
   errorBodySchema,
   itemAskResponseSchema,
   relaunchResponseSchema,
@@ -22,6 +23,7 @@ import {
   type Approval,
   type ChatReply,
   type Desk,
+  type DirListing,
   type Run,
   type State,
   type Usage,
@@ -122,6 +124,10 @@ export async function startRun(room: string, agent: string, task: string): Promi
 export async function startOnboarding(path: string): Promise<Run> {
   return (await request("/api/onboarding", runResponseSchema, jsonInit("POST", { path: path.trim() }))).run;
 }
+
+/** The sub-folders of a folder of the projects root (`path` is relative to the root, empty for the root). */
+export const fetchDirs = (path: string): Promise<DirListing> =>
+  request(`/api/fs/dirs?path=${encodeURIComponent(path)}`, dirListingSchema);
 
 export const fetchChatHistory = () => request("/api/chat/history?limit=50", chatHistorySchema);
 

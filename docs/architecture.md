@@ -796,7 +796,11 @@ is itself submitted to the user's approval.
 2. **Add a room (once per project): the onboarding agent.** Not a form. The
    user gives the path of the target repository (relative to the home, or
    absolute): « Ajouter une salle » on the team, `/salle <path>` on Telegram,
-   or `POST /api/onboarding`. MyHQ starts a run of its own onboarding agent,
+   or `POST /api/onboarding`. The path field of the form has a « Parcourir »
+   button next to it: a folder explorer (`dir-browser.tsx`, over
+   `GET /api/fs/dirs`) walks the projects root, the parent folder of the home
+   or `projectsRoot` of `myhq.json`, and writes the path of the folder chosen
+   in the field. MyHQ starts a run of its own onboarding agent,
    in a reserved room `_hq` that no folder can take, with the same lock and
    daily cap as any run: Sonnet, `--max-budget-usd` from
    `HQ_ONBOARDING_MAX_BUDGET_USD` (0.5 by default), the role prompt shipped in

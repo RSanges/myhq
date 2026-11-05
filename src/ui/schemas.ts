@@ -203,6 +203,17 @@ export const armResponseSchema = z.object({ agent: z.object({ room: z.string(), 
 
 export const errorBodySchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 export const runResponseSchema = z.object({ run: runSchema });
+
+/** `GET /api/fs/dirs`: the sub-folders of a folder of the projects root (docs/api.md). */
+export const dirListingSchema = z.object({
+  rootName: z.string(),
+  path: z.string(),
+  parent: z.string().nullable(),
+  target: z.string(),
+  project: z.boolean(),
+  room: z.string().nullable(),
+  dirs: z.array(z.object({ name: z.string(), path: z.string(), project: z.boolean(), room: z.string().nullable() })),
+});
 export const approvalResponseSchema = z.object({ approval: approvalSchema });
 /** The answer to « Demander à Rom2 »: the chat's reply (or why it did not answer), and the item as it is now. */
 export const itemAskResponseSchema = z.object({
@@ -339,6 +350,7 @@ export type Approval = z.infer<typeof approvalSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 export type State = z.infer<typeof stateSchema>;
 export type Usage = z.infer<typeof usageSchema>;
+export type DirListing = z.infer<typeof dirListingSchema>;
 export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;
 export type Scheduler = z.infer<typeof schedulerSchema>;

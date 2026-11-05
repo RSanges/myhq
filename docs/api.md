@@ -30,6 +30,9 @@ Every error has the same shape and an HTTP status:
 | `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts until it is back. |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
+| `PATH_OUTSIDE_ROOT` | 400 | `GET /api/fs/dirs`: the `path` is absolute (`/x`, `C:/x`), climbs (`..`), uses a backslash or a `:`, or leads out of the projects root through a link. |
+| `DIR_NOT_FOUND` | 404 | `GET /api/fs/dirs`: the `path` is not a folder of the projects root, or is a hidden or heavy one (a name starting with `.`, `node_modules`, `data`, `build`). |
+| `ROOT_NOT_FOUND` | 404 | `GET /api/fs/dirs`: the projects root (`projectsRoot` of `myhq.json`, else the parent folder of the home) is not a folder. |
 | `ROOM_EXISTS` | 409 | Approving a room proposal whose room already exists in the home. Nothing is written; the item stays pending. |
 | `PROPOSAL_INVALID` | 422 | Approving a room proposal that fails validation (payload, paths, target repository). Nothing is written; the item stays pending. |
 | `WORKTREE_FAILED` | 422 | Approving a room proposal, or an agent proposal, whose agent worktree cannot be created. Nothing is written; the item stays pending. |
@@ -1064,6 +1067,50 @@ so that a next fire that has come moves on, and an agent armed from Telegram
 shows it, without loading the state again.
 
 Errors: `INVALID_INPUT` for a bad `limit`.
+
+### `GET /api/fs/dirs`
+
+Lists the sub-folders of a folder, read-only, for the folder explorer behind
+« Parcourir » of the « Ajouter une salle » form (a browser never gives the
+absolute path of a folder picked in its own dialog). It works only inside the
+**projects root**: `projectsRoot` of `myhq.json` (relative to the home, or
+absolute), else the parent folder of the home, where the repositories are
+usually kept (`home-layout.md`, "myhq.json"). Paths on the wire are relative
+to that root, written with `/`; the root itself is the empty path.
+
+Query: `path` (optional, at most 1000 characters): the folder to list, relative
+to the root. Other parameters are ignored.
+
+Response `200`:
+
+```json
+{
+  "rootName": "projects",
+  "path": "my-app",
+  "parent": "",
+  "target": "../my-app",
+  "project": true,
+  "room": null,
+  "dirs": [
+    { "name": "src", "path": "my-app/src", "project": false, "room": null }
+  ]
+}
+```
+
+- `rootName`: the last segment of the root, for the first crumb.
+- `path`, `parent`: the folder listed and the one above it (`null` at the root).
+- `target`: what `POST /api/onboarding` expects for this folder, relative to
+  the home (absolute when there is no relative way, another drive).
+- `project`: the folder holds a `.git`, a `package.json`, a `pyproject.toml` or
+  a README. `room`: the name of the room whose `targetRepo` is this folder, else
+  `null`. Both exist for the folder listed and for each entry of `dirs`.
+- `dirs`: only folders (no file), sorted by name, without the hidden ones
+  (a name starting with `.`) and the heavy ones (`node_modules`, `data`,
+  `build`; `.git` and `.next` are hidden). A link is listed only when it leads
+  to a folder inside the root.
+
+Errors: `INVALID_INPUT` (a `path` over 1000 characters), `PATH_OUTSIDE_ROOT` (400), `DIR_NOT_FOUND` (404),
+`ROOT_NOT_FOUND` (404). A path that leaves the root is refused, never trimmed.
 
 ### `POST /api/onboarding`
 
