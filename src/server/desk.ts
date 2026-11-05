@@ -151,6 +151,10 @@ export type DeskRef =
       reason: string;
       /** How many tasks the actions act on. */
       tasks: number;
+      /** The latest note of a supervisor on it (hq_blocked_note): its text, the supervisor's name, when. */
+      note: { text: string; by: string; at: string } | null;
+      /** Handed to the owner by a supervisor: listed first, marked apart. */
+      handedOff: boolean;
     };
 
 export type DeskItemDto = {
@@ -349,6 +353,8 @@ function blockedItem(entry: BlockedEntry, objectId: string, colors: Map<string, 
       state: entry.state,
       reason: entry.reason,
       tasks: entry.taskIds.length,
+      note: entry.note ? { text: entry.note.text, by: entry.note.agentName, at: entry.note.at } : null,
+      handedOff: entry.handedOff,
     },
   };
 }

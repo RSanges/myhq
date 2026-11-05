@@ -370,7 +370,7 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
     <li
       id={item.id}
       style={tint ?? undefined}
-      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${tint ? "border-l-4 border-l-[var(--room-color)]" : ""}`}
+      className={`deep-target space-y-3 rounded-lg border bg-card p-4 ${refData.handedOff ? "border-warn ring-1 ring-warn" : "border-line"} ${tint ? "border-l-4 border-l-[var(--room-color)]" : ""}`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-xs font-medium">
@@ -379,6 +379,7 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
         </span>
         <span className="font-semibold break-words">{item.title}</span>
         <Badge tone={STATE_TONE[refData.state]}>{t.standard.state[refData.state]}</Badge>
+        {refData.handedOff && <Badge tone="warn">{t.standard.handedOff}</Badge>}
         {item.at && (
           <span className="text-xs text-muted sm:ml-auto" title={formatDateTime(item.at)}>
             {formatSince(item.at)}
@@ -386,6 +387,15 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
         )}
       </div>
       <p className="text-sm break-words">{refData.reason}</p>
+      {refData.note && (
+        <p className={`rounded-md px-3 py-2 text-sm break-words ${refData.handedOff ? "bg-warn-soft" : "bg-soft"}`}>
+          <span className="font-medium" title={formatDateTime(refData.note.at)}>
+            {t.standard.noteBy(refData.note.by)}
+          </span>
+          {" "}
+          {refData.note.text}
+        </p>
+      )}
       {item.body && (
         <details className="rounded-md bg-soft">
           <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">

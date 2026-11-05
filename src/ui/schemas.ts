@@ -285,6 +285,9 @@ const deskRefSchema = z.discriminatedUnion("kind", [
     state: z.enum(["blocked", "pending", "failed", "cancelled"]),
     reason: z.string(),
     tasks: z.number().int(),
+    /** A supervisor's note on the entry, and whether it handed the entry to the owner. */
+    note: z.object({ text: z.string(), by: z.string(), at: z.string() }).nullable().default(null),
+    handedOff: z.boolean().default(false),
   }),
 ]);
 export const deskItemSchema = z.object({

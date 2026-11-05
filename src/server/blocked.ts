@@ -4,6 +4,7 @@ import { RECEPTION_ROOM } from "../ui/reception";
 import { liveConfig, type HqConfig } from "./config";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
+import { RELAUNCH_REASON } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import type { Agent, Home } from "./rooms";
 import {
@@ -23,14 +24,15 @@ import {
 // its own, and the failed or interrupted runs whose tasks were not taken
 // again. Two actions act on an entry: relaunch it (its tasks go back to
 // pending and the agent is woken at once) or close it (its tasks are done).
-// See docs/architecture.md, "The Standard".
+// A supervisor's note (supervisor.ts) is shown on its entry, and an entry
+// handed to the owner comes first. See docs/architecture.md, "The Standard".
 
 /** A pending task counts as stuck once it is this old. */
 export const STUCK_PENDING_MS = 15 * 60_000;
 /** The failed or interrupted runs looked at: the ones that ended in this window. */
 export const FAILED_RUN_WINDOW_MS = 24 * 60 * 60_000;
 /** Why a relaunch started a run (`runs.reason`). */
-export const RELAUNCH_REASON = "relaunch";
+export { RELAUNCH_REASON };
 /** A reason longer than this (an agent's note, a run summary) is cut. */
 const REASON_MAX = 400;
 
@@ -52,6 +54,20 @@ export type BlockedEntry = {
   text: string;
   /** The tasks the actions act on. */
   taskIds: number[];
+  /** The latest note of a supervisor on these tasks (hq_blocked_note), null when there is none. */
+  note: BlockedNote | null;
+  /** A supervisor handed it to the owner: the owner is the one to act, and it is listed first. */
+  handedOff: boolean;
+};
+
+export type BlockedNote = {
+  /** For the owner, in French: what the supervisor did, or what it expects from the owner. */
+  text: string;
+  /** The supervisor that wrote it. */
+  room: string;
+  agentId: string;
+  agentName: string;
+  at: string;
 };
 
 const oneLine = (text: string | null | undefined): string => {
@@ -184,6 +200,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       reason: run.status === "cancelled" ? r.runCancelled(run.id) : r.runFailed(run.id, oneLine(run.summary)),
       text: runText(db, run, taskIds),
       taskIds,
+      note: null,
+      handedOff: false,
     });
   }
 
@@ -209,6 +227,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       reason: note ? r.blocked(note) : r.blockedNoNote,
       text: task.text,
       taskIds: [task.id],
+      note: null,
+      handedOff: false,
     });
   }
 
@@ -231,10 +251,27 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       reason,
       text: task.text,
       taskIds: [task.id],
+      note: null,
+      handedOff: false,
     });
   }
 
-  return entries.sort((a, b) => b.since.localeCompare(a.since) || b.id - a.id);
+  // The latest supervisor note of each entry; what was handed to the owner comes first.
+  const latest = db.prepare(
+    `SELECT room, agent_id, text, handed_off, created_at FROM blocked_notes WHERE task_id IN (SELECT value FROM json_each(?))
+     ORDER BY id DESC LIMIT 1`,
+  );
+  for (const entry of entries) {
+    const row = latest.get(JSON.stringify(entry.taskIds)) as
+      | { room: string; agent_id: string; text: string; handed_off: number; created_at: string }
+      | undefined;
+    if (!row) continue;
+    entry.note = { text: row.text, room: row.room, agentId: row.agent_id, agentName: nameOf(row.room, row.agent_id), at: row.created_at };
+    entry.handedOff = row.handed_off === 1;
+  }
+  return entries.sort(
+    (a, b) => Number(b.handedOff) - Number(a.handedOff) || b.since.localeCompare(a.since) || b.id - a.id,
+  );
 }
 
 /** The count of the Standard: the agents that have something stuck. */
@@ -251,7 +288,7 @@ export const blockedTargetSchema = z.strictObject({
 export type BlockedTarget = z.infer<typeof blockedTargetSchema>;
 
 /** The open tasks of a target, with their agent. Throws when there is nothing to act on. */
-function targetTasks(db: Db, target: BlockedTarget): { room: string; agentId: string; ids: number[] } {
+export function targetTasks(db: Db, target: BlockedTarget): { room: string; agentId: string; ids: number[] } {
   if (target.kind === "task") {
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(target.id) as TaskRow | undefined;
     if (!task) throw new HqError("TASK_NOT_FOUND", 404, `No task #${target.id}.`);
@@ -278,8 +315,12 @@ export type RelaunchResult = {
   waiting: { code: string; message: string } | null;
 };
 
-/** Errors of a relaunch that leave the tasks pending, said to the owner rather than thrown. */
-const RELAUNCH_WAITS = new Set([...WAITS, "ROOM_NOT_FOUND", "AGENT_NOT_FOUND", "ROOM_INVALID"]);
+/**
+ * Errors of a relaunch that leave the tasks pending, said to the owner rather than thrown. Built when
+ * asked: this module and the runner import each other (through supervisor.ts), so WAITS may not exist yet
+ * while this module loads.
+ */
+const relaunchWaits = () => new Set([...WAITS, "ROOM_NOT_FOUND", "AGENT_NOT_FOUND", "ROOM_INVALID"]);
 
 /**
  * « Relancer »: the tasks of the target go back to pending, then the agent is
@@ -301,7 +342,7 @@ export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget,
     const run = startRun({ room, agent: agentId, task: WAKE_TASK, reason: RELAUNCH_REASON }, { ...deps, config });
     return { tasks: ids, run, waiting: null };
   } catch (error) {
-    if (error instanceof HqError && RELAUNCH_WAITS.has(error.code)) {
+    if (error instanceof HqError && relaunchWaits().has(error.code)) {
       return { tasks: ids, run: null, waiting: { code: error.code, message: error.message } };
     }
     throw error;

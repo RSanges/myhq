@@ -907,6 +907,12 @@ export const strings = {
       waitingOther: "La tâche est repartie, mais l'agent n'a pas pu être réveillé.",
       /** The note of a task the owner closed from the Standard (stored on the task). */
       closedNote: "Close par le propriétaire.",
+      /** A supervisor's note on an entry (hq_blocked_note), and the mark of an entry it handed to the owner. */
+      noteBy: (name: string) => `Note de ${name} :`,
+      handedOff: "Remis au propriétaire",
+      /** Written by MyHQ, in the supervisor's name, when an entry it relaunched is stuck again. */
+      secondFailure: (name: string) =>
+        `${name} l'a déjà relancée une fois et elle est encore coincée : à toi de voir (relancer, clore ou corriger).`,
       /** Why an entry is stuck, one sentence, written by the server (GET /api/desk). */
       reasons: {
         blocked: (note: string) => `Bloquée par l'agent : ${note}`,

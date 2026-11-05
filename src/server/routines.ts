@@ -8,6 +8,7 @@ import { HqError } from "./errors";
 import { acquireLock, type Lock } from "./lock";
 import { loadHome, syncHome, type Agent, type Home, type Room, type Routine } from "./rooms";
 import { findAgent, resumeWaitingTasks, startRun, type RunnerDeps, type StartRunRequest } from "./runner";
+import { watchStandard } from "./supervisor";
 
 // --- Armed state ---------------------------------------------------------------
 
@@ -294,7 +295,9 @@ function reconcile(host: SchedulerHost, at: Date = new Date()): void {
 /**
  * Wakes the tasks that waited for the daily cap as soon as the counter allows
  * a run again (the day changed, or the cap was raised): see `resumeWaitingTasks`.
- * Runs at each tick of the timer and at startup, scheduler on or off.
+ * Then wakes the supervisor of the Standard when something is newly stuck, or
+ * for its review (`watchStandard`). Runs at each tick of the timer and at
+ * startup, scheduler on or off.
  */
 function resumeWaiting(host: SchedulerHost): void {
   try {
@@ -304,6 +307,14 @@ function resumeWaiting(host: SchedulerHost): void {
     resumeWaitingTasks(config, getDbAt(config.dbPath));
   } catch (error) {
     console.error("[scheduler] resuming the waiting tasks failed", error);
+  }
+  try {
+    const config = currentConfig(host);
+    if (homeOwnedElsewhere(config.dbPath)) return;
+    // The supervisor of the Standard, woken for what is newly stuck (supervisor.ts).
+    watchStandard(config, getDbAt(config.dbPath));
+  } catch (error) {
+    console.error("[scheduler] waking the supervisor of the Standard failed", error);
   }
 }
 

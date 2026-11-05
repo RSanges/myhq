@@ -102,6 +102,12 @@ export const agentSchema = z.strictObject({
     .max(16)
     .refine((list) => new Set(list).size === list.length, "a resource is listed twice")
     .optional(),
+  /**
+   * The supervisor of the Standard: it reads what is stuck (hq_blocked), writes to any agent of any room,
+   * relaunches a stuck entry (hq_relaunch), annotates it for the owner (hq_blocked_note) and reads the items
+   * of every room. MyHQ wakes it when something new is stuck (docs/architecture.md, "The supervisor").
+   */
+  supervisor: z.boolean().optional(),
 });
 
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
@@ -165,6 +171,8 @@ export type Agent = {
   notifyRuns: "summary" | null;
   /** Shared resources its runs hold (see launchRun); empty for most agents. */
   resources: string[];
+  /** The supervisor of the Standard (see supervisor.ts); false for most agents. */
+  supervisor?: boolean;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -296,6 +304,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       onRevise: agent.onRevise ?? null,
       notifyRuns: agent.notifyRuns ?? null,
       resources: agent.resources ?? [],
+      supervisor: agent.supervisor ?? false,
     };
   });
 
@@ -355,7 +364,11 @@ export function syncHome(db: Db, home: Home): void {
        role_path = excluded.role_path, synced_at = excluded.synced_at`,
   );
   const removeStaleAgents = db.prepare("DELETE FROM agents WHERE room = ? AND synced_at <> ?");
+  const addSupervisor = db.prepare("INSERT INTO supervisors (room, agent_id, synced_at) VALUES (?, ?, ?)");
   db.transaction(() => {
+    // The supervisors of the Standard, as room.json says now (see supervisor.ts).
+    db.prepare("DELETE FROM supervisors").run();
+    for (const room of home.rooms) for (const agent of room.agents) if (agent.supervisor) addSupervisor.run(room.name, agent.id, at);
     for (const room of home.rooms) {
       upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), room.shared ? 1 : 0, at);
       for (const agent of room.agents) {

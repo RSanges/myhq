@@ -13,6 +13,7 @@ import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import { wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
+import { startRelaunchRequests } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
@@ -391,6 +392,8 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   // MyHQ's own onboarding agent is in no room of the home: its revisions are woken apart.
   const onboarding = wakeOnboarding(config, db, deps);
+  // The relaunches a supervisor asked for (hq_relaunch), before the mailbox wake-ups: the run takes the whole mailbox.
+  const relaunched = startRelaunchRequests(config, db, deps);
   const candidates = db
     .prepare(
       `SELECT t.room, t.agent_id, t.source, t.from_room, t.from_agent FROM tasks t
@@ -402,9 +405,9 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
        ORDER BY t.id`,
     )
     .all() as WakeCandidate[];
-  if (candidates.length === 0) return onboarding;
+  if (candidates.length === 0) return [...onboarding, ...relaunched];
   const home = loadHome(config.home);
-  const started: RunRow[] = [...onboarding];
+  const started: RunRow[] = [...onboarding, ...relaunched];
   const done = new Set<string>();
   const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
   for (const candidate of candidates) {
@@ -634,6 +637,9 @@ async function execute(p: ExecuteParams): Promise<void> {
     HQ_ROOM: room.name,
     // hq_submit reads the attachments relative to it, and refuses anything outside.
     HQ_WORK_DIR: agent.workDir,
+    // hq_blocked and hq_relaunch tell the reasons of the Standard and its guards with the app's own values.
+    HQ_MAX_RUNS_PER_DAY: String((config.fromEnv ?? config).maxRunsPerDay),
+    HQ_MESSAGE_WAKE_MINUTES: String(config.messageWakeIntervalMs / 60_000),
     ...(attachmentMaxMb ? { HQ_ATTACHMENT_MAX_MB: attachmentMaxMb } : {}),
   };
 

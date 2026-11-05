@@ -66,12 +66,15 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
     assert.deepEqual(warnings, []);
 
     const expected = [
+      "hq_blocked",
+      "hq_blocked_note",
       "hq_items",
       "hq_memory_read",
       "hq_memory_write",
       "hq_message",
       "hq_pending",
       "hq_read_decisions",
+      "hq_relaunch",
       "hq_rooms",
       "hq_submit",
       "hq_suggest_agent",

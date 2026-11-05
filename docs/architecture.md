@@ -100,7 +100,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Ten tools, all validated with zod:
+room) and writes directly to SQLite. Thirteen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -114,6 +114,9 @@ room) and writes directly to SQLite. Ten tools, all validated with zod:
 | `hq_items(id?, status?, type?)` | Read the state of items at any time (read-only, it marks nothing seen). With `id`: the `body` (cut to `maxChars`, 20000 by default and 60000 at most, `bodyTruncated`), type, title, `status`, `decidedAt` and `note` of the decision, `remarks` (the annotations, with their points), producing `room` and `agent`, `forRoom`, and `files` (name and, when the copy is on disk, its `path`). Without `id`: the recent items (30 days, by last activity, newest first, at most 50, `truncated` when more) that the agent may read, filtered by `status` and `type`. See "Reading the state of an item". |
 | `hq_rooms()` | List the shared rooms and their agents (id and name): the studios an agent may order from. Read-only. |
 | `hq_suggest_agent(need)` | For an order nobody in the office can do: the need goes to the receptionist, which proposes a new agent to the user (see "Proposing a missing agent"). At most one per need text in 24 hours. |
+| `hq_blocked()` | Supervisor only: read the Standard, every entry but its own (see "The supervisor"). Read-only. |
+| `hq_relaunch(kind, id, message?)` | Supervisor only: « Relancer » an entry of the Standard, with its guards, once per task. |
+| `hq_blocked_note(kind, id, text, handOff?)` | Supervisor only: a sentence for the owner on an entry of the Standard; `handOff` hands it to the owner. |
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
@@ -243,6 +246,7 @@ this minute match" and "when is the next one", not a scheduling library.
   target repository by default.
 - `resources`: shared resources its runs hold, such as `gpu` (see "Shared
   resources" below).
+- `supervisor`: the supervisor of the Standard (see "The supervisor" below).
 
 ### The approval cycle
 
@@ -760,13 +764,84 @@ stuck, not of entries. Two actions, with a light confirmation on the page:
 - **Clore** (`POST /api/blocked/close`): the tasks of the entry are `done`
   with the note « Close par le propriétaire. ». Nothing wakes.
 
+An entry also shows the latest note of the supervisor on its tasks (« Note de
+<its name> : ... », see below). An entry the supervisor handed to the owner is
+marked « Remis au propriétaire », drawn apart and listed first, whatever its
+age.
+
+### The supervisor
+
+An agent with `"supervisor": true` in its `room.json` does for the owner what
+the owner did by hand: it reads the Standard, checks the facts, writes to the
+agent concerned with the proof, relays a dependency to the right link,
+relaunches what failed for a passing reason, and hands to the owner, with one
+sentence, what needs a decision. Its role prompt says how
+(`src/server/supervisor.ts` holds the mechanics). `syncHome` mirrors the flag
+into the `supervisors` table, which the HQ MCP server reads.
+
+- **Rights.** `hq_blocked` lists the entries of the Standard, the
+  supervisor's own excepted, with what `listBlocked` gives: `target` (the
+  `{ kind, id }` that `hq_relaunch` and `hq_blocked_note` take: `task` for a
+  blocked or pending task, `run` for a failed or interrupted run), room,
+  agent, state, since, reason, the text of the task (1500 characters at most,
+  `textTruncated`), its task ids, the supervisor's last `note`, `handedOff`,
+  and `relaunched` (a supervisor already relaunched one of its tasks).
+  `hq_message` reaches any agent of any room (an agent it wrote to may answer
+  it, as a studio's requester can). `hq_items` reads the items of every room.
+- **Limits.** It approves, rejects and closes nothing: those are the owner's,
+  on the desk and Telegram, never an MCP tool. Its `hq_submit` takes only the
+  type `owner_note`, stored informational (`unseen`, it never waits for a
+  decision). Any other agent that calls `hq_blocked`, `hq_relaunch` or
+  `hq_blocked_note` gets a tool error that says the tool is the supervisor's.
+- **Relaunch.** `hq_relaunch` follows « Relancer »: the guards of a run
+  (agent lock, shared resources, daily cap) are checked first, in the HQ MCP
+  server, with the app's cap and anti ping-pong window passed to the run
+  (`HQ_MAX_RUNS_PER_DAY`, `HQ_MESSAGE_WAKE_MINUTES`). When one holds, nothing
+  changes (`relaunched: false`, `waiting` with its code) and it does not count:
+  the supervisor tries again later. Otherwise the tasks go back to pending, the
+  optional `message` (the proof, the missing text) joins them as a message of
+  the supervisor, and a row of `supervisor_relaunches` is recorded. The app
+  starts the run (reason `relaunch`) from `wakeAgents`, before the mailbox
+  wake-ups, so on the tool result of that very call, and that run takes the
+  whole mailbox: the relaunched tasks and the message together. The row keeps
+  the run, or the code of what held it back at that moment (the app stopping,
+  a race): its tasks then stay pending, as with the button.
+- **Once per task.** A task that a supervisor relaunch covers is never
+  relaunched by a supervisor again (`ALREADY_RELAUNCHED`). When an entry with
+  such a task is on the Standard again once the relaunch was handled (its run
+  failed, the agent blocked it again, or the run could not start), MyHQ hands
+  it to the owner with a note in the supervisor's name (« <its name> l'a déjà
+  relancée une fois et elle est encore coincée... »). The owner's own
+  « Relancer » is not counted.
+- **Notes.** `hq_blocked_note` stores one row of `blocked_notes` per task of
+  the entry (text, supervisor, run, `handed_off`). The Standard shows the
+  latest one of an entry; `handOff: true` hands it to the owner. A note never
+  changes a task.
+- **Wake-ups.** At each tick of the scheduler's timer (every 15 s, scheduler
+  on or off, by the process that owns the home), `watchStandard` looks at the
+  open entries: not the supervisor's own, not handed to the owner. When one
+  has a task never given to the supervisor (`standard_announced`), the
+  supervisor is woken at once (reason `standard`) with a task that lists the
+  new entries (20 at most, `hq_blocked` gives the rest). Otherwise, while open
+  entries remain, it is woken for a review at most every 30 minutes after its
+  last run for the Standard, with a task that lists them all. A busy
+  supervisor, a busy resource or the cap records nothing: the next tick tries
+  again. Only the first supervisor of the home (room, then agent order) is
+  woken. Its messages wake their recipients like any other, under the anti
+  ping-pong window of the pair.
+
+Migration 16 adds the tables `supervisors`, `blocked_notes`,
+`supervisor_relaunches` and `standard_announced` (idempotent, as every
+migration after 14).
+
 ### Why a run started
 
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
 `/run` or a routine): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
-own `approval`, `message`, `revise`, `chat`, `agent_need` and `relaunch` (the
-Standard). It is in the Run shape (API, live stream, daily
+own `approval`, `message`, `revise`, `chat`, `agent_need`, `relaunch` (the
+Standard, or the supervisor's `hq_relaunch`) and `standard` (the supervisor
+woken for the Standard). It is in the Run shape (API, live stream, daily
 export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.

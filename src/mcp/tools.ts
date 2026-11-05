@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { Env } from "../server/config";
+import { blockedTargetSchema } from "../server/blocked";
+import { getConfig, type Env, type HqConfig } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
 import {
   AttachmentError,
@@ -17,6 +18,8 @@ import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db"
 import { readNotifyTypes } from "../server/home-settings";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
+import { loadHome, type Home } from "../server/rooms";
+import { isSupervisor, noteBlocked, OWNER_NOTE, requestRelaunch, supervisedEntries, writeMessage } from "../server/supervisor";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
@@ -28,6 +31,9 @@ export const contextSchema = z.object({
   /** The agent's working directory (its worktree when it has one): where attachments are read from. */
   HQ_WORK_DIR: z.string().min(1).optional(),
   HQ_ATTACHMENT_MAX_MB: z.string().optional(),
+  /** The app's daily cap and anti ping-pong window, for the reasons and guards of the Standard (hq_blocked, hq_relaunch). */
+  HQ_MAX_RUNS_PER_DAY: z.string().optional(),
+  HQ_MESSAGE_WAKE_MINUTES: z.string().optional(),
 });
 
 export type HqContext = {
@@ -43,6 +49,8 @@ export type HqContext = {
   workDir?: string;
   /** Cap on one attached file, in bytes. */
   attachmentMaxBytes?: number;
+  /** HQ_MAX_RUNS_PER_DAY and HQ_MESSAGE_WAKE_MINUTES of the app, as given to the run. */
+  appEnv?: Env;
 };
 
 /** MyHQ keeps its database at `<home>/data/hq.db`: the home is two levels up. */
@@ -65,6 +73,7 @@ export function readContext(env: Env): HqContext {
     home: homeOf(parsed.data.HQ_DB_PATH),
     ...(parsed.data.HQ_WORK_DIR ? { workDir: parsed.data.HQ_WORK_DIR } : {}),
     attachmentMaxBytes: attachmentMaxBytes({ HQ_ATTACHMENT_MAX_MB: parsed.data.HQ_ATTACHMENT_MAX_MB }),
+    appEnv: { HQ_MAX_RUNS_PER_DAY: parsed.data.HQ_MAX_RUNS_PER_DAY, HQ_MESSAGE_WAKE_MINUTES: parsed.data.HQ_MESSAGE_WAKE_MINUTES },
   };
 }
 
@@ -72,7 +81,13 @@ export function readContext(env: Env): HqContext {
 export const ITEM_BODY_DEFAULT = 20_000;
 export const ITEM_BODY_MAX = 60_000;
 
-/** Input shapes of the ten tools (zod raw shapes, as the MCP SDK expects). */
+/** A target of the Standard, as hq_blocked gives it: `kind` and `id`. */
+const targetShape = {
+  kind: blockedTargetSchema.shape.kind.describe('"task" or "run": the `target.kind` of the entry in hq_blocked.'),
+  id: blockedTargetSchema.shape.id.describe("The `target.id` of the entry in hq_blocked (a task id, or a run id)."),
+};
+
+/** Input shapes of the thirteen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -152,6 +167,32 @@ export const inputs = {
       "What nobody in the office can do, in a few sentences: the work, the technologies involved, and the order that needs it.",
     ),
   },
+  hq_blocked: {},
+  hq_relaunch: {
+    ...targetShape,
+    message: z
+      .string()
+      .trim()
+      .min(1)
+      .max(5_000)
+      .optional()
+      .describe(
+        "Optional: what the agent was missing (the proof, such as the number of the approved item, or the text it could not read), given to it as a message from you, in the same run as its relaunched tasks.",
+      ),
+  },
+  hq_blocked_note: {
+    ...targetShape,
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("For the owner, in one or two sentences of the home's language: what you did, or why you cannot act and what you expect from the owner."),
+    handOff: z
+      .boolean()
+      .optional()
+      .describe("true: the entry is handed to the owner (shown first on the Standard, and you are no longer woken for it)."),
+  },
 } as const;
 
 type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K]>>;
@@ -215,7 +256,8 @@ export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
   if (elsewhere) {
     const info = roomInfo(db, room);
     if (!info) throw new ToolError(`Unknown room "${room}".`);
-    if (info.shared !== 1 && !orderedFrom(db, ctx, room, parsed.to)) {
+    // The supervisor of the Standard writes to any agent of any room.
+    if (info.shared !== 1 && !orderedFrom(db, ctx, room, parsed.to) && !isSupervisor(db, ctx.room, ctx.agentId)) {
       throw new ToolError(
         `Room "${room}" is not shared: you may write to a shared room (see hq_rooms), or answer an agent of a room that ordered from yours.`,
       );
@@ -224,24 +266,10 @@ export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
   const target = db.prepare("SELECT id FROM agents WHERE room = ? AND id = ?").get(room, parsed.to);
   if (!target) throw new ToolError(`Unknown agent "${parsed.to}" in room "${room}".`);
   if (!elsewhere && parsed.to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
-  const text = elsewhere
-    ? `Message from ${ctx.agentId} of room "${ctx.room}" (answer with hq_message to "${ctx.agentId}", room "${ctx.room}"): ${parsed.text}`
-    : `Message from ${ctx.agentId}: ${parsed.text}`;
-  const at = now();
   return db
-    .transaction(() => {
-      const message = db
-        .prepare(
-          "INSERT INTO messages (room, from_agent, to_agent, to_room, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(ctx.room, ctx.agentId, parsed.to, elsewhere ? room : null, parsed.text, ctx.runId, at);
-      const messageId = Number(message.lastInsertRowid);
-      db.prepare(
-        `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, from_room, from_agent, created_at, updated_at)
-         VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?, ?, ?)`,
-      ).run(room, parsed.to, messageId, text, ctx.room, ctx.agentId, at, at);
-      return { messageId };
-    })
+    .transaction(() => ({
+      messageId: writeMessage(db, { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId }, { room, agentId: parsed.to }, parsed.text),
+    }))
     .immediate();
 }
 
@@ -310,6 +338,13 @@ export type SubmitResult = {
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): SubmitResult {
   const parsed = z.object(inputs.hq_submit).parse(args);
   let { body, payload } = parsed;
+  // The supervisor of the Standard submits nothing to approve: only a note to the owner, informational.
+  const supervisor = isSupervisor(db, ctx.room, ctx.agentId);
+  if (supervisor && parsed.type !== OWNER_NOTE) {
+    throw new ToolError(
+      `You are the supervisor of the Standard: you submit nothing to approve, only a note to the owner (type "${OWNER_NOTE}"). To tell the owner about an entry of the Standard, use hq_blocked_note.`,
+    );
+  }
   // A shared room delivers to the room that ordered: the item goes to that room's pile.
   let forRoom: string | null = null;
   if (parsed.forRoom !== undefined && parsed.forRoom !== ctx.room) {
@@ -364,10 +399,11 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
   // triggers onApproval and never wakes an agent. Its agent already knows it,
   // so it counts as read by the agent.
   const informational =
-    parsed.type !== ROOM_PROPOSAL &&
-    parsed.type !== AGENT_PROPOSAL &&
-    ctx.home !== undefined &&
-    readNotifyTypes(ctx.home).includes(parsed.type);
+    supervisor ||
+    (parsed.type !== ROOM_PROPOSAL &&
+      parsed.type !== AGENT_PROPOSAL &&
+      ctx.home !== undefined &&
+      readNotifyTypes(ctx.home).includes(parsed.type));
   const at = now();
   const insert = db.prepare(
     `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
@@ -558,6 +594,11 @@ export const ITEMS_LIST_MAX = 50;
  * when it was produced there (`room`) or delivered for it (`for_room`).
  */
 function readableRooms(db: Db, ctx: HqContext): string[] {
+  // The supervisor of the Standard checks the facts in every room.
+  if (isSupervisor(db, ctx.room, ctx.agentId)) {
+    const rooms = db.prepare("SELECT DISTINCT room FROM approvals UNION SELECT name FROM rooms").all() as { room: string }[];
+    return [...new Set([ctx.room, ...rooms.map((row) => row.room)])];
+  }
   const rooms = [ctx.room];
   if (roomInfo(db, ctx.room)?.shared !== 1) return rooms;
   const orderers = db
@@ -659,6 +700,68 @@ export function hqItems(db: Db, ctx: HqContext, args: Args<"hq_items">) {
     })),
     truncated: rows.length > ITEMS_LIST_MAX,
   };
+}
+
+// --- The supervisor of the Standard ------------------------------------------------------
+
+/** The supervisor's tools are refused, with a clear error, to any other agent. */
+function assertSupervisor(db: Db, ctx: HqContext, tool: string): void {
+  if (isSupervisor(db, ctx.room, ctx.agentId)) return;
+  throw new ToolError(
+    `${tool} is reserved for the supervisor of the Standard (an agent with "supervisor": true in its room.json), and you are not one. If you are stuck, say so with hq_task_update and status blocked, with a note.`,
+  );
+}
+
+/** The home and the app's configuration as the run sees them: the database lives in `<home>/data`. */
+function office(ctx: HqContext): { home: Home; config: HqConfig } {
+  if (!ctx.home) throw new ToolError("The home of the office is not known in this run: the Standard cannot be read.");
+  const config = getConfig({ ...ctx.appEnv, MYHQ_HOME: ctx.home });
+  return { home: loadHome(ctx.home), config };
+}
+
+/** hq_blocked: the Standard, every entry but the supervisor's own. Read-only. */
+export function hqBlocked(db: Db, ctx: HqContext) {
+  assertSupervisor(db, ctx, "hq_blocked");
+  const { home, config } = office(ctx);
+  return { entries: supervisedEntries(db, home, config, { room: ctx.room, agentId: ctx.agentId }) };
+}
+
+/** hq_relaunch: « Relancer » for the supervisor, with the same guards, once per task. */
+export function hqRelaunch(db: Db, ctx: HqContext, args: Args<"hq_relaunch">) {
+  assertSupervisor(db, ctx, "hq_relaunch");
+  const parsed = z.object(inputs.hq_relaunch).parse(args);
+  const { home, config } = office(ctx);
+  const result = requestRelaunch(
+    db,
+    config,
+    home,
+    { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId },
+    { kind: parsed.kind, id: parsed.id },
+    parsed.message,
+  );
+  if (!result.relaunched) {
+    return {
+      ...result,
+      note: "Nothing was changed and this does not count as a relaunch: relaunch it when what holds it back is over (you are woken again while the entry stays open), or hand it to the owner.",
+    };
+  }
+  return {
+    ...result,
+    note: "The tasks are pending again and MyHQ wakes the agent now. Never relaunch this entry again: if it fails once more, MyHQ hands it to the owner.",
+  };
+}
+
+/** hq_blocked_note: a sentence for the owner on an entry of the Standard, optionally handing it to the owner. */
+export function hqBlockedNote(db: Db, ctx: HqContext, args: Args<"hq_blocked_note">) {
+  assertSupervisor(db, ctx, "hq_blocked_note");
+  const parsed = z.object(inputs.hq_blocked_note).parse(args);
+  return noteBlocked(
+    db,
+    { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId },
+    { kind: parsed.kind, id: parsed.id },
+    parsed.text,
+    parsed.handOff ?? false,
+  );
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {

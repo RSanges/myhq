@@ -522,6 +522,60 @@ CREATE TABLE IF NOT EXISTS desk_seen (
 );
 `,
   },
+  {
+    version: 16,
+    sql: `
+-- The supervisor of the Standard (docs/architecture.md, "The supervisor").
+-- Every statement is idempotent, as the migrations after 14 must be.
+-- The supervisors of the home, mirrored from room.json by syncHome, so that
+-- the HQ MCP server, which only reads the database, knows who may use the
+-- supervisor's tools.
+CREATE TABLE IF NOT EXISTS supervisors (
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (room, agent_id)
+);
+-- A supervisor's word on an entry of the Standard (hq_blocked_note), one row
+-- per task of the entry: what it did, or what the owner is expected to do
+-- (handed_off = 1, the entry is handed to the owner).
+CREATE TABLE IF NOT EXISTS blocked_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  run_id INTEGER,
+  text TEXT NOT NULL,
+  handed_off INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS blocked_notes_task ON blocked_notes (task_id);
+-- A relaunch asked by a supervisor (hq_relaunch): the HQ MCP server puts the
+-- tasks back to pending and records it, the app starts the run
+-- (handled_at, run_id, or the code of what held it back in waiting).
+CREATE TABLE IF NOT EXISTS supervisor_relaunches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  task_ids TEXT NOT NULL,
+  by_room TEXT NOT NULL,
+  by_agent TEXT NOT NULL,
+  by_run INTEGER,
+  created_at TEXT NOT NULL,
+  handled_at TEXT,
+  run_id INTEGER,
+  waiting TEXT
+);
+-- The tasks of the Standard already given to the supervisor by a wake-up.
+CREATE TABLE IF NOT EXISTS standard_announced (
+  task_id INTEGER PRIMARY KEY,
+  run_id INTEGER NOT NULL,
+  announced_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

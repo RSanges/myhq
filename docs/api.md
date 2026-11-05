@@ -577,7 +577,7 @@ An entry of the Standard (source `blocked`, `architecture.md`, "The Standard"):
   "href": "/bureau/telephone#blocked-run-41",
   "tone": "alert",
   "color": "#ff3d7f",
-  "ref": { "kind": "blocked", "entry": "run", "id": 41, "room": "demo", "agentId": "scout", "state": "failed", "reason": "Le tour #41 a échoué : Budget exceeded.", "tasks": 2 }
+  "ref": { "kind": "blocked", "entry": "run", "id": 41, "room": "demo", "agentId": "scout", "state": "failed", "reason": "Le tour #41 a échoué : Budget exceeded.", "tasks": 2, "note": null, "handedOff": false }
 }
 ```
 
@@ -587,7 +587,10 @@ takes) or `run` (a failed or interrupted run, `ref.id` is the run); `state` is
 actions act on. `title` is the agent's name, `body` the text of the task (for a run,
 its instruction, then the tasks it gave back as a Markdown list), `at` since
 when it is stuck, `reason` one sentence in
-the language of the interface.
+the language of the interface. `note` is the latest note of the supervisor of
+the Standard on the entry (`{ text, by, at }`, `by` its name; null when there is
+none), and `handedOff` says that it handed the entry to the owner: those
+entries come first (see "The supervisor" in `architecture.md`).
 
 ### `POST /api/desk/[id]/seen`
 
@@ -1220,7 +1223,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its ten tools write to the same
+for each run (see `architecture.md`). Its thirteen tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

@@ -11,12 +11,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "../server/db";
 import {
+  hqBlocked,
+  hqBlockedNote,
   hqItems,
   hqMemoryRead,
   hqMemoryWrite,
   hqMessage,
   hqPending,
   hqReadDecisions,
+  hqRelaunch,
   hqRooms,
   hqSubmit,
   hqSuggestAgent,
@@ -135,6 +138,34 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_suggest_agent,
     },
     async (args) => respond(() => hqSuggestAgent(db, ctx, args)),
+  );
+  // The supervisor of the Standard's tools: refused, with a clear error, to any other agent.
+  server.registerTool(
+    "hq_blocked",
+    {
+      description:
+        "Supervisor of the Standard only. Read the Standard: what is stuck at the agents of every room (yours excepted). Each entry: `target` (what hq_relaunch and hq_blocked_note take), room, agent, state (blocked, pending, failed, cancelled), since when, the reason MyHQ knows, the text of the task, its task ids, your last `note`, `handedOff` (handed to the owner) and `relaunched` (a supervisor already relaunched it: never again). Read-only.",
+      inputSchema: inputs.hq_blocked,
+    },
+    async () => respond(() => hqBlocked(db, ctx)),
+  );
+  server.registerTool(
+    "hq_relaunch",
+    {
+      description:
+        "Supervisor of the Standard only. Relaunch an entry of the Standard, as the owner's « Relancer » does: its tasks go back to pending and MyHQ wakes the agent at once, under the same guards (agent lock, shared resources, daily cap). When a guard holds the agent now, nothing changes (`relaunched: false`, `waiting` says why): try again when it is over. `message` gives the agent what it was missing in the same run. An entry is relaunched once at most: a second time is refused, hand it to the owner.",
+      inputSchema: inputs.hq_relaunch,
+    },
+    async (args) => respond(() => hqRelaunch(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_blocked_note",
+    {
+      description:
+        "Supervisor of the Standard only. Attach a sentence for the owner to an entry of the Standard, shown on its line: what you did, or why you cannot act and what you expect from the owner. `handOff: true` hands the entry to the owner (it comes first on the Standard, marked « remis au propriétaire », and you are no longer woken for it). It never approves, closes nor relaunches anything.",
+      inputSchema: inputs.hq_blocked_note,
+    },
+    async (args) => respond(() => hqBlockedNote(db, ctx, args)),
   );
 
   await server.connect(new StdioServerTransport());
