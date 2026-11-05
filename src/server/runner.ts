@@ -21,6 +21,7 @@ import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { skillTools, syncSkills } from "./skills";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
+import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
 export const reasonSchema = z.string().regex(/^[a-z_]{1,40}$/, "lowercase letters and underscores, 40 at most");
@@ -678,6 +679,11 @@ async function execute(p: ExecuteParams): Promise<void> {
     }
     fs.mkdirSync(agent.workDir, { recursive: true });
     syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
+    // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
+    const guard = writeGuardConfig({ workDir: agent.workDir, allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools });
+    if (guard.allow.length > 0) {
+      installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
+    }
     fs.mkdirSync(config.runsDir, { recursive: true });
     writeMcpConfig({
       file: mcpConfigPath,
@@ -700,7 +706,7 @@ async function execute(p: ExecuteParams): Promise<void> {
       mcpConfigPath,
       maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
       workDir: agent.workDir,
-      env: agentEnv(process.env, hqEnv),
+      env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard) },
       signal: active.controller.signal,
       onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
     };

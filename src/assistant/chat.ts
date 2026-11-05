@@ -6,6 +6,7 @@ import { builtInTools, CLAUDE_ENV, DENIED_TOOLS, expandMcpServers, usageFrom } f
 import type { Env } from "../server/config";
 import type { Usage } from "../server/engine";
 import { agentEnv } from "../server/runner";
+import { cliToolRules, installWriteGuard, writeGuardConfig, writeGuardEnv } from "../server/write-guard";
 import type { ChatConfig } from "./home-config";
 
 /** Room and agent the chat's per-turn variables name (the chat is not an agent). */
@@ -26,7 +27,9 @@ function isInside(root: string, target: string): boolean {
  * are denied. The output is the stream-json event stream, so that MyHQ sees
  * the tools a turn called (the confirmation guard of chat actions) and its
  * usage (the meter). The home's system prompt file, when there is one,
- * replaces the CLI's default prompt (`--system-prompt-file`).
+ * replaces the CLI's default prompt (`--system-prompt-file`). Write rules
+ * lose their path and the `writeDirs` get an `--add-dir` (unless covered):
+ * where the chat writes is enforced by its write guard (askChat).
  */
 export function buildChatArgs(
   chat: ChatConfig,
@@ -37,16 +40,20 @@ export function buildChatArgs(
   args.push("--output-format", "stream-json", "--verbose", "--model", chat.model);
   if (chat.systemPrompt) args.push("--system-prompt-file", chat.systemPrompt);
   for (const dir of chat.addDirs) args.push("--add-dir", dir);
-  // Read-only access the turn needs on top of the configured ones (a received file's folder), unless already covered.
-  for (const dir of options.extraDirs ?? []) {
-    if (![chat.cwd, ...chat.addDirs].some((root) => isInside(root, dir))) args.push("--add-dir", dir);
+  // Access the turn needs on top of the configured ones (the writeDirs, a received file's folder), unless already covered.
+  const covered = [chat.cwd, ...chat.addDirs];
+  for (const dir of [...chat.writeDirs, ...(options.extraDirs ?? [])]) {
+    if (!covered.some((root) => isInside(root, dir))) {
+      args.push("--add-dir", dir);
+      covered.push(dir);
+    }
   }
   args.push("--permission-mode", chat.permissionMode, "--setting-sources", "project,local");
   if (options.mcpConfigPath) args.push("--mcp-config", options.mcpConfigPath);
   args.push("--strict-mcp-config");
   const tools = builtInTools(chat.allowedTools);
   args.push("--tools", ...(tools.length > 0 ? tools : [""]));
-  if (chat.allowedTools.length > 0) args.push("--allowedTools", ...chat.allowedTools);
+  if (chat.allowedTools.length > 0) args.push("--allowedTools", ...cliToolRules(chat.allowedTools));
   args.push("--disallowedTools", ...DENIED_TOOLS);
   args.push("--max-budget-usd", String(options.maxBudgetUsd));
   return args;
@@ -240,9 +247,32 @@ export async function askChat(params: {
   maxBudgetUsd: number;
   /** Needed for the chat's MCP servers; without it none is configured. */
   mcp?: ChatMcp;
+  /**
+   * The write guard's hook script (writeGuardScript). Given, the guard is
+   * installed in the chat's `cwd` and the turn may write only there, in its
+   * `writeDirs` and in its requests directory, whatever the permission mode
+   * (`acceptEdits` alone would also let it write in every `--add-dir`, which
+   * are given for reading).
+   */
+  writeGuardScript?: string;
   run?: ChatRunner;
 }): Promise<ChatOutcome> {
   const run = params.run ?? spawnChat;
+  let env = params.env;
+  if (params.writeGuardScript) {
+    try {
+      // The chat's cwd may be a folder of a versioned home: its settings file stays out of Git.
+      installWriteGuard(params.chat.cwd, { script: params.writeGuardScript, ignoreInGit: true });
+    } catch (error) {
+      return { ok: false, reason: "error", detail: error instanceof Error ? error.message : String(error) };
+    }
+    const guard = writeGuardConfig({
+      workDir: params.chat.cwd,
+      allowedTools: params.chat.allowedTools,
+      writeDirs: [...params.chat.writeDirs, ...(params.chat.requestsDir ? [params.chat.requestsDir] : [])],
+    });
+    env = { ...env, ...writeGuardEnv(guard) };
+  }
   let mcpConfigPath: string | undefined;
   if (params.mcp && Object.keys(params.chat.mcpServers).length > 0) {
     try {
@@ -261,7 +291,7 @@ export async function askChat(params: {
         extraDirs: params.extraDirs,
       }),
       cwd: params.chat.cwd,
-      env: params.env,
+      env,
       input,
       timeoutMs: params.chat.timeoutMs,
     });

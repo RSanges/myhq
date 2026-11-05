@@ -8,6 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { buildMcpBundle } from "../scripts/build-mcp";
 import { mcpBundleEntry } from "../src/mcp/bundle";
 import { hqMcpServerCommand } from "../src/server/claude-engine";
+import { WRITE_GUARD_HOOK, writeGuardScript } from "../src/server/write-guard";
 
 /** A scratch copy of the repository (sources and templates; node_modules is linked), to build in. */
 function scratchRepo(): string {
@@ -59,6 +60,9 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
     assert.equal(path.join(dir, "server.mjs"), mcpBundleEntry(root));
     assert.ok(fs.existsSync(path.join(dir, "templates", "roles", "dev.md")));
     assert.ok(!fs.existsSync(`${dir}.tmp`));
+    // The write guard's hook is frozen beside it, and the runs use that copy.
+    assert.equal(writeGuardScript(root), path.join(dir, WRITE_GUARD_HOOK));
+    assert.ok(fs.existsSync(writeGuardScript(root)));
 
     const warnings: string[] = [];
     const command = hqMcpServerCommand(root, (message) => warnings.push(message));

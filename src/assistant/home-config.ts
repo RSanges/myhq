@@ -29,6 +29,8 @@ const chatSchema = z.strictObject({
   systemPrompt: relativePath.optional(),
   model: z.enum(MODELS).default("sonnet"),
   addDirs: z.array(relativePath).default([]),
+  /** Folders outside `cwd` the chat may write (relative to the home); every other folder is read-only (write-guard.ts). */
+  writeDirs: z.array(relativePath).default([]),
   allowedTools: z.array(z.string().min(1)).default([]),
   /**
    * Same shape and placeholders as `agents[].mcpServers` of room.json; never
@@ -79,6 +81,8 @@ export type ChatConfig = {
   /** Absolute path of the system prompt file, or null (the CLI's default prompt). */
   systemPrompt: string | null;
   addDirs: string[];
+  /** Absolute folders outside `cwd` that the chat may write (its write guard's `writeDirs`). */
+  writeDirs: string[];
   model: (typeof MODELS)[number];
   allowedTools: string[];
   mcpServers: Record<string, McpServerConfig>;
@@ -139,6 +143,7 @@ export function loadAssistantConfig(home: string): AssistantConfig {
           cwd: resolve(data.chat.cwd),
           systemPrompt: data.chat.systemPrompt ? resolve(data.chat.systemPrompt) : null,
           addDirs: data.chat.addDirs.map(resolve),
+          writeDirs: data.chat.writeDirs.map(resolve),
           model: data.chat.model,
           allowedTools: data.chat.allowedTools,
           // The flag is MyHQ's: it never reaches the CLI's MCP config.

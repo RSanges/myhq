@@ -56,9 +56,11 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
 /** A chat configuration with the defaults of assistant.json, for tests. */
 export function chatConfig(overrides: Partial<ChatConfig> = {}): ChatConfig {
   return {
-    cwd: process.cwd(),
+    // A scratch folder, never the repository: a chat turn installs its write guard in its cwd.
+    cwd: fs.mkdtempSync(path.join(os.tmpdir(), "myhq-chat-")),
     systemPrompt: null,
     addDirs: [],
+    writeDirs: [],
     model: "haiku",
     allowedTools: [],
     mcpServers: {},

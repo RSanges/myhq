@@ -94,14 +94,14 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].name` | yes | Display name. |
 | `agents[].role` | yes | Path of the role prompt, relative to the room directory. |
 | `agents[].model` | yes | `opus`, `sonnet` or `haiku`. |
-| `agents[].allowedTools` | yes | Whitelist passed to `--allowedTools`. |
+| `agents[].allowedTools` | yes | Whitelist passed to `--allowedTools`. A write rule may carry a path relative to the working directory: `Write`, `Write(**)`, `Write(./**)` or `Write(/**)` give the whole folder, `Write(models/**)` only `models/` (same for `Edit`, `MultiEdit`, `NotebookEdit`; the rules of all the write tools add up). The path is enforced by MyHQ's write guard, a hook installed in `<working directory>/.claude/settings.local.json`, and the CLI gets the bare name (`Write`); a write anywhere else is refused with a reason the agent sees (see "The write guard" in `architecture.md`). `Bash(...)` and MCP rules are passed as written. |
 | `agents[].mcpServers` | no | Extra MCP servers, in the shape of Claude Code's MCP config. The `hq` server is always added by MyHQ. |
 | `agents[].workingDirectory` | no | Defaults to the `worktree` when there is one, `data/work/<room>/<agent>` otherwise. Must stay inside the home. With a `worktree`, leave it out or give the same path. |
 | `agents[].cron` | no | A cron expression (five fields, read in `HQ_TIMEZONE`), or a list of `{ "cron": "...", "task": "..." }` for several routines with a task each. Without it the agent only runs on demand. |
 | `agents[].armed` | no | Initial armed state of the routines (default `false`: a declared cron does not fire). Once changed from the interface or with `/arm` and `/disarm`, the database value wins. Nothing fires anyway until `HQ_SCHEDULER=on`. |
 | `agents[].worktree` | no | Path, relative to the home and inside it, of a Git worktree of the target repository: created with `git worktree add` on branch `hq/<agent>` when missing (on approval of an onboarding proposal, and before a run). The agent works in it. |
-| `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. |
-| `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
+| `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. A write rule with a path (`Write(supabase/**)`) is also enforced by the write guard. |
+| `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. Read-only: the write guard refuses any write there. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
 | `agents[].isoSprite` | no | Isometric character sheet of the floor (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing or is not a sheet of the right size, the agent is drawn as one of the neutral people shipped with MyHQ, always the same one for the same agent. |
 | `agents[].sprite` | no | The old top-down sheet of the floor (4 by 4 square cells), relative to the home, inside it. Still accepted and served by `GET /api/sprites/<room>/<agent>`, but **no longer drawn**: the floor is isometric and only draws `isoSprite`. |
@@ -441,6 +441,7 @@ assistant runs with its core commands only.
     "systemPrompt": "assistant/chat/prompt.md",
     "model": "sonnet",
     "addDirs": ["../notes"],
+    "writeDirs": ["../notes"],
     "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "mcp__mail__*"],
     "mcpServers": {
       "mail": {
@@ -466,10 +467,11 @@ assistant runs with its core commands only.
 | `chat.cwd` | yes | Working directory of the `claude -p` chat. `--continue` resumes the latest conversation of this directory, so changing it starts a new one. |
 | `chat.systemPrompt` | no | The conversation's system prompt: a Markdown file of the home, passed explicitly with `--system-prompt-file`, which replaces the CLI's default prompt (as a role file does for an agent, but whole). This is the lever on the assistant's behaviour, written for any engine. The CLI still reads the `CLAUDE.md` files of `chat.cwd` and of its parent directories as project memory, so keep them short, or say in the prompt that they do not apply. Without it, the CLI's default prompt and the `CLAUDE.md` of `chat.cwd` are what shape the chat, as before. |
 | `chat.model` | no | `opus`, `sonnet` (default) or `haiku`. |
-| `chat.addDirs` | no | Directories the chat may read and write (`--add-dir`). Default: none. |
+| `chat.addDirs` | no | Directories the chat may read (`--add-dir`). Read-only unless also listed in `chat.writeDirs`. Default: none. |
+| `chat.writeDirs` | no | Directories outside `chat.cwd` the chat may write (a notes vault, a data folder), relative to the home; each is also passed as `--add-dir` unless `chat.cwd` or `chat.addDirs` covers it. Each turn installs the write guard in `chat.cwd` (its `.claude/settings.local.json`, kept out of Git by a `.claude/.gitignore` of MyHQ's): the chat writes only in `chat.cwd`, these folders and `chat.requests.dir`, whatever `chat.permissionMode` says. Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
 | `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. A server may add `"untrusted": false` (MyHQ's own flag, never written to the MCP config): every server is untrusted by default (see "Chat actions"). Default: none. |
-| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`); default none. The chat needs write access to that directory (`chat.cwd` or `chat.addDirs`). |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`); default none. The directory must be inside `chat.cwd`, `chat.addDirs` or `chat.writeDirs`; the write guard lets the chat write there. |
 | `chat.untrustedTools` | no | More tools whose results count as untrusted for chat actions, by exact name or with a final `*` (`mcp__mail__*`). The web tools and the tools of untrusted servers always count. Default: none. |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |

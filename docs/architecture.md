@@ -14,7 +14,10 @@ is built from the room and role definition in the home directory:
 
 - `--append-system-prompt-file`: the role prompt (`roles/<agent>.md`).
 - `--model`: the model of the agent (`opus`, `sonnet` or `haiku`).
-- `--allowedTools`: the agent's whitelist of tools.
+- `--allowedTools`: the agent's whitelist of tools. A write rule loses its
+  path on the way (`Write(models/**)` is passed as `Write`): the paths are
+  enforced by MyHQ's write guard (see "The write guard" below), not by the
+  CLI. Every other rule (`Bash(git *)`, `mcp__hq__*`) is passed as written.
 - `--output-format stream-json --verbose`: the event stream (`--verbose` is
   required in print mode). It animates the room and feeds the activity log.
 - `--mcp-config`: a JSON file generated per run, with the HQ MCP server and
@@ -22,12 +25,14 @@ is built from the room and role definition in the home directory:
 - `--max-budget-usd`: the cap on the cost of one run.
 - `--strict-mcp-config`: only the servers of that file, none of the user's.
 - `--setting-sources project,local`: the user's personal settings (hooks,
-  plugins) do not run inside agents.
+  plugins) do not run inside agents. The local settings of the working
+  directory carry the write guard's hook.
 - `--disallowedTools`: deployment and schema push commands, denied to every
   agent whatever its whitelist says, plus the agent's own `disallowedTools`.
 - `--add-dir`: the directories the agent may read besides its working
   directory (`addDirs`, by default the target repository for an agent that
-  reads files and has no worktree).
+  reads files and has no worktree). They are read-only: the write guard
+  refuses any write there.
 - `--tools`: only the built-in tools of the whitelist exist for the agent
   (none when it only uses MCP tools), so nothing outside it can run.
 
@@ -862,10 +867,71 @@ export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.
 
+### The write guard
+
+The CLI's path rules cannot be trusted with the limit of an agent's writes.
+Measured on CLI 2.1.318 in print mode: `Write(**)`, `Write(./**)` or
+`Write(/**)` sometimes refuse a write in the working directory ("Claude
+requested permissions to write ..., but you haven't granted it yet", in the
+middle of a run where an earlier write passed); a bare `Write` lets a write
+land outside the working directory (`../outside.txt`); and
+`--permission-mode acceptEdits` lets one land in any `--add-dir`, which MyHQ
+gives for reading. So MyHQ enforces the paths itself
+(`src/server/write-guard.ts`, `src/server/write-guard-hook.mjs`):
+
+- Before a run whose rules allow a write, the runner installs a Claude Code
+  `PreToolUse` hook in `<working directory>/.claude/settings.local.json`
+  (loaded by `--setting-sources project,local`). MyHQ's entry goes first, a
+  previous one is replaced, every other setting and hook of the file is kept;
+  a file that is not a JSON object fails the run with an explicit error. The
+  hook is in exec form (`command`: the Node binary, `args`: the script, no
+  shell, so no quoting issue on Windows), matches `Write|Edit|MultiEdit|NotebookEdit`,
+  and has `onFailure: "block"`: a hook that cannot run blocks the write.
+- In a worktree, the file stays out of Git as the skills do: a
+  `.claude/.gitignore` of MyHQ's ignores `settings.local.json` and itself (no
+  Git command, nothing shared with the other worktrees). A repository with
+  its own `.claude/.gitignore` keeps it untouched, and Git must already
+  ignore the settings file there, otherwise the run fails with an explicit
+  error rather than leave a file an agent could commit.
+- The script is plain JavaScript started with `node` (no `tsx`, no
+  dependency), the frozen copy of `build/mcp` made by `npm run build` (the
+  sources without one), so that an agent editing this repository never
+  changes the guard of the runs in service. The run's configuration reaches it
+  in the `MYHQ_WRITE_GUARD` environment variable (the agent cannot change the
+  environment of its own CLI): the working directory, the patterns its write
+  rules allow there (`Write`, `Write(**)`, `Write(./**)`, `Write(/**)`: the
+  whole folder; `Write(models/**)`: only `models/`; the rules of all the write
+  tools add up), the patterns its `disallowedTools` write rules forbid, and
+  for the chat its `writeDirs`.
+- For each call, the hook resolves the path (against the session's `cwd`
+  when relative; the deepest existing part through `realpath`, so links,
+  junctions and short names cannot lead out; a dangling link is refused) and
+  compares it by whole segments, without case on Windows and macOS. Patterns
+  are anchored at the working directory: `**` any depth, `*` and `?` within
+  a segment, a pattern without a wildcard also covers what lies under it;
+  `//absolute`, `~/` and `..` patterns grant nothing. A write outside the
+  roots, in an `--add-dir`, under a deny pattern, or on
+  `.claude/settings.json` or `.claude/settings.local.json` (the hook itself)
+  is refused: exit code 2, and a reason on stderr that the CLI shows to the
+  model (what was refused, why, and where it may write). Otherwise the hook
+  says nothing (exit code 0, no output) and the CLI's own permission flow
+  goes on. Any error (no configuration, unreadable input) is a refusal.
+- An agent whose rules allow no write gets no hook: the CLI refuses its
+  writes in print mode. The `--disallowedTools` write rules are still passed
+  to the CLI as written (they deny correctly on 2.1.318), the guard being the
+  enforcement that does not depend on the CLI version.
+- The `Bash` rules are passed unchanged and still hold on 2.1.318 (a command
+  outside them is refused, a `disallowedTools` pattern denies), but they do not
+  limit paths: a whitelisted `python *`, `cp *` or `mkdir *` can write
+  anywhere. The guard covers the file tools only.
+
+The assistant's chat gets the same guard (see "The assistant on Telegram").
+
 ### Security
 
 The app holds no production secret. Agents write only in their own working
-directory, which is a dedicated Git worktree for agents that write code.
+directory, which is a dedicated Git worktree for agents that write code; the
+file tools are held to it by the write guard.
 Deployment tools and anything like `db:push`, `vercel` or `eas submit` are
 denied to every agent. Agents that read the web have no file-writing tool
 outside their directory. Anything published under a project's name goes
@@ -1183,7 +1249,13 @@ order:
    and `${NAME}` placeholders as an agent's, plus `HQ_DB_PATH`, `HQ_ROOM` =
    `_chat`, `HQ_AGENT_ID` = `chat` and `HQ_RUN_ID` = a turn id; never the `hq`
    server; the file is deleted after the turn), and `chat.allowedTools` may
-   name their tools. After a successful reply, the action files of
+   name their tools. Each turn installs the write guard in the chat's `cwd`
+   (its settings file kept out of Git: the `cwd` is usually a folder of a
+   versioned home): the chat writes only in its `cwd` and in the folders of
+   `chat.writeDirs` (also passed as `--add-dir` unless covered), never in the
+   other `addDirs`. This holds whatever `chat.permissionMode` says:
+   `acceptEdits` alone would let the chat write in every `--add-dir`. Its
+   write rules reach the CLI without their path, as an agent's do. After a successful reply, the action files of
    `chat.requests.dir` are taken first (`src/assistant/actions.ts`): `approve`,
    `reject`, `revise`, `run`, `arm` and `disarm`, whitelisted by
    `chat.requests.actions`, executed with the code of the buttons and the

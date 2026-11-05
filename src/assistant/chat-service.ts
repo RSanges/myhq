@@ -11,6 +11,7 @@ import {
   type ChatTarget,
 } from "../server/chat-history";
 import { getConfig, type Env, type HqConfig } from "../server/config";
+import { writeGuardScript } from "../server/write-guard";
 import { getDbAt, type Db, type RunRow } from "../server/db";
 import { ZERO_USAGE } from "../server/engine";
 import { HqError } from "../server/errors";
@@ -281,6 +282,7 @@ export class ChatService {
         dbPath: this.deps.config.dbPath,
         appEnv: this.deps.env,
       },
+      writeGuardScript: writeGuardScript(this.deps.config.repoRoot),
       run: this.deps.runChat,
     });
     this.meter(outcome, chat.model, startedAt);

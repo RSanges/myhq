@@ -9,6 +9,7 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } fro
 import type { Env } from "./config";
 import { HqError } from "./errors";
 import type { McpServerConfig } from "./rooms";
+import { cliToolRules } from "./write-guard";
 
 /** Denied to every agent, whatever its whitelist says. */
 export const DENIED_TOOLS = [
@@ -227,7 +228,8 @@ export function buildClaudeArgs(input: RunInput): string[] {
   for (const dir of input.addDirs ?? []) args.push("--add-dir", dir);
   const tools = input.tools ?? builtInTools(input.allowedTools);
   args.push("--tools", ...(tools.length > 0 ? tools : [""]));
-  if (input.allowedTools.length > 0) args.push("--allowedTools", ...input.allowedTools);
+  // Write rules lose their path (`Write(models/**)` gives `Write`): the write guard enforces it.
+  if (input.allowedTools.length > 0) args.push("--allowedTools", ...cliToolRules(input.allowedTools));
   args.push("--disallowedTools", ...new Set([...DENIED_TOOLS, ...(input.disallowedTools ?? [])]));
   args.push("--max-budget-usd", String(input.maxBudgetUsd));
   return args;
