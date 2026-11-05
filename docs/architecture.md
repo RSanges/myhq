@@ -845,12 +845,16 @@ is itself submitted to the user's approval.
    daily cap as any run: Sonnet, `--max-budget-usd` from
    `HQ_ONBOARDING_MAX_BUDGET_USD` (0.5 by default), the role prompt shipped in
    `templates/onboarding.md`, the target repository as working directory, the
-   templates folder as `--add-dir`, the built-in tools `Read`, `Glob` and
+   templates folder and the `rooms/` folder of the home as `--add-dir`, the built-in tools `Read`, `Glob` and
    `Grep` available but not pre-approved (in print mode Claude Code reads
    inside its working directories only, and nothing outside them), and the
    `hq_submit` and `hq_task_update` tools. The run prompt gives the target,
-   the rooms that already exist, the templates (`templates/roles/*.md`) and
-   the payload to submit. It also states the language of the home (`language`
+   the rooms that already exist, the rooms and their agents (the same list as
+   the agent mode, `home-roster.ts`: id, name, model, the first line of the
+   role, and a mark on the shared studios), the templates (`templates/roles/*.md`) and
+   the payload to submit. It must not propose an agent whose trade a shared
+   studio already holds: the agents of the new room order that work from the
+   studio (`hq_message` with `room`), and the proposal says so. It also states the language of the home (`language`
    in `myhq.json`, `en` by default): the agent writes the proposal, the role
    prompts and the "HQ agents" block in that language, translating the English
    templates (the translated prompt travels as `content` of the role), and

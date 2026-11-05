@@ -115,7 +115,7 @@ test("an onboarding run reads the target with read-only tools and submits a norm
   assert.equal(input.maxBudgetUsd, config.onboardingMaxBudgetUsd);
   assert.deepEqual(input.tools, ["Read", "Glob", "Grep"]);
   assert.deepEqual(input.allowedTools, ["mcp__hq__hq_submit", "mcp__hq__hq_task_update"]);
-  assert.deepEqual(input.addDirs, [templatesDir]);
+  assert.deepEqual(input.addDirs, [templatesDir, path.join(config.home, "rooms")]);
   assert.equal(input.rolePath, path.join(process.cwd(), "templates", "onboarding.md"));
   assert.match(input.prompt, new RegExp(`"targetRepo": "${targetRepo.replace(/\./g, "\\.")}"`));
   assert.match(input.prompt, /Rooms that already exist, and cannot be used: "demo"/);

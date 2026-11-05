@@ -6,6 +6,7 @@ import { getConfig, type HqConfig } from "./config";
 import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
+import { homeRosterLines } from "./home-roster";
 import { loadHome, toPosix, type Agent, type Model, type Room } from "./rooms";
 import { ROOM_PROPOSAL } from "./proposal";
 import { launchRun, type RunnerDeps } from "./runner";
@@ -77,6 +78,10 @@ export function buildOnboardingPrompt(p: {
   targetRepo: string;
   roomName: string;
   existingRooms: string[];
+  /** The rooms and their agents, as the agent mode lists them (see home-roster.ts), so that no agent is proposed twice. */
+  roster: string[];
+  /** The `rooms/` folder of the home, which the run may read (the role paths of the roster are relative to it), or null when it has none. */
+  roomsDir: string | null;
   /** BCP 47 tag of the home (`language` in myhq.json). */
   language?: string;
   templatesDir: string;
@@ -94,6 +99,12 @@ export function buildOnboardingPrompt(p: {
     `Suggested room name: "${p.roomName}". Rooms that already exist, and cannot be used: ${
       p.existingRooms.length > 0 ? p.existingRooms.map((r) => `"${r}"`).join(", ") : "none"
     }.`,
+    "",
+    p.roomsDir
+      ? `Rooms and agents of the home (you can read ${p.roomsDir}; the role paths below are relative to it):`
+      : "Rooms and agents of the home:",
+    ...p.roster,
+    "Before you propose an agent, check this list. Never propose an agent whose trade already exists in a shared studio (for example design, CAD, video, sound): the agents of the new room order that work from the studio instead, with hq_message (\"room\": the shared room, \"to\": the studio agent). Give them mcp__hq__hq_message and mcp__hq__hq_rooms in allowedTools, and say in the body of the proposal and in their roles (notes) what they order from which studio. Open a role file of the list only when its first line is not enough.",
     "",
     `Role templates (read them in ${p.templatesDir} if you need to):`,
     ...templates.map((t) => `- ${t.name}: ${t.title}`),
@@ -217,7 +228,7 @@ function previousProposal(db: Db, task: TaskRow): PreviousProposal | null {
 }
 
 /** MyHQ's onboarding agent for one target repository. */
-function onboardingAgent(config: HqConfig, target: string, model: Model): Agent {
+function onboardingAgent(config: HqConfig, target: string, addDirs: string[], model: Model): Agent {
   return {
     id: ONBOARDING_AGENT,
     name: ONBOARDING_AGENT,
@@ -225,9 +236,10 @@ function onboardingAgent(config: HqConfig, target: string, model: Model): Agent 
     allowedTools: ["mcp__hq__hq_submit", "mcp__hq__hq_task_update"],
     // Read-only tools exist, without being pre-approved: Claude Code allows
     // reading inside the working directory (the target) and the --add-dir
-    // folders (the templates), and nothing else in print mode.
+    // folders (the templates and the rooms of the home), and nothing else in
+    // print mode.
     tools: ["Read", "Glob", "Grep"],
-    addDirs: [roleTemplatesDir(config.repoRoot)],
+    addDirs,
     mcpServers: {},
     rolePath: onboardingRolePath(config.repoRoot),
     workDir: target,
@@ -271,7 +283,14 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
   const home = loadHome(config.home);
   const existingRooms = [...home.rooms.map((r) => r.name), ...home.invalid.map((r) => path.basename(r.dir))];
   const room: Room = { name: ONBOARDING_ROOM, dir: config.home, targetRepo: target, color: null, shared: false, agents: [] };
-  const agent = onboardingAgent(config, target, deps.model ?? "sonnet");
+  const roomsDir = path.join(config.home, "rooms");
+  const readableRooms = fs.existsSync(roomsDir) ? roomsDir : null;
+  const agent = onboardingAgent(
+    config,
+    target,
+    [roleTemplatesDir(config.repoRoot), ...(readableRooms ? [readableRooms] : [])],
+    deps.model ?? "sonnet",
+  );
   room.agents.push(agent);
   const targetRepo = toPosix(path.relative(config.home, target)) || ".";
   const task = onboardingTask(targetRepo);
@@ -305,6 +324,8 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
         targetRepo,
         roomName: proposed ?? suggestRoomName(path.basename(target)),
         existingRooms,
+        roster: homeRosterLines(home, roomsDir),
+        roomsDir: readableRooms,
         language,
         templatesDir: roleTemplatesDir(config.repoRoot),
         mailbox,

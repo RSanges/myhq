@@ -9,7 +9,8 @@ import { getConfig, type HqConfig } from "./config";
 import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
-import { idSchema, loadHome, toPosix, type Agent, type Home, type Model, type Room } from "./rooms";
+import { homeRosterLines } from "./home-roster";
+import { idSchema, loadHome, type Agent, type Home, type Model, type Room } from "./rooms";
 import { launchRun, WAITS, type RunnerDeps } from "./runner";
 import { listRoleTemplates, roleTemplatesDir } from "./templates";
 
@@ -128,21 +129,6 @@ function languageName(tag: string): string {
   }
 }
 
-/** The rooms and agents of the home, one line each, for the prompt. */
-function homeLines(home: Home, roomsDir: string): string[] {
-  if (home.rooms.length === 0) return ["(no room yet)"];
-  const rel = (p: string) => toPosix(path.relative(roomsDir, p));
-  return home.rooms.flatMap((room) => [
-    `- "${room.name}" (${room.shared ? "shared studio" : "project room"}), target repository ${toPosix(path.relative(home.root, room.targetRepo)) || "."}:`,
-    ...room.agents.map((a) => {
-      const routines = a.routines.map((r) => r.cron);
-      return `  - ${a.id} "${a.name}": ${a.model}, tools ${a.allowedTools.join(", ") || "none"}${
-        routines.length > 0 ? `, routines ${routines.join(" | ")}` : ""
-      }, role ${rel(a.rolePath)}`;
-    }),
-  ]);
-}
-
 /** The user's message of an agent-mode run: the need, the home, the templates, the catalogue and the payload. */
 export function buildAgentProposalPrompt(p: {
   runId: number;
@@ -167,7 +153,7 @@ export function buildAgentProposalPrompt(p: {
     room ? `It comes from room "${room}" (a hint for the room, not a rule).` : "No room is given: pick the right one.",
     "",
     `Rooms and agents of the home (your working directory is ${p.roomsDir}: read rooms' room.json and roles there):`,
-    ...homeLines(p.home, p.roomsDir),
+    ...homeRosterLines(p.home, p.roomsDir),
     "",
     `Role templates (in ${p.templatesDir}; examples of structure for the role prompt):`,
     ...listRoleTemplates(p.templatesDir).map((t) => `- ${t.name}: ${t.title}`),

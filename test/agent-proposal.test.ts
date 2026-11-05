@@ -285,7 +285,7 @@ test("proposeAgent starts an agent-mode run at once, with the home, the catalogu
   assert.match(input.prompt, /Asked by: the owner\./);
   assert.match(input.prompt, /It comes from room "demo"/);
   assert.match(input.prompt, /- "demo" \(project room\), target repository \.\.\/demo-project:/);
-  assert.match(input.prompt, /  - scout "Scout": haiku, tools mcp__hq__\*, role demo\/roles\/scout\.md/);
+  assert.match(input.prompt, /  - scout "Scout": haiku, You are a test agent\.; tools mcp__hq__\*; role demo\/roles\/scout\.md/);
   assert.match(input.prompt, /### \.\.\/demo-project \(room demo\)\n- \(missing\)/);
   assert.match(input.prompt, /- dev: developer/);
   assert.match(input.prompt, /Title of the hq_submit item: exactly in this form: "Agent proposal: <agent id> \(<room>\)"/);
