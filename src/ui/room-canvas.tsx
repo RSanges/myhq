@@ -26,8 +26,8 @@ export type RoomCanvasProps = {
   reduced: boolean;
   onSelect: (key: string) => void;
   onFailure: () => void;
-  /** A click on the user's desk of a room of the single floor (the room of the home it serves). */
-  onOwnerDesk?: (room: string) => void;
+  /** A click on the counter of a room of the single floor (the room of the home it counts for). */
+  onCounter?: (room: string) => void;
   /** A click on the user's own office (single floor), or on the user's desk or tray of a lobby: open the desk. */
   onOffice?: () => void;
   /** The logo of each room of the home that has one (an image URL), for its signboard. */
@@ -268,7 +268,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
     colorScheme.addEventListener("change", onScheme);
 
-    // Pointers: a drag pans, two fingers pinch to zoom, a click without a drag picks a character, a desk or a room.
+    // Pointers: a drag pans, two fingers pinch to zoom, a click without a drag picks a character, a counter, the office or a room.
     const pointers = new Map<number, { x: number; y: number }>();
     let start = { x: 0, y: 0 };
     let dragged = false;
@@ -304,7 +304,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
         if (!renderer) return;
         const opens =
           (lastView !== null && renderer.agentAt(lastView, point.x, point.y) !== null) ||
-          (latest.current.onOwnerDesk !== undefined && renderer.ownerDeskAt(point.x, point.y) !== null) ||
+          (latest.current.onCounter !== undefined && renderer.counterAt(point.x, point.y) !== null) ||
           (latest.current.onOffice !== undefined && renderer.officeAt(point.x, point.y));
         canvas.style.cursor = opens ? "pointer" : renderer.roomAt(point.x, point.y) !== null ? "zoom-in" : "grab";
         return;
@@ -344,9 +344,9 @@ export function RoomCanvas(props: RoomCanvasProps) {
         current.onSelect(hit.key);
         return;
       }
-      const desk = current.onOwnerDesk ? renderer.ownerDeskAt(point.x, point.y) : null;
-      if (desk !== null) {
-        current.onOwnerDesk?.(desk);
+      const counter = current.onCounter ? renderer.counterAt(point.x, point.y) : null;
+      if (counter !== null) {
+        current.onCounter?.(counter);
         return;
       }
       if (current.onOffice && renderer.officeAt(point.x, point.y)) {

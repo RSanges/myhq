@@ -34,6 +34,18 @@ export const CELL = 16;
 export const WALL_HEIGHT = 64;
 /** The top of a signboard on a back wall, in voxels (floor.json `sign.top`, scripts/iso/furniture.mjs). */
 export const SIGN_TOP = 79;
+/**
+ * The counter of a room of the single floor (what waits for the user's
+ * decision): a signboard of COUNTER_SEGMENTS middle segments, COUNTER_LENGTH
+ * voxels long, as high as a signboard: beside the name's board on the back
+ * wall along x when that wall holds both, else on the back wall along y,
+ * COUNTER_FROM voxels from the back corner (the name's board then starts the
+ * same distance from the corner on the other wall). The hiding rules count it
+ * on both places.
+ */
+export const COUNTER_SEGMENTS = 2;
+export const COUNTER_LENGTH = 24;
+export const COUNTER_FROM = 4;
 
 export type Point = { x: number; y: number };
 
@@ -63,17 +75,20 @@ export type PlacedRoom = {
   color: string | null;
   /** A signboard stands on its back wall along x (single floor): it rises to SIGN_TOP. */
   sign: boolean;
+  /** A counter of what waits for the user stands on its back wall along y, by the corner (see COUNTER_LENGTH). */
+  counter: boolean;
 };
 
-/** The user's own desk in a room of a single floor: empty, with the pile of what that room waits for. */
-export type OwnerDesk = {
-  /** The room of the home whose items it holds (`_hq`, the onboarding room, in the lobby). */
+/**
+ * Where the agents bring what they submit for a room of a single floor: a
+ * spot in its opening (what waits is counted on the counter beside its
+ * signboard, drawn by the renderer).
+ */
+export type OwnerSpot = {
+  /** The room of the home whose items land there (`_hq`, the onboarding room, in the lobby). */
   room: string;
   /** Index of its room in `rooms`. */
   roomIndex: number;
-  /** The workstation and its empty chair (pieces). */
-  desk: number;
-  chair: number;
   /** Where an agent stands to drop a folder, and the way it faces there. */
   stand: Point;
   standNode: number;
@@ -120,14 +135,15 @@ export type RoomLayout = {
     standNode: number;
     faces: Direction;
   } | null;
-  /** The user's desk of each room of a single floor; none on the floor of one room. */
-  owners: OwnerDesk[];
+  /** Where the items of each room of a single floor are dropped; none on the floor of one room. */
+  owners: OwnerSpot[];
   /**
-   * The user's own office (the single floor): its room, its desk and chair,
-   * the filing cabinet of its tray, its lamp and calendar; null elsewhere
-   * (the floor of one room has the user's desk of its lobby, `user`).
+   * The user's own office (the single floor), drawn as the hub's scene (`office`
+   * of floor.json, its pile and its letter tray following the counts): its
+   * room; null elsewhere (the floor of one room has the user's desk of its
+   * lobby, `user`).
    */
-  office: { room: number; desk: number; chair: number; tray: number } | null;
+  office: { room: number } | null;
   /** The whiteboard of the meeting room and the coffee corner (pieces), when the floor has them. */
   board: number | null;
   coffee: number | null;
@@ -265,19 +281,19 @@ export type LayoutOptions = {
   reception?: boolean;
 };
 
-/** A room to assemble: its plan, who sits at its desks, and, on a single floor, the user's desk and the counter. */
+/** A room to assemble: its plan, who sits at its desks, and, on a single floor, its drop spot and the reception counter. */
 export type BuildRoom = {
   spec: RoomSpec;
   project: string | null;
   color: string | null;
   /** The agent of each desk of `spec.desks`, in order; undefined leaves the chair empty. */
   keys: (string | undefined)[];
-  /** The user's own desk of the room (single floor). */
-  owner?: DeskSpec;
+  /** Where its agents drop what they submit (single floor), in the room's cells. */
+  drop?: { stand: Cell };
   /** The reception counter of the lobby of a single floor, drawn with the receptionist on request. */
   counter?: { at: Cell; staff: Cell; stand: Cell; faces: Direction; turn: 0 | 1 };
-  /** The user's own office (single floor): its desk and the filing cabinet of its tray. */
-  office?: { desk: DeskSpec; tray: Cell };
+  /** The user's own office (single floor), drawn whole from the floor set. */
+  office?: boolean;
   /** A signboard on its back wall (single floor). */
   sign?: boolean;
 };
@@ -304,7 +320,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
   const lines: Point[][] = floor.lanes.map((lane) => lane.map(centreOf));
   const stands: Point[] = [];
   const offices: PendingOffice[] = [];
-  const owners: Omit<OwnerDesk, "standNode">[] = [];
+  const owners: Omit<OwnerSpot, "standNode">[] = [];
   const found: { reception: { counter: number; office: PendingOffice } | null; user: UserSpot | null } = { reception: null, user: null };
   let office: RoomLayout["office"] = null;
   let board: number | null = null;
@@ -354,17 +370,14 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
       seated += 1;
     });
     for (const aisle of spec.aisles ?? []) lines.push(aisle.map((cell) => centreOf(add(spec, cell))));
-    if (build.owner && build.project !== null) {
-      const desk = placeDesk(spec, index, build.owner);
-      const stand = centreOf(add(spec, build.owner.stand));
+    if (build.drop && build.project !== null) {
+      const stand = centreOf(add(spec, build.drop.stand));
       stands.push(stand);
-      owners.push({ room: build.project, roomIndex: index, desk: desk.chair - 1, chair: desk.chair, stand, faces: desk.faces });
+      // Facing into the room, towards its back wall.
+      owners.push({ room: build.project, roomIndex: index, stand, faces: directionOf(0, -1) });
     }
     if (build.counter && options.reception) placeCounter(spec, index, build.counter);
-    if (build.office) {
-      const desk = placeDesk(spec, index, build.office.desk);
-      office = { room: index, desk: desk.chair - 1, chair: desk.chair, tray: place(spec, index, "filing-cabinet", 0, build.office.tray) };
-    }
+    if (build.office) office = { room: index };
     if (spec.lobby) {
       const { user: own, tray, reception: counter, instead } = spec.lobby;
       const desk = placeDesk(spec, index, own);
@@ -395,6 +408,7 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
       project: build.project,
       color: build.color,
       sign: build.sign ?? false,
+      counter: (build.sign ?? false) && build.project !== null && !build.office,
     });
   });
 

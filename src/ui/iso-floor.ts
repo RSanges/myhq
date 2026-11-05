@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CELL, screenOf, SIGN_TOP, type Cell, type Direction, type RoomLayout } from "./room-layout";
+import { CELL, COUNTER_FROM, COUNTER_LENGTH, screenOf, SIGN_TOP, type Cell, type Direction, type RoomLayout } from "./room-layout";
 
 // The isometric floor set (public/iso/floor/floor.json, see
 // scripts/iso/README.md) as the room view reads it, and the scene of a floor
@@ -60,6 +60,22 @@ const fontSchema = z.object({
 });
 export type SignFont = z.infer<typeof fontSchema>;
 
+/** A state of a live object of the user's office: its sprite and masks (slot k: folder k), or null for nothing to add. */
+const officeStateSchema = z.object({ sprite: refSchema, masks: z.array(maskSchema) }).nullable();
+export type OfficeState = z.infer<typeof officeStateSchema>;
+
+/**
+ * The user's own office of the single floor: the hub's scene as one sprite
+ * from the room's back corner, and the states of its pile and letter tray
+ * (index n: n items), drawn over it.
+ */
+const officeSchema = z.object({
+  cells: z.tuple([z.number().int().positive(), z.number().int().positive()]),
+  sprite: refSchema,
+  states: z.object({ pile: z.array(officeStateSchema).min(1), mail: z.array(officeStateSchema).min(1) }),
+});
+export type OfficeArt = z.infer<typeof officeSchema>;
+
 export const floorSetSchema = z.object({
   version: z.literal(1),
   cell: z.object({ voxels: z.literal(CELL), w: z.number(), h: z.number() }),
@@ -77,6 +93,7 @@ export const floorSetSchema = z.object({
   furniture: z.record(z.string(), z.object({ turns: z.record(z.string(), turnSchema) })),
   sign: signSchema,
   font: fontSchema,
+  office: officeSchema,
 });
 export type FloorSet = z.infer<typeof floorSetSchema>;
 
@@ -187,8 +204,12 @@ export const characterBox = (x: number, y: number): Box => ({ x0: x - 4, y0: y -
  */
 export type Draw = { frame: number; x: number; y: number; tint: "room" | "pastel" | null; room: number };
 
-/** A thing sorted by depth: a wall piece, a rim, a piece of furniture. `piece` is its index in `layout.pieces`. */
-export type Sorted = { box: Box; draws: Draw[]; piece: number | null };
+/**
+ * A thing sorted by depth: a wall piece, a rim, a piece of furniture, the
+ * user's office drawn whole. `piece` is its index in `layout.pieces`;
+ * `office` marks the office (its live pile and tray go over it).
+ */
+export type Sorted = { box: Box; draws: Draw[]; piece: number | null; office?: boolean };
 
 export type FloorScene = {
   /** Tiles, then floor shadows, then rugs: drawn in this order under everything else. */
@@ -235,6 +256,8 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
   // The garden between the blocks of the single floor, when the floor set has grass.
   if (set.tiles.grass) for (const cell of layout.garden) tile(cell, "grass", -1);
   layout.rooms.forEach((room, index) => {
+    // The user's office brings its own floor (the hub's scene).
+    if (room.kind === "owner") return;
     const colored = typeof tinted === "function" ? tinted(index) : tinted;
     const kind = colored || room.floor === "wood" ? room.floor : room.floor === "carpet-room" ? "carpet" : "tiles";
     for (let cx = room.x; cx < room.x + room.w; cx += 1) for (let cy = room.y; cy < room.y + room.d; cy += 1) tile([cx, cy], kind, index);
@@ -273,16 +296,20 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
     const Y = room.y * CELL;
     const X1 = (room.x + room.w) * CELL;
     const Y1 = (room.y + room.d) * CELL;
-    room.back.y.forEach((kind, i) => {
+    if (room.kind === "owner") {
+      // The hub's scene, floor, back walls and furniture in one: one box, behind its rims.
+      sorted.push({ box: box(X - thick, Y - thick, X1, Y1), draws: [placeRef(X, Y, set.office.sprite)], piece: null, office: true });
+    }
+    if (room.kind !== "owner") room.back.y.forEach((kind, i) => {
       const vx = X + i * CELL;
       sorted.push({ box: box(vx, Y - thick, vx + CELL, Y), draws: [placeRef(vx, Y, walls[wallName(kind)][0].sprite)], piece: null });
     });
-    room.back.x.forEach((kind, i) => {
+    if (room.kind !== "owner") room.back.x.forEach((kind, i) => {
       const vy = Y + i * CELL;
       sorted.push({ box: box(X - thick, vy, X, vy + CELL), draws: [placeRef(X, vy, walls[wallName(kind)][1].sprite)], piece: null });
     });
     // The post of the corner, where two back walls meet (a room with a low partition on one side has none).
-    if (room.back.x.length > 0 && room.back.y.length > 0) {
+    if (room.kind !== "owner" && room.back.x.length > 0 && room.back.y.length > 0) {
       sorted.push({ box: box(X - thick, Y - thick, X, Y), draws: [placeRef(X, Y, walls["wall-corner"].sprite)], piece: null });
     }
     for (let i = 0; i < room.w; i += 1) {
@@ -304,8 +331,9 @@ export function buildFloorScene(set: FloorSet, layout: RoomLayout, tinted: boole
  * Whether a point of the floor (voxels) is hidden by a back wall of a room it
  * is not in: behind the wall's line and inside the wall's shape on the screen.
  * A room with a signboard counts its back wall along x up to the top of the
- * sign, along all its length. The floor plans are checked with it (no room
- * and no lane behind a wall).
+ * sign, along all its length; a room with a counter its back wall along y up
+ * to the top of the counter, where it stands. The floor plans are checked
+ * with it (no room and no lane behind a wall).
  */
 export function hiddenByWalls(layout: RoomLayout, x: number, y: number, height = 64): boolean {
   const p = screenOf(x, y);
@@ -325,7 +353,8 @@ export function hiddenByWalls(layout: RoomLayout, x: number, y: number, height =
     if (x < X0 && room.back.x.length > 0) {
       const wy = X0 - p.x / 2;
       const z = (X0 + wy - p.y) / 2;
-      if (wy >= Y0 && wy <= Y1 && z >= 0 && z <= height) return true;
+      const counter = room.counter && wy >= Y0 + COUNTER_FROM - 4 && wy <= Y0 + COUNTER_FROM + COUNTER_LENGTH + 4;
+      if (wy >= Y0 && wy <= Y1 && z >= 0 && z <= (counter ? Math.max(height, SIGN_TOP) : height)) return true;
     }
   }
   return false;

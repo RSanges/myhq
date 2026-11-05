@@ -157,6 +157,8 @@ floor.json
   }
   sign: { end, segment, post, bottom, top, period: [dx, dy], left, middle, right }
   font: { height, spacing, glyphs: { <char>: [rows of "#" and "."] } }
+  office: { cells: [w, d], sprite, states: { pile: [state], mail: [state] } }
+    state: { sprite, masks: [{ frame, mode, slot }] } | null
 ```
 
 - **Tiles**: one per cell, a voxel thick, no outline so they tile
@@ -182,9 +184,7 @@ floor.json
   `plant-tall`, `plant-small`, `printer`, `water-cooler`, `filing-cabinet`
   1 x 1, `rug` 3 x 2 (room colour border; `flat: true`: draw it right after the
   shadows, before sorting, so characters always walk over it),
-  `reception-counter` 3 x 1 (room colour band), and for the user's own office
-  the hub's `floor-lamp` and `wall-calendar` (1 x 1; the calendar hangs on the
-  back wall of its cell, 30 voxels up: never on a window cell).
+  `reception-counter` 3 x 1 (room colour band).
 - **Desk and chair**: a `workstation` at turn t takes a `desk-chair` at
   turn t in cell `corner + chair.cell`; the sitter faces the screen
   (`NE` at turn 0, `NW` at turn 1). With a sitter, draw the chair's `under`
@@ -197,6 +197,19 @@ floor.json
   box centres. A character is a small box (8 x 8 voxels) around its feet; a
   seated character is drawn inside its chair's slot. `depthSort()` in
   `compose.mjs` is the reference; `composeFloor()` draws a whole floor.
+
+- **The user's own office** (`office`): the hub's scene (`build-hub.mjs`
+  exports its `STATIC` and `DYNAMIC` props and its `lights()`; the same props
+  at the same places from the back corner) rendered in a room of `cells`
+  (6 x 6, the office of the single floor) with the floor's wall height, its
+  floor a voxel thick and ending at the room's edges. `sprite` is the whole
+  room (floor, back walls, window, furniture, post-its, phone, newspaper,
+  calendar) from the top corner of its first cell: the runtime draws it
+  instead of the office's tiles, back walls and pieces, as one sorted box. The
+  post-its (3), the newspaper and the calendar are drawn once and for all;
+  `states.pile[n]` (n from 0 to 14, a folder per item, mask slot k: folder k)
+  and `states.mail[n]` (0 to 5 letters) are the hub's states, the pixels that
+  change over `sprite`, drawn over it.
 
 ## Signboards and their font (in `floor.json`)
 
@@ -223,6 +236,12 @@ and sliced into three parts, so a board of any length joins without a seam:
   The face falls one pixel every two columns (the slope of the wall). The
   runtime writes the name there with the font below, one font pixel a 2 x 2
   square on those stairs, and the logo on its left (`src/ui/room-signs.ts`).
+- The counter of a room (what waits for the user there) is a board of the
+  same parts with two middle segments and a number on its face. On a wall
+  along y the runtime draws the parts mirrored (`scale.x = -1` about the
+  anchor, the anchor being the board's back corner on that wall) and paints
+  the face on the mirrored columns (`x' = -x - 1`), so the number still reads
+  left to right.
 
 `font` is the sign font (`font.mjs`): 7 pixels high, proportional, capitals,
 digits and `-_.'&`, drawn for MyHQ (same licence as the palette). Glyphs are

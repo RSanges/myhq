@@ -28,7 +28,8 @@ export const HOVER = { lift: 2, rings: [colour("ink6"), colour("gold2")] };
 
 // ---------------------------------------------------------------- layout
 
-const STATIC = [
+/** Exported with DYNAMIC and lights(): the user's office of the floor is the same scene (build-floor.mjs). */
+export const STATIC = [
   // name, prop, world position of its local origin, prop options, object options
   ["room", P.room, [0, 0, 0], {}, { sunShadow: false }],
   ["rug", P.rug, [16, 32, 0]],
@@ -52,7 +53,7 @@ const MONITOR_AT = [36, 1, DESK_TOP];
  * the state name the runtime uses. A state whose prop draws nothing has no
  * frame (an absent newspaper, no post-its).
  */
-const DYNAMIC = [
+export const DYNAMIC = [
   {
     name: "pile", at: [58, 2, DESK_TOP], module: "approvals",
     build: (count) => (b) => { P.deskPad(b); P.docPile(b.at(2, 2, 1), { count }); },
@@ -93,7 +94,7 @@ function world(extra = []) {
   return { w, ids };
 }
 
-function lights() {
+export function lights() {
   const lampAt = STATIC.find(([name]) => name === "lamp")[2];
   const floorAt = STATIC.find(([name]) => name === "floor-lamp")[2];
   return {

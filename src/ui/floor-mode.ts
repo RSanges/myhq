@@ -9,7 +9,7 @@ export type FloorLayoutMode = (typeof FLOOR_LAYOUTS)[number];
 export const DEFAULT_FLOOR_LAYOUT: FloorLayoutMode = "floor-per-project";
 
 /**
- * Where the user's desk of a room of the single floor leads: the page of the
+ * Where the counter of a room of the single floor leads: the page of the
  * pile of decisions (the desk object whose source is `approvals`) filtered to
  * that room, or the desk itself when the home's desk has no such object.
  */

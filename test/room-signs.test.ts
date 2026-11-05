@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { floorSetSchema, hiddenByWalls } from "../src/ui/iso-floor";
 import { layoutFloor, OFFICE_LENGTH, ROOM_DEPTH } from "../src/ui/floor-plan";
-import { CELL, SIGN_TOP } from "../src/ui/room-layout";
+import { CELL, COUNTER_FROM, COUNTER_LENGTH, COUNTER_SEGMENTS, SIGN_TOP } from "../src/ui/room-layout";
 import {
   boardLength,
   faceColumns,
@@ -112,7 +112,7 @@ test("a logo is reduced without blending: pure colours, a detail kept, transpare
   assert.equal(shrinkLogo({ width: 6, height: 6, data: new Uint8ClampedArray(144) }, 10)!.width, 6, "a small logo keeps its size");
 });
 
-test("the user's office: a block beside the lobby, its desk, its tray, a signboard, nothing hidden by the signs", () => {
+test("the user's office: a block beside the lobby, drawn whole from the floor set, a signboard, nothing hidden by the signs", () => {
   const rooms = [3, 9, 2].map((count, i) => ({ name: `p${i}`, color: null, keys: Array.from({ length: count }, (_, k) => `p${i}/a${k}`) }));
   const layout = layoutFloor(rooms, { reception: "p0", receptionist: true });
   assert.ok(layout.office, "an office");
@@ -121,11 +121,27 @@ test("the user's office: a block beside the lobby, its desk, its tray, a signboa
   assert.deepEqual([office.kind, office.w, office.d, office.project], ["owner", OFFICE_LENGTH, ROOM_DEPTH, null]);
   assert.equal(office.y + office.d, lobby.y + lobby.d, "on the front row, with the lobby");
   assert.ok(office.x + office.w < lobby.x, "beside the lobby");
-  assert.equal(layout.pieces[layout.office.desk]!.name, "workstation");
-  assert.equal(layout.pieces[layout.office.tray]!.name, "filing-cabinet");
-  for (const name of ["floor-lamp", "wall-calendar"]) assert.ok(layout.pieces.some((piece) => piece.room === layout.office!.room && piece.name === name), name);
+  // The hub's scene is one sprite of the floor set, at the office's size: no piece of the floor set in it.
+  assert.ok(!layout.pieces.some((piece) => piece.room === layout.office!.room), "nothing of the floor set in the office");
+  assert.deepEqual(floorSet.office.cells, [OFFICE_LENGTH, ROOM_DEPTH], "the office art is the size of the office");
+  assert.equal(floorSet.office.states.pile.length, 15, "a pile state from 0 to 14 items");
+  assert.equal(floorSet.office.states.mail.length, 6, "a letter tray state from 0 to 5 letters");
   assert.ok(layout.rooms.every((room) => room.sign), "every block of the single floor has its signboard");
   // A point right behind a back wall, under the top of its sign but over the top of the wall, is hidden.
   const behind = { x: (office.x + 1) * CELL, y: office.y * CELL - 70 };
   assert.ok(hiddenByWalls(layout, behind.x, behind.y), "a sign hides what is right behind it");
+});
+
+test("the counters: a board of the floor set as long as the layout assumes, by the back corner, as high as a sign", () => {
+  assert.equal(boardLength(sign, COUNTER_SEGMENTS), COUNTER_LENGTH, "COUNTER_LENGTH of room-layout.ts follows floor.json");
+  // Two digits fit on its face with the padding of a name.
+  assert.ok(faceWidth(sign, COUNTER_SEGMENTS) >= textWidth(font, "99") + 2 * SIGN_PADDING, "99 fits");
+  const rooms = [3, 9, 2].map((count, i) => ({ name: `p${i}`, color: null, keys: Array.from({ length: count }, (_, k) => `p${i}/a${k}`) }));
+  const layout = layoutFloor(rooms, { reception: "p0", receptionist: true });
+  const suite = layout.rooms.find((room) => room.project === "p1")!;
+  assert.ok(suite.counter);
+  // Right behind the side wall where the counter stands, over the top of the wall: hidden; further along the wall: not.
+  const x = suite.x * CELL - 70;
+  assert.ok(hiddenByWalls(layout, x, suite.y * CELL + COUNTER_FROM + 10 - 70), "the counter hides what is right behind it");
+  assert.ok(!hiddenByWalls(layout, x, (suite.y + 5) * CELL - 70), "the rest of the side wall only hides up to its own top");
 });

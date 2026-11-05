@@ -205,7 +205,7 @@ test("routes walk the aisles and lanes only: axis-aligned, through openings, aro
 });
 
 /** Furniture tall enough to stand in front of a window: it never does. */
-const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner", "floor-lamp", "wall-calendar"]);
+const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
 
 /**
  * The cells of a room's walls with what lies beyond each: the back walls (-y,
@@ -349,7 +349,7 @@ test("sheets: rows by direction and animation, a neutral person per agent, the p
 
 // ---- The single floor (myhq.json `floor.layout: "room-per-project"`) ----------------------------
 
-test("the single floor: a room per room of the home, its colour, its agents at its desks, the user's empty desk in each", () => {
+test("the single floor: a room per room of the home, its colour, its agents at its desks, a counter and a drop spot in each", () => {
   for (const counts of floorHomes()) {
     const rooms = homeRooms(counts);
     const layout = layoutFloor(rooms, { reception: rooms[0]!.name, receptionist: true });
@@ -364,17 +364,24 @@ test("the single floor: a room per room of the home, its colour, its agents at i
       assert.equal(seated.length, Math.min(MAX_ROOM_AGENTS, room.keys.length), `${label}: ${room.name} seats its agents`);
       for (const office of seated) assert.equal(layout.rooms[office.room]!.project, room.name, `${label}: ${office.key} works in its own room`);
       const owners = layout.owners.filter((owner) => owner.room === room.name);
-      assert.equal(owners.length, 1, `${label}: the user's desk of ${room.name}`);
-      assert.equal(layout.rooms[owners[0]!.roomIndex]!.project, room.name);
-      assert.equal(layout.pieces[owners[0]!.chair]!.name, "desk-chair");
-      assert.ok(!layout.offices.some((office) => office.chair === owners[0]!.chair), `${label}: nobody sits at the user's desk`);
+      assert.equal(owners.length, 1, `${label}: where the items of ${room.name} are dropped`);
+      const home = layout.rooms[owners[0]!.roomIndex]!;
+      assert.equal(home.project, room.name);
+      assert.ok(home.counter, `${label}: ${room.name} has its counter`);
+      // The drop spot is in the room's opening, and no desk is left for the user in the room.
+      const [cx, cy] = [Math.floor(owners[0]!.stand.x / CELL), Math.floor(owners[0]!.stand.y / CELL)];
+      assert.deepEqual([cy, home.open.y.includes(cx - home.x)], [home.y + home.d - 1, true], `${label}: ${room.name} drops in its opening`);
+      const desks = layout.pieces.filter((piece) => piece.room === owners[0]!.roomIndex && piece.name === "workstation").length;
+      assert.equal(desks, Math.min(MAX_ROOM_AGENTS, room.keys.length), `${label}: ${room.name} has a desk per agent, none for the user`);
     }
     assert.equal(new Set(layout.offices.map((o) => `${o.seat.x},${o.seat.y}`)).size, layout.offices.length, `${label}: one agent per chair`);
-    // The lobby: with the counter, the receptionist and the user's desk of the onboarding room.
+    // The lobby: with the reception counter, the receptionist and the drop spot and counter of the onboarding room.
     const lobby = layout.rooms[0]!;
     assert.deepEqual([lobby.kind, lobby.w, lobby.d], ["lobby", LOBBY_SIZE, LOBBY_SIZE]);
     assert.equal(layout.reception?.office.key, RECEPTION_KEY);
     assert.ok(layout.owners.some((owner) => owner.room === RECEPTION_ROOM && owner.roomIndex === 0));
+    assert.ok(lobby.counter, `${label}: the lobby has its counter`);
+    assert.ok(!layout.rooms.some((each) => each.kind === "owner" && each.counter), `${label}: the user's office has none`);
     assert.ok(layout.coffee !== null, `${label}: a coffee corner`);
   }
 });

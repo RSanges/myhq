@@ -8,6 +8,8 @@ import { World, material, render } from "./engine.mjs";
 import { Img, bbox, blit, colour, contactSheet, crop, fromRender, pack, pastel, tintOnto, upscale, writePng } from "./image.mjs";
 import * as F from "./furniture.mjs";
 import { signFont } from "./font.mjs";
+import * as P from "./props.mjs";
+import { DYNAMIC as HUB_DYNAMIC, STATIC as HUB_STATIC, lights as hubLights } from "./build-hub.mjs";
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public", "iso", "floor");
 export const SUN = [0, 0.55, 1];
@@ -151,6 +153,11 @@ export function buildFloor() {
     json.furniture[piece.name] = entry;
   }
 
+  // The user's own office: the hub's scene at the scale of the floor.
+  const office = buildOffice();
+  json.office = office.json;
+  previews.push({ name: "office", p: office.preview });
+
   // Signboards: one long board, sliced into a left end, a middle period and a right end.
   const sign = buildSign();
   json.sign = sign.json;
@@ -160,6 +167,68 @@ export function buildFloor() {
   const atlas = pack(frames, 1024);
   json.atlas = { file: "floor.png", w: atlas.img.w, h: atlas.img.h, frames: atlas.rects.map((r) => [r.x, r.y, r.w, r.h]) };
   return { json, atlas, previews };
+}
+
+/** The user's own office of the single floor, in cells (OFFICE_LENGTH by ROOM_DEPTH of src/ui/floor-plan.ts). */
+export const OFFICE_CELLS = [6, 6];
+/** The states of the hub's dynamic objects drawn once and for all in the office; `pile` and `mail` follow the counts. */
+const OFFICE_FIXED = { postits: 3, newspaper: true, phone: false, calendar: -1 };
+const OFFICE_LIVE = ["pile", "mail"];
+
+/**
+ * The user's own office: the hub's scene (the same props, at the same places
+ * from the back corner, the same lights) in a room as big as the office of the
+ * single floor, its walls as high as the floor's. The anchor is the room's
+ * back corner on the floor, the top corner of its first cell. `sprite` is the
+ * room with everything that does not change; `states.pile[n]` and
+ * `states.mail[n]` are drawn over it for n items (null: nothing to add), with
+ * the pile's masks (slot k: the spine of folder k, tinted with its room).
+ */
+function buildOffice() {
+  const [w, d] = OFFICE_CELLS.map((c) => c * F.CELL);
+  const thick = F.WALL.thick;
+  const roomBuild = (b) => {
+    P.room(b, { size: w, height: F.WALL.height, thick });
+    // The floor of the floor set is a voxel thick and ends at the room's front: no slab edge over the hall.
+    b.clear(-thick, -thick, -3, w + 2 * thick, d + 2 * thick, 2);
+    b.clear(-thick, d, -1, w + 2 * thick, thick, 1);
+    b.clear(w, -thick, -1, thick, d + 2 * thick, 1);
+  };
+  if (w !== d) throw new Error("the hub's room is square");
+  const lights = hubLights();
+  const world = (extra = []) => {
+    const out = new World();
+    const ids = {};
+    for (const [name, prop, at, options = {}, more = {}] of HUB_STATIC) {
+      ids[name] = out.add(name, at, name === "room" ? roomBuild : (b) => prop(b, options), more).id;
+    }
+    for (const object of HUB_DYNAMIC) {
+      if (object.name in OFFICE_FIXED) out.add(object.name, object.at, object.build(OFFICE_FIXED[object.name]));
+    }
+    for (const { name, at, build } of extra) ids[name] = out.add(name, at, build).id;
+    return { w: out, ids };
+  };
+  const base = render(world().w, lights);
+  const frame = { uMin: base.uMin, vMin: base.vMin, w: base.w, h: base.h };
+  const anchor = { x: -base.uMin, y: -base.vMin };
+  const place = (img) => {
+    const box = bbox(img);
+    return box ? { img: crop(img, box), dx: box.x - anchor.x, dy: box.y - anchor.y } : null;
+  };
+  const whole = fromRender(base);
+  const json = { cells: OFFICE_CELLS, sprite: addFrame(place(whole.sprite)), states: {} };
+  for (const name of OFFICE_LIVE) {
+    const object = HUB_DYNAMIC.find((each) => each.name === name);
+    json.states[name] = Object.values(object.states).map((value) => {
+      const { w: scene, ids } = world([{ name, at: object.at, build: object.build(value) }]);
+      const r = render(scene, { ...lights, frame });
+      const changed = (i) => r.owner[i] === ids[name] || r.idx[i] !== base.idx[i] || r.tint[i] !== base.tint[i];
+      const { sprite, masks } = fromRender(r, changed);
+      const placed = place(sprite);
+      return placed ? { sprite: addFrame(placed), masks: maskList(Object.fromEntries(Object.entries(masks).map(([key, m]) => [key, place(m)]))) } : null;
+    });
+  }
+  return { json, preview: { sprite: place(whole.sprite), masks: {}, shadow: null } };
 }
 
 /** Middle segments of the long board the sign slices are cut from. */

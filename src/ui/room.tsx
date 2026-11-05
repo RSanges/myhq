@@ -356,7 +356,7 @@ export function RoomPage() {
                     reduced={reduced}
                     onSelect={setSelectedKey}
                     onFailure={() => setCanvasFailed(true)}
-                    onOwnerDesk={single ? openPile : undefined}
+                    onCounter={single ? openPile : undefined}
                     onOffice={openDesk}
                     logos={logos}
                     officeTray={officeTray}

@@ -1156,7 +1156,7 @@ unless the view moved since (a drag, a zoom, the overview). The zoom passes thro
 stays crisp, at once under `prefers-reduced-motion`. A click on the floor
 outside the rooms, or the « Vue d'ensemble » button, flies back to the
 overview and closes the room's sheet. A click on an agent still opens its
-sheet, on a user's desk its pile, on the user's own office the desk.
+sheet, on a room's counter its pile, on the user's own office the desk.
 
 **Templates.** The floor is not computed: it is one of three hand-designed
 templates by number of agents, data in floor cells in
@@ -1211,20 +1211,26 @@ facing the back wall (desk, chair, aisle, twice), two cells per desk, the
 column of the aisle to the opening with a tall plant at its top, a bookshelf,
 a whiteboard, plants or a printer in the places left, and for a team of six or
 more a coffee nook (the coffee corner, a sofa on a rug); its carpet takes its
-own colour. Each suite also has the user's own desk, empty, in its front row
-by the opening, with a pile of folders on it: one per item of that room
-waiting for a decision (ten drawn at most), the spines in the room colour, and
-a count over it. The lobby (eight by eight) holds the reception counter, the
-receptionist behind it, the coffee corner, a sofa by a rug and the user's desk
-of the onboarding room `_hq`, where room proposals land.
+own colour. There is no desk for the user in a suite: what waits for the
+user's decision there is on its counter, next to its signboard (below), and
+its agents drop what they submit in its opening (`owners` of the layout, the
+cell inside the opening, facing the back wall). The lobby (eight by eight)
+holds the reception counter, the receptionist behind it, the coffee corner, a
+sofa by a rug, and the counter and the drop spot of the onboarding room `_hq`,
+where room proposals land.
 
 The user's own office (`ownerOffice`, a block of OFFICE_LENGTH by six cells
-beside the lobby, `layout.office`) is drawn in the look of the desk's scene,
-as far as the floor set allows: a wooden floor, the desk against the back
-wall with its chair, the hub's wall calendar and floor lamp (pieces of the
-floor set), the filing cabinet of the tray with as many letters on it as the
-desk's tray holds, a bookshelf, a rug and plants. Its desk holds the pile of
-every item waiting for a decision, with its count. Nobody works there; a click
+beside the lobby, `layout.office`) is the desk's scene itself: the hub's
+room, its props at the same places and its lights, rendered by
+`scripts/iso/` at the size of the office with the floor's wall height, one
+sprite of the floor set (`office` of `floor.json`) drawn instead of its tiles,
+walls and furniture: the sage walls, the window with the big plant under it,
+the lit floor lamp in the corner, the clock and the picture, the low
+bookshelf, the walnut desk with its screen, lamp, post-its, phone, newspaper,
+the calendar, the armchair on its rug. Its pile (one folder per item waiting
+for a decision, fourteen at most, each spine in its room's colour) and its
+letter tray (the letters of the desk's tray, five at most) are the hub's
+states, drawn over it as the counts change. Nobody works there; a click
 anywhere on it opens the desk, `/bureau`. On a floor of one room
 (`"floor-per-project"`), the user's desk and tray of the lobby (« Votre
 bureau ») play that part: a click on them opens `/bureau`.
@@ -1241,6 +1247,7 @@ name is written in capitals on the face with the pixel font of the floor set
 (`font` of `floor.json`), each pixel of a glyph a square of two by two on the
 face's own stairs (the face falls one pixel every two columns, like the
 wall), in paper white or ink black, whichever contrasts most with the board.
+The board is centred on its wall, unless the room has a counter.
 A room whose `room.json` has a `logo` (`GET /api/rooms/<room>/logo`) shows it
 on the left of the name, reduced to the height of the face without blending
 any colour (`shrinkLogo`: each pixel takes the colour that covers most of its
@@ -1251,18 +1258,35 @@ name every room for the keyboard and screen readers. A sign rises to
 SIGN_TOP voxels (79, the wall 64): the hiding rules count it on the whole
 length of the wall, so it never hides a room or a corridor.
 
+**Counters.** Every suite and the lobby carry a counter beside their name: a
+short board of the same art (COUNTER_SEGMENTS segments, COUNTER_LENGTH
+voxels) with the number of items of that room waiting for the user's
+decision (`pendingByRoom` of the view, an item delivered by a shared room
+counting for the room that ordered it; 99 at most), in the same pixel font.
+When the back wall along x holds both boards, the counter stands right after
+the name and the pair is centred on the wall; otherwise (a short room) the
+counter stands on the other back wall, by the corner, and the name's board
+starts by the corner too, so the two meet there (drawn as the mirror image of
+the same art, the number still read left to right). At zero the counter is
+quiet: a pale board of the room colour, a soft ink. Above zero it takes the
+room colour and the ink that contrasts most with it, and flashes lighter for
+a quarter of a second every 1.6 seconds (never under
+`prefers-reduced-motion`). It follows the stream. A click on it opens the
+page of the pile of decisions filtered to that room. The hiding rules count
+the counter as high as a sign on both places it may stand.
+
 The tests run every
 rule above on generated homes of 1 to 8 rooms of 1 to 12 agents, check that
 blocks stand apart with their walls, that the lobby is the front corner where
 the corridors start, and that rooms and corridors take most of the floor's box
 (the garden only the rest). The page shows every agent of the home in the
 strip, the receptionist last; the buttons at the top fly the view to a room
-(as a click on it does) and carry its count. A click on a user's desk (or the list « À
+(as a click on it does) and carry its count. A click on a room's counter (or the list « À
 signer, par salle » under the floor, its equivalent for the keyboard and
 screen readers) opens the page of the pile of decisions filtered to that room,
 `/bureau/<id>?room=<room>` (section 8). An agent carries what it submits to the
-user's desk of its own room, a delivery of a shared room (`forRoom`) to the
-desk of the room that ordered it, and a message to an agent of another room
+opening of its own room, a delivery of a shared room (`forRoom`) to the
+opening of the room that ordered it, and a message to an agent of another room
 (`hq_message` with `room`) is a walk along the corridors to that agent's desk.
 The floor is meant to be panned (a drag, a swipe) and zoomed (the wheel, a
 pinch, a click on a room); its overview is centred on the whole, at one device
@@ -1443,7 +1467,7 @@ the room (README, "Trying the room without a real run").
   import. The renderer is behind an interface, so a canvas 2D one can replace it
   without touching the model.
 - The tray counts the items of the shown room; on the single floor, each
-  user's desk counts the items of its room (`pendingByRoom` of the view), an
+  room's counter counts the items of its room (`pendingByRoom` of the view), an
   item delivered by a shared room counting for the room that ordered it.
 
 ## 8. The desk objects
@@ -1493,7 +1517,7 @@ the model, the data, the API and one page per object.
   desk (the floor sends an old `/#approval-<id>` there), and the items of a
   module link to `/bureau/<id>#approval-<id>`, which
   unfolds and rings the item on the page of the pile or the tray.
-  `/bureau/<id>?room=<room>` (the user's desk of a room of the single floor)
+  `/bureau/<id>?room=<room>` (the counter of a room of the single floor)
   shows the pile of `approvals` filtered to that room (its own items and the
   deliveries ordered from a shared room), with a « Filtré sur » chip whose
   cross goes back to the whole pile.

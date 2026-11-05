@@ -13,12 +13,13 @@ import {
   type Box,
   type Draw,
   type FloorSet,
+  type OfficeState,
   type SignPart,
 } from "./iso-floor";
 import { focusZoom } from "./floor-view";
 import type { LabelLayer } from "./room-labels";
-import { CELL, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type OwnerDesk, type Point, type RoomLayout } from "./room-layout";
-import { faceColumns, inkFor, LOGO_MARGIN, paintFace, planSign, shrinkLogo, type Pixels } from "./room-signs";
+import { CELL, COUNTER_FROM, COUNTER_SEGMENTS, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type Point, type RoomLayout } from "./room-layout";
+import { boardLength, faceColumns, faceWidth, inkFor, LOGO_MARGIN, paintFace, planSign, shrinkLogo, textWidth, type Pixels } from "./room-signs";
 import { VOXELS_PER_STEP, walkFrame, type AgentView, type RoomView } from "./room-model";
 import { RECEPTION_KEY } from "./reception";
 
@@ -103,8 +104,8 @@ export type RoomRenderer = {
   canZoom(step: number): boolean;
   /** The character under a point of the canvas (CSS pixels), the front one when they overlap. */
   agentAt(view: RoomView, x: number, y: number): AgentView | null;
-  /** The user's desk of a room of the single floor under a point of the canvas (CSS pixels): the room it serves. */
-  ownerDeskAt(x: number, y: number): string | null;
+  /** The counter of a room of the single floor under a point of the canvas (CSS pixels): the room it counts for. */
+  counterAt(x: number, y: number): string | null;
   /**
    * Centres the view on a room of the single floor (the room of the home it stands for), at a whole zoom that
    * gives it about the size of the view (`focusZoom`). `insetRight`: CSS pixels on the right of the canvas
@@ -151,6 +152,13 @@ export const MAX_ZOOM = 6;
  */
 export const MIN_ZOOM = 1;
 const BUMP_MS = 650;
+/** A counter with something to decide flashes this long, once per COUNTER_PERIOD (never with reduced motion). */
+const COUNTER_FLASH_MS = 260;
+const COUNTER_PERIOD_MS = 1600;
+/** The most a counter shows (its font has no plus sign). */
+const COUNTER_MAX = 99;
+/** Voxels between a name's board and its counter on the same wall. */
+const COUNTER_GAP = 4;
 /** How long the view takes to fly to a room or back to the overview. */
 const FLIGHT_MS = 380;
 /** Free space around the floor when it is fitted, in art pixels. */
@@ -472,7 +480,6 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     staticItems = [];
     chairs.clear();
     roomColor = hexToNumber(color) ?? NEUTRAL_ROOM_COLOR;
-    piles.clear();
     const single = next.template === "rooms";
     roomColors = single ? next.rooms.map((room) => hexToNumber(room.color) ?? NEUTRAL_ROOM_COLOR) : [];
     const scene = buildFloorScene(floorSet, next, single ? (index) => next.rooms[index]?.color != null : color !== null);
@@ -500,26 +507,16 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       sortedLayer.addChild(group);
       staticItems.push({ node: group, box: item.box });
     }
-    // The pile on each user's desk (single floor): the desk's footprint, so it is drawn right after the desk.
-    for (const owner of next.owners) {
-      const desk = staticItems.find((entry, index) => scene.sorted[index]?.piece === owner.desk);
-      if (!desk) continue;
-      const node = new Graphics();
-      sortedLayer.addChild(node);
-      staticItems.push({ node, box: desk.box });
-      piles.set(owner.room, { node, count: -1 });
-    }
-    // The pile on the desk of the user's own office: every item waiting for a decision.
-    officePile = null;
-    const office = next.office;
-    if (office) {
-      const desk = staticItems.find((entry, index) => scene.sorted[index]?.piece === office.desk);
-      if (desk) {
-        const node = new Graphics();
-        sortedLayer.addChild(node);
-        staticItems.push({ node, box: desk.box });
-        officePile = { node, count: -1 };
-      }
+    // The live objects of the user's office (its pile, its letter tray): over the office's own sprite.
+    officeLive = null;
+    const officeIndex = scene.sorted.findIndex((item) => item.office);
+    const officeItem = officeIndex >= 0 ? staticItems[officeIndex] : undefined;
+    if (officeItem && next.office) {
+      const pile = new Container();
+      const mail = new Container();
+      officeItem.node.addChild(pile, mail);
+      const room = next.rooms[next.office.room]!;
+      officeLive = { pile, mail, corner: screenOf(room.x * CELL, room.y * CELL), drawn: { pile: "", mail: "" } };
     }
     lastOrderKey = "";
     signKey = "";
@@ -556,6 +553,10 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let signTextures: Texture[] = [];
   /** The faces of the boards on screen (art pixels), for the pointer: columns, and rows from a top that falls one pixel every two columns. */
   let signBoxes: { room: number; x0: number; x1: number; top: number; h: number }[] = [];
+  /** The faces of the counters on screen (art pixels), for the pointer: the room of the home each counts for. */
+  let counterBoxes: { room: string; x0: number; y0: number; x1: number; y1: number }[] = [];
+  /** The counters drawn: their tinted sprites, the colour of the board, and whether they have something to decide (they flash). */
+  let counters: { masks: Sprite[]; color: number; live: boolean }[] = [];
   const signTextOf = (current: RoomLayout, index: number, labels: RoomScene["labels"]): string | null => {
     const room = current.rooms[index]!;
     if (!room.sign) return null;
@@ -563,46 +564,70 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     if (room.project === null) return null;
     return labels.roomSign ? labels.roomSign(room.project) : room.project;
   };
-  /** The signboard of every room that has one: the board in the room colour, the logo and the name on its face. */
+  /** The text of a counter: the count, at most COUNTER_MAX. */
+  const counterText = (count: number): string => String(Math.min(COUNTER_MAX, Math.max(0, count)));
+  /** A light and a quiet look of a board colour: the flash of a counter, and a counter with nothing to decide. */
+  const lighten = (color: number, k: number) => {
+    const mix = (shift: number) => {
+      const from = (color >> shift) & 255;
+      return Math.round(from + (255 - from) * k);
+    };
+    return (mix(16) << 16) | (mix(8) << 8) | mix(0);
+  };
+  const blend = (a: number, b: number, k: number) => {
+    const mix = (shift: number) => Math.round(((a >> shift) & 255) * (1 - k) + ((b >> shift) & 255) * k);
+    return (mix(16) << 16) | (mix(8) << 8) | mix(0);
+  };
+  /**
+   * The signboard of every room that has one: the board in the room colour, the logo and the name on its face.
+   * A room with a counter (what waits for the user's decision there) has it beside its name on the same wall when
+   * the wall holds both, else on its other back wall by the corner, the name's board starting by the corner too. A counter at zero is quiet (a pale board, a
+   * soft ink); above zero it takes the room colour and the contrasted ink, and flashes (see `draw`).
+   */
   function buildSigns(current: RoomLayout, scene: RoomScene) {
     const texts = current.rooms.map((_, index) => signTextOf(current, index, scene.labels));
     const urls = current.rooms.map((room) => (room.sign && room.project !== null ? (scene.logos?.[room.project] ?? null) : null));
     for (const url of urls) if (url) loadLogo(url);
-    const key = `${texts.join("|")}#${urls.map((url) => (url ? `${url}:${logos.get(url)?.done ? 1 : 0}` : "")).join("|")}#${roomColors.join(",")}`;
+    const counts = current.rooms.map((room) => (room.counter && room.project !== null ? counterText(scene.view.pendingByRoom[room.project] ?? 0) : ""));
+    const key = `${texts.join("|")}#${urls.map((url) => (url ? `${url}:${logos.get(url)?.done ? 1 : 0}` : "")).join("|")}#${roomColors.join(",")}#${counts.join(",")}`;
     if (key === signKey) return;
     signKey = key;
     signLayer.removeChildren().forEach((child) => child.destroy({ children: true }));
     for (const texture of signTextures) texture.destroy(true);
     signTextures = [];
     signBoxes = [];
+    counterBoxes = [];
+    counters = [];
     const set = floorSet.sign;
-    current.rooms.forEach((room, index) => {
-      const text = texts[index];
-      if (!text) return;
-      const url = urls[index];
-      const logo = url ? (logos.get(url)?.pixels ?? null) : null;
-      const plan = planSign(set, floorSet.font, text, logo?.width ?? 0, room.w * CELL);
-      const length = 2 * set.end + plan.segments * set.segment;
-      // Centred on the back wall along x, on whole voxels.
-      const anchor = screenOf(room.x * CELL + Math.floor((room.w * CELL - length) / 2), room.y * CELL);
-      const color = colorOf(index);
+    /**
+     * One board at `anchor` (the screen pixel of its back left corner on the floor, under its face): its parts, the
+     * board tinted `color`, then its face painted. `mirror` draws it on a wall along y (the art faces +y: a wall
+     * along y is its mirror image on the screen), the text still read left to right.
+     */
+    const board = (anchor: Point, segments: number, color: number, face: ReturnType<typeof paintFace>, mirror: boolean) => {
       const group = new Container();
+      const masks: Sprite[] = [];
       const part = (piece: SignPart, k: number) => {
         const shift = { x: k * set.period[0], y: k * set.period[1] };
         const add = (ref: [number, number, number], tint: number | null) => {
           const sprite = new Sprite(frameTextures[ref[0]]!);
-          sprite.position.set(anchor.x + ref[1] + shift.x, anchor.y + ref[2] + shift.y);
-          if (tint !== null) sprite.tint = tint;
+          const x = ref[1] + shift.x;
+          if (mirror) {
+            sprite.scale.x = -1;
+            sprite.position.set(anchor.x - x, anchor.y + ref[2] + shift.y);
+          } else sprite.position.set(anchor.x + x, anchor.y + ref[2] + shift.y);
+          if (tint !== null) {
+            sprite.tint = tint;
+            masks.push(sprite);
+          }
           group.addChild(sprite);
         };
         add(piece.sprite, null);
         for (const mask of piece.masks) add(mask.frame, mask.mode === "pastel" ? pastel(color) : color);
       };
       part(set.left, 0);
-      for (let k = 0; k < plan.segments - 1; k += 1) part(set.middle, k);
-      part(set.right, plan.segments - 1);
-      const columns = faceColumns(set, plan.segments);
-      const face = paintFace(columns, plan, floorSet.font, inkFor(color), plan.logoWidth > 0 ? logo : null, color);
+      for (let k = 0; k < segments - 1; k += 1) part(set.middle, k);
+      part(set.right, segments - 1);
       if (face) {
         const texture = pixelTexture(face.pixels);
         signTextures.push(texture);
@@ -611,9 +636,46 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         group.addChild(sprite);
       }
       signLayer.addChild(group);
+      return masks;
+    };
+    current.rooms.forEach((room, index) => {
+      const text = texts[index];
+      if (!text) return;
+      const url = urls[index];
+      const logo = url ? (logos.get(url)?.pixels ?? null) : null;
+      const plan = planSign(set, floorSet.font, text, logo?.width ?? 0, room.w * CELL);
+      const length = boardLength(set, plan.segments);
+      // The counter beside the name on the same wall when both fit (the pair centred), else on the other back
+      // wall, by the corner, the name starting there too.
+      const pair = length + COUNTER_GAP + boardLength(set, COUNTER_SEGMENTS);
+      const beside = room.counter && pair <= room.w * CELL - 2 * COUNTER_FROM;
+      const from = !room.counter ? Math.floor((room.w * CELL - length) / 2) : beside ? Math.floor((room.w * CELL - pair) / 2) : COUNTER_FROM;
+      const anchor = screenOf(room.x * CELL + from, room.y * CELL);
+      const color = colorOf(index);
+      const columns = faceColumns(set, plan.segments);
+      board(anchor, plan.segments, color, paintFace(columns, plan, floorSet.font, inkFor(color), plan.logoWidth > 0 ? logo : null, color), false);
       const first = columns[0];
       const last = columns[columns.length - 1];
       if (first && last) signBoxes.push({ room: index, x0: anchor.x + first.x - 4, x1: anchor.x + last.x + 4, top: anchor.y + first.top - 6, h: first.h + 12 });
+
+      if (!room.counter || room.project === null) return;
+      const count = counts[index] ?? "0";
+      const live = count !== "0";
+      // The counter's own plan: its count centred on a board of COUNTER_SEGMENTS segments.
+      const counterPlan = { ...planSign(set, floorSet.font, count, 0, 1000), segments: COUNTER_SEGMENTS };
+      counterPlan.start = Math.floor((faceWidth(set, COUNTER_SEGMENTS) - textWidth(floorSet.font, counterPlan.text)) / 2);
+      const quiet = lighten(color, 0.62);
+      const boardColor = live ? color : quiet;
+      const ink = live ? inkFor(color) : blend(quiet, inkFor(quiet), 0.45);
+      // On the other wall it is mirrored: its columns run the other way (x' = -x - 1), read left to right.
+      const straight = faceColumns(set, COUNTER_SEGMENTS);
+      const columnsOf = beside ? straight : straight.map((col) => ({ x: -col.x - 1, top: col.top, h: col.h })).reverse();
+      const at = beside ? screenOf(room.x * CELL + from + length + COUNTER_GAP, room.y * CELL) : screenOf(room.x * CELL, room.y * CELL + COUNTER_FROM);
+      const masks = board(at, COUNTER_SEGMENTS, boardColor, paintFace(columnsOf, counterPlan, floorSet.font, ink, null, boardColor), !beside);
+      counters.push({ masks, color: boardColor, live });
+      const a = columnsOf[0];
+      const b = columnsOf[columnsOf.length - 1];
+      if (a && b) counterBoxes.push({ room: room.project, x0: at.x + a.x - 4, y0: at.y + Math.min(a.top, b.top) - 8, x1: at.x + b.x + 4, y1: at.y + Math.max(a.top, b.top) + a.h + 8 });
     });
   }
 
@@ -658,58 +720,6 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     g.rect(x - 5, y - 3, 4, 2).fill(theme.accent);
   };
 
-  /** Folders on a user's desk of the single floor: at most this many drawn, the badge says the rest. */
-  const PILE_MAX = 10;
-  /** The cell of the desk the pile stands on (the far end of the workstation from its screen), in voxels, and the desk top. */
-  const pileSpot = (current: RoomLayout, owner: OwnerDesk): { x: number; y: number } => {
-    const desk = current.pieces[owner.desk]!;
-    const [cx, cy] = desk.turn === 0 ? [desk.cell[0] + 1, desk.cell[1]] : [desk.cell[0], desk.cell[1] + 1];
-    return { x: (cx + 0.55) * CELL, y: (cy + 0.5) * CELL };
-  };
-  /**
-   * A pile of folders on the desk top (z 25), two voxels each, slightly
-   * askew, in the style of the art: each folder is a box with a one pixel
-   * dark outline, its spine (the face towards the lower left) in the room
-   * colour, the edges of its sheets (lower right) a shade of paper, white on
-   * top. The outline of each folder over the one below draws the line
-   * between them.
-   */
-  const drawPile = (g: Graphics, at: { x: number; y: number }, count: number, spine: number) => {
-    const half = { x: 6, y: 4 };
-    const thick = 2;
-    const shade = (color: number, k: number) =>
-      (Math.round(((color >> 16) & 255) * k) << 16) | (Math.round(((color >> 8) & 255) * k) << 8) | Math.round((color & 255) * k);
-    const point = (x: number, y: number, z: number): [number, number] => {
-      const p = screenOf(x, y, z);
-      return [Math.round(p.x), Math.round(p.y)];
-    };
-    for (let i = 0; i < count; i += 1) {
-      const z0 = 25 + i * thick;
-      const z1 = z0 + thick;
-      const dx = ((i * 7) % 3) - 1;
-      const dy = ((i * 5) % 3) === 0 ? 1 : 0;
-      const x0 = at.x - half.x + dx;
-      const x1 = at.x + half.x + dx;
-      const y0 = at.y - half.y + dy;
-      const y1 = at.y + half.y + dy;
-      const top = point(x0, y0, z1);
-      const right = point(x1, y0, z1);
-      const rightLow = point(x1, y0, z0);
-      const low = point(x1, y1, z0);
-      const leftLow = point(x0, y1, z0);
-      const left = point(x0, y1, z1);
-      const front = point(x1, y1, z1);
-      // The silhouette, one pixel larger all round: the outline.
-      g.poly([top[0], top[1] - 1, right[0] + 1, right[1], rightLow[0] + 1, rightLow[1], low[0], low[1] + 1, leftLow[0] - 1, leftLow[1], left[0] - 1, left[1]]).fill(theme.woodEdge);
-      g.poly([...left, ...front, ...low, ...leftLow]).fill(spine);
-      g.poly([...front, ...right, ...rightLow, ...low]).fill(shade(theme.paper, 0.82));
-      g.poly([...top, ...right, ...front, ...left]).fill(theme.paper);
-      // A small label on the spine, a shade darker.
-      const a = point(x0 + 4, y1, z0 + 1);
-      const b = point(x1 - 4, y1, z0 + 1);
-      g.poly([a[0], a[1] - 1, b[0], b[1] - 1, b[0], b[1], a[0], a[1]]).fill(shade(spine, 0.72));
-    }
-  };
   /** Sheets of paper in a tray on top of a filing cabinet whose top centre is at `top`: whole art pixels, an outline a pixel wider. */
   const drawPapers = (top: Point, count: number) => {
     const x = Math.round(top.x);
@@ -727,14 +737,26 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     const d = screenOf((cell[0] + cells[0]) * CELL, cell[1] * CELL);
     return { x0: c.x - 4, x1: d.x + 4, y0: a.y - rise, y1: b.y + 4 };
   };
-  /** Screen boxes of the users' desks of the single floor, last frame (art pixels), for the pointer. */
-  let ownerBoxes: { room: string; x0: number; y0: number; x1: number; y1: number }[] = [];
   /** Screen boxes of the user's desk and tray of a lobby (the floor of one room), last frame: they open the desk. */
   let userBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
-  /** The pile of each user's desk: sorted with its desk (drawn right after it), redrawn when its count changes. */
-  const piles = new Map<string, { node: Graphics; count: number }>();
-  /** The pile on the desk of the user's own office (single floor). */
-  let officePile: { node: Graphics; count: number } | null = null;
+  /**
+   * The live objects of the user's office (single floor): the hub's pile and letter tray, in containers over the
+   * office's sprite, and the state each one shows.
+   */
+  let officeLive: { pile: Container; mail: Container; corner: Point; drawn: { pile: string; mail: string } } | null = null;
+  /** Draws a state of a live object of the office in its container; `colors[k]` tints the masks of slot k. */
+  const drawOfficeState = (into: Container, corner: Point, state: OfficeState | undefined, colors: number[]) => {
+    into.removeChildren().forEach((child) => child.destroy());
+    if (!state) return;
+    const add = (ref: [number, number, number], tint: number | null) => {
+      const sprite = new Sprite(frameTextures[ref[0]]!);
+      sprite.position.set(corner.x + ref[1], corner.y + ref[2]);
+      if (tint !== null) sprite.tint = tint;
+      into.addChild(sprite);
+    };
+    add(state.sprite, null);
+    for (const mask of state.masks) add(mask.frame, colors[mask.slot] ?? theme.accent);
+  };
 
   let lastOrderKey = "";
   let drawnLayout: RoomLayout | null = null;
@@ -767,9 +789,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     },
     setTheme(next) {
       theme = next;
-      // The piles are drawn in the theme's colours: draw them again.
-      for (const pile of piles.values()) pile.count = -1;
-      if (officePile) officePile.count = -1;
+      // The office's pile takes the theme's accent for an item without a room colour: draw it again.
+      if (officeLive) officeLive.drawn = { pile: "", mail: "" };
     },
     resize(cssWidth, cssHeight) {
       cssSize = { width: Math.max(1, cssWidth), height: Math.max(1, cssHeight) };
@@ -818,9 +839,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     canZoom(step) {
       return step > 0 ? zoom < MAX_ZOOM : zoom > MIN_ZOOM;
     },
-    ownerDeskAt(x, y) {
+    counterAt(x, y) {
       const art = artOf(x, y);
-      return ownerBoxes.find((box) => inBox(art, box))?.room ?? null;
+      return counterBoxes.find((box) => inBox(art, box))?.room ?? null;
     },
     roomAt(x, y) {
       if (!layout) return null;
@@ -1030,66 +1051,33 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         });
       }
 
-      // The single floor: the user's desk of each room, its pile and its count.
-      ownerBoxes = [];
-      for (const owner of current.owners) {
-        const count = view.pendingByRoom[owner.room] ?? 0;
-        const spot = pileSpot(current, owner);
-        const room = current.rooms[owner.roomIndex]!;
-        const pile = piles.get(owner.room);
-        if (pile && pile.count !== count) {
-          pile.node.clear();
-          drawPile(pile.node, spot, Math.min(PILE_MAX, count), hexToNumber(room.color) ?? theme.muted);
-          pile.count = count;
-        }
-        const top = screenOf(spot.x, spot.y, 25 + Math.min(PILE_MAX, count) * 2);
-        const desk = current.pieces[owner.desk]!;
-        const deskTurn = turnOf(floorSet, desk.name, desk.turn);
-        const a = screenOf(desk.cell[0] * CELL, desk.cell[1] * CELL);
-        const b = screenOf((desk.cell[0] + deskTurn.cells[0]) * CELL, (desk.cell[1] + deskTurn.cells[1]) * CELL);
-        const c = screenOf(desk.cell[0] * CELL, (desk.cell[1] + deskTurn.cells[1]) * CELL);
-        const d = screenOf((desk.cell[0] + deskTurn.cells[0]) * CELL, desk.cell[1] * CELL);
-        ownerBoxes.push({ room: owner.room, x0: Math.min(c.x, a.x) - 4, x1: Math.max(d.x, b.x) + 4, y0: a.y - 70, y1: b.y + 4 });
-        if (count > 0) {
-          labels.place(`owner:${owner.room}`, {
-            text: count > 99 ? "99+" : String(count),
-            x: top.x,
-            y: top.y - 6,
-            size: px(13),
-            weight: 700,
-            box: "count",
-            tone: "onDanger",
-            ax: 0.5,
-            ay: 1,
-          });
-        }
+      // The single floor: the counters flash while something waits for a decision (never with reduced motion).
+      const flash = !reduced && at % COUNTER_PERIOD_MS < COUNTER_FLASH_MS;
+      for (const counter of counters) {
+        const tint = counter.live && flash ? lighten(counter.color, 0.45) : counter.color;
+        for (const sprite of counter.masks) if (sprite.tint !== tint) sprite.tint = tint;
       }
-      // The user's own office: the pile of every item waiting for a decision on its desk, letters in its tray.
-      const office = current.office;
-      if (office) {
-        const desk = current.pieces[office.desk]!;
-        const spot = { x: (desk.cell[0] + 1 + 0.55) * CELL, y: (desk.cell[1] + 0.5) * CELL };
-        if (officePile && officePile.count !== view.pending) {
-          officePile.node.clear();
-          drawPile(officePile.node, spot, Math.min(PILE_MAX, view.pending), theme.accent);
-          officePile.count = view.pending;
+      // The user's own office: the hub's pile (a folder per item, each in its room's colour) and its letter tray.
+      if (officeLive && current.office) {
+        const states = floorSet.office.states;
+        const pileState = Math.min(states.pile.length - 1, view.pending);
+        const colors: number[] = [];
+        for (const room of current.rooms) {
+          if (room.project === null) continue;
+          const color = hexToNumber(room.color) ?? theme.accent;
+          for (let k = 0; k < (view.pendingByRoom[room.project] ?? 0); k += 1) colors.push(color);
         }
-        if (view.pending > 0) {
-          const top = screenOf(spot.x, spot.y, 25 + Math.min(PILE_MAX, view.pending) * 2);
-          labels.place("office", {
-            text: view.pending > 99 ? "99+" : String(view.pending),
-            x: top.x,
-            y: top.y - 6,
-            size: px(13),
-            weight: 700,
-            box: "count",
-            tone: "onDanger",
-            ax: 0.5,
-            ay: 1,
-          });
+        const pileKey = `${pileState}:${colors.join(",")}:${theme.accent}`;
+        if (officeLive.drawn.pile !== pileKey) {
+          drawOfficeState(officeLive.pile, officeLive.corner, states.pile[pileState], colors);
+          officeLive.drawn.pile = pileKey;
         }
-        const tray = current.pieces[office.tray]!;
-        drawPapers(screenOf((tray.cell[0] + 0.5) * CELL, (tray.cell[1] + 0.5) * CELL), Math.min(scene.officeTray ?? 0, 6));
+        const mailState = Math.min(states.mail.length - 1, scene.officeTray ?? 0);
+        const mailKey = String(mailState);
+        if (officeLive.drawn.mail !== mailKey) {
+          drawOfficeState(officeLive.mail, officeLive.corner, states.mail[mailState], []);
+          officeLive.drawn.mail = mailKey;
+        }
       }
 
       // Coffee steam over the coffee corner, unless motion is reduced.

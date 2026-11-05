@@ -8,7 +8,7 @@
 // One voxel is about 3 cm and furniture is life size: a desk top is at
 // z = 25 (75 cm), a seat at z = 14, a standing character about 52 voxels.
 import { LEFT, NX, NY, RIGHT, TOP, hash, material } from "./engine.mjs";
-import { calendar as hubCalendar, floorLamp as hubFloorLamp, leaf, plant as hubPlant } from "./props.mjs";
+import { leaf, plant as hubPlant } from "./props.mjs";
 
 export const CELL = 16;
 export const WALL = { height: 64, thick: 4, rim: 6 };
@@ -581,18 +581,6 @@ export function receptionCounter(b) {
   for (let i = 0; i < 6; i++) leaf(b, [40, 12, 39], i * 1.05, 3.5, 1, 1.5, i % 2 ? leafA : leafB, leafB);
 }
 
-// ---------------------------------------------------------------- the owner's office
-
-/** The hub's floor lamp (a glowing drum shade), centred in a cell. */
-export function floorLamp(b) {
-  hubFloorLamp(b.at(2, 2, 0));
-}
-
-/** The hub's wall calendar, hung on the back wall of its cell (-y), facing +y. */
-export function wallCalendar(b) {
-  hubCalendar(b, { lift: 30 });
-}
-
 // ---------------------------------------------------------------- signboard
 
 /**
@@ -650,6 +638,4 @@ export const FURNITURE = [
   { name: "filing-cabinet", build: filingCabinet, cells: [1, 1], turns: [0, 1] },
   { name: "rug", build: rug, cells: [3, 2], turns: [0, 1], flat: true },
   { name: "reception-counter", build: receptionCounter, cells: [3, 1], turns: [0, 1], staff: [1, -1] },
-  { name: "floor-lamp", build: floorLamp, cells: [1, 1], turns: [0, 1] },
-  { name: "wall-calendar", build: wallCalendar, cells: [1, 1], turns: [0, 1] },
 ];
