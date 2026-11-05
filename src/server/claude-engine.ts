@@ -195,13 +195,13 @@ export function builtInTools(allowedTools: string[]): string[] {
  * sends the first request at once, so a server slower to start than the CLI
  * (a `tsx` server on a busy machine) is still `pending` and the agent works
  * without its tools. The wait is bounded by MCP_CONNECT_TIMEOUT_MS (5 s by
- * default), raised to the CLI's own per-server connect timeout (MCP_TIMEOUT,
- * 30 s); a server still pending after it is caught by the runner.
+ * default), raised to 60 s: a server can take 15 to 25 s to answer `initialize` on a
+ * loaded machine, and the one still pending after it is caught by the runner.
  */
 export const CLAUDE_ENV = {
   ENABLE_TOOL_SEARCH: "false",
   MCP_CONNECTION_NONBLOCKING: "0",
-  MCP_CONNECT_TIMEOUT_MS: "30000",
+  MCP_CONNECT_TIMEOUT_MS: "60000",
 } as const;
 
 /** The exact argument list given to `claude`. */

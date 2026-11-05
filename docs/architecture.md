@@ -40,7 +40,7 @@ it becomes the process's `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token from
 `claude setup-token`, to run unattended on a subscription). Tool search is
 turned off (`ENABLE_TOOL_SEARCH=false`) so that the MCP tools are listed from
 the start. MCP startup is made blocking (`MCP_CONNECTION_NONBLOCKING=0`,
-`MCP_CONNECT_TIMEOUT_MS=30000`): by default CLI 2.1.183 connects the servers
+`MCP_CONNECT_TIMEOUT_MS=60000`): by default CLI 2.1.183 connects the servers
 in the background and sends the first request at once, so a server slower to
 start than the CLI is still `pending` and the agent works without its tools
 (it then writes tool calls as text and invents a result). The runner checks

@@ -296,7 +296,7 @@ test("the chat environment is the agents' one, with tool search off and blocking
     CLAUDE_CODE_OAUTH_TOKEN: "c",
     ENABLE_TOOL_SEARCH: "false",
     MCP_CONNECTION_NONBLOCKING: "0",
-    MCP_CONNECT_TIMEOUT_MS: "30000",
+    MCP_CONNECT_TIMEOUT_MS: "60000",
   });
 });
 
