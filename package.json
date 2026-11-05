@@ -20,6 +20,7 @@
     "pixi.js": "8.22.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "three": "0.186.1",
     "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
@@ -29,6 +30,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.186.0",
     "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.4",

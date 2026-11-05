@@ -89,7 +89,8 @@ have one reader: switch off any other program that reads the same bot first.
 ## Stack
 
 Next.js 16, TypeScript (strict), Tailwind, SQLite via `better-sqlite3`, zod, the
-official MCP SDK, and PixiJS for the floor (loaded on `/` only). No ORM
+official MCP SDK, PixiJS for the floor (loaded on `/` only) and three.js for
+the 3D parts joined to items (loaded only when one is shown). No ORM
 and no UI library. It must run unchanged on Windows,
 macOS and Linux, and it is meant to stay up as a service (pm2) on port 4242.
 

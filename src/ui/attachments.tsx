@@ -1,10 +1,21 @@
 "use client";
 
-import { useRef, useState } from "react";
-import type { Annotation } from "@/server/annotations";
+import dynamic from "next/dynamic";
+import { useMemo, useRef, useState } from "react";
+import type { Annotation, AnnotationPoint } from "@/server/annotations";
 import { CommentBox } from "./annotated-body";
 import { insertAnnotation } from "./annotate";
-import { fileEntries, formatTimecode, timedQuote, type FileEntry } from "./attachments-model";
+import {
+  fileEntries,
+  formatTimecode,
+  MODEL_FRAME_CLASS,
+  modelFormat,
+  pointQuote,
+  timedQuote,
+  type FileEntry,
+  type ModelFormat,
+} from "./attachments-model";
+import type { Pin } from "./model-viewer";
 import type { ApprovalFile } from "./schemas";
 import { strings } from "./strings";
 import { buttonClass } from "./ui";
@@ -137,6 +148,131 @@ function ImageFile({ file }: { file: ApprovalFile }) {
   );
 }
 
+/** three.js and the viewer, fetched only when an item shows a 3D part, and never rendered on the server. */
+const ModelViewer = dynamic(() => import("./model-viewer"), {
+  ssr: false,
+  loading: () => (
+    <div className={`${MODEL_FRAME_CLASS} flex items-center justify-center text-sm text-muted`}>{strings.attachments.loading3d}</div>
+  ),
+});
+
+/**
+ * A 3D part (3MF, STL, GLB), drawn in the viewer, with « Annoter un point »: a
+ * click or a tap on the part pins the point and opens the remark box, whose
+ * quote names the file, the point in the part's frame and the face
+ * (« piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z »). The remark joins the
+ * item's other remarks with its point (`point`), and its pin stays on the part,
+ * numbered as in the list; a click on a pin opens its remark. The file can
+ * still be downloaded to be printed.
+ */
+function ModelFile({ entry, format, annotations, onAnnotations }: { entry: FileEntry; format: ModelFormat } & Remarks) {
+  const { file, preview } = entry;
+  const [picking, setPicking] = useState(false);
+  const [draft, setDraft] = useState<AnnotationPoint | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  const pins = useMemo(() => {
+    const list: Pin[] = [];
+    annotations.forEach((annotation, index) => {
+      if (annotation.point?.fileId !== file.id) return;
+      list.push({
+        key: String(index),
+        number: index + 1,
+        point: annotation.point,
+        label: strings.attachments.pin(index + 1, annotation.comment),
+        active: open === index,
+        draft: false,
+      });
+    });
+    if (draft) {
+      list.push({ key: "draft", number: annotations.length + 1, point: draft, label: strings.attachments.newPin, active: true, draft: true });
+    }
+    return list;
+  }, [annotations, file.id, open, draft]);
+  const opened = open === null ? undefined : annotations[open];
+
+  return (
+    <figure className="space-y-2">
+      <ModelViewer
+        url={file.url}
+        name={file.name}
+        fileId={file.id}
+        format={format}
+        poster={preview?.url ?? null}
+        pins={pins}
+        picking={picking}
+        onPick={(point) => {
+          setPicking(false);
+          setOpen(null);
+          setDraft(point);
+        }}
+        onPin={(key) => {
+          if (key === "draft") return;
+          setPicking(false);
+          setDraft(null);
+          setOpen(Number(key));
+        }}
+      />
+      <FileCaption file={file} />
+      <div className="flex flex-wrap gap-2">
+        {onAnnotations &&
+          (picking ? (
+            <button type="button" className={buttonClass()} onClick={() => setPicking(false)}>
+              {strings.attachments.cancelPick}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={buttonClass()}
+              disabled={draft !== null}
+              onClick={() => {
+                setOpen(null);
+                setPicking(true);
+              }}
+            >
+              {strings.attachments.annotatePoint}
+            </button>
+          ))}
+        <a href={`${file.url}?download=1`} download={file.name} className={buttonClass()}>
+          {strings.attachments.download}
+        </a>
+      </div>
+      {onAnnotations && draft && (
+        <CommentBox
+          key="draft"
+          quote={pointQuote(file.name, draft)}
+          initial=""
+          readOnly={false}
+          isNew
+          onValidate={(comment) => {
+            onAnnotations(insertAnnotation(annotations, { quote: pointQuote(file.name, draft), comment: comment.trim(), point: draft }));
+            setDraft(null);
+          }}
+          onRemove={() => setDraft(null)}
+          onClose={() => setDraft(null)}
+        />
+      )}
+      {open !== null && opened && (
+        <CommentBox
+          key={`pin-${open}`}
+          quote={opened.quote}
+          initial={opened.comment}
+          readOnly={!onAnnotations}
+          isNew={false}
+          onValidate={(comment) => {
+            onAnnotations?.(annotations.map((a, i) => (i === open ? { ...a, comment: comment.trim() } : a)));
+            setOpen(null);
+          }}
+          onRemove={() => {
+            onAnnotations?.(annotations.filter((_, i) => i !== open));
+            setOpen(null);
+          }}
+          onClose={() => setOpen(null)}
+        />
+      )}
+    </figure>
+  );
+}
+
 /** A 3D part or a PDF: a download link, with its preview image when the agent joined one. */
 function DownloadFile({ entry }: { entry: FileEntry }) {
   const { file, preview } = entry;
@@ -174,8 +310,8 @@ function DownloadFile({ entry }: { entry: FileEntry }) {
 
 /**
  * The files joined to an item, for the owner to validate a render from the
- * desk or a phone: players for videos and sounds, images to enlarge, and a
- * download for 3D parts and PDFs.
+ * desk or a phone: players for videos and sounds, images to enlarge, a 3D
+ * viewer for parts (with their download), and a download for PDFs.
  */
 export function Attachments({ files, annotations, onAnnotations }: { files: readonly ApprovalFile[] } & Remarks) {
   const entries = fileEntries(files);
@@ -188,6 +324,8 @@ export function Attachments({ files, annotations, onAnnotations }: { files: read
             <MediaFile file={entry.file} annotations={annotations} onAnnotations={onAnnotations} />
           ) : entry.file.kind === "image" ? (
             <ImageFile file={entry.file} />
+          ) : entry.file.kind === "model" && modelFormat(entry.file.name) ? (
+            <ModelFile entry={entry} format={modelFormat(entry.file.name)!} annotations={annotations} onAnnotations={onAnnotations} />
           ) : (
             <DownloadFile entry={entry} />
           )}

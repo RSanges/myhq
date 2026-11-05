@@ -390,14 +390,51 @@ his phone, not a description of it.
 - **On the desk** (`src/ui/attachments.tsx`, drawn by the item card, so on
   every pending and history item): above the body, a video player
   (`controls`, `playsInline`, `preload="metadata"`), an image that opens in
-  full in a dialog, an audio player, and a download link for a 3D part or a
-  PDF, with its preview when the agent joined an image of the same name
-  (`piece.png` for `piece.3mf`; that image is then not shown on its own).
+  full in a dialog (a CAD agent's `<part>_planche.png` included), an audio
+  player, a 3D viewer for a part (below) and a download link for a PDF, with
+  its preview when the agent joined an image of the same name (`fiche.png`
+  for `fiche.pdf`; `piece.png` for `piece.3mf` is shown while the part loads;
+  that image is then not shown on its own).
   Under a video or a sound, « Annoter à cet instant » pauses the player and
   opens the remark box of the annotations with the quote « <file> à <time> »
   (« clip-01.mp4 à 0:12 »). The remark joins the others (no `position`, so it
   comes after the remarks on the text) and a revision sends it to the agent
   in the numbered list, as any remark.
+- **The 3D viewer** (`src/ui/model-viewer.tsx`, `src/ui/model-load.ts`) draws a
+  3MF, an STL or a GLB with three.js, the second runtime dependency of the UI
+  after PixiJS, pinned to an exact version. `attachments.tsx` loads it with
+  `next/dynamic` and `ssr: false`, and each format's loader (`ThreeMFLoader`,
+  `STLLoader`, `GLTFLoader`) is a further dynamic import: three.js is fetched
+  only when an item shows a part (about 185 kB gzipped for a 3MF, measured on
+  the build), never on the other pages. The part is read in its own frame, the
+  one of build123d and of the slicers: millimetres, Z up. A 3MF says its unit
+  (`<model unit>`, millimetre by default, read from the package with three's
+  copy of fflate), an STL is in millimetres, a GLB (metres, Y up) is scaled by
+  1000 and turned so that its Y is Z. The part is set on a grid (centred in X
+  and Y, its lowest point on the plane, a power of ten per cell), with its
+  overall dimensions in millimetres (X × Y × Z) and the grid step. It turns,
+  zooms and moves with the mouse or the fingers (`OrbitControls`); « Face »,
+  « Dessus », « Côté » and « Iso » turn the camera (the front is seen from -Y)
+  and the corner button goes back to the initial view (iso). The light comes
+  from the sky and from the camera, the edges sharper than 40 degrees are
+  drawn, and the scene is drawn only when something moved. Without WebGL, or
+  when a file cannot be read, the viewer says so and the download stays.
+- **A remark on a point of a part**: « Annoter un point », then a click or a
+  tap on the part (a press that moves turns the part instead). The point is
+  found by a ray cast from the camera, then given in the part's frame,
+  whatever its placement on the grid, with the normal of the face hit, turned
+  towards the camera. The remark box opens with the quote « piece.3mf, point
+  (12,4 ; -3,0 ; 8,5) mm, face +Z » (coordinates to the tenth of a millimetre;
+  « face ±X/Y/Z » within 5 degrees of an axis, else « normale (0,71 ; 0,00 ;
+  0,71) »). The remark is stored with its `point` (`{ fileId, x, y, z,
+  normal }`, see `api.md`) in the same `approvals.annotations` JSON column:
+  the field is optional, so no migration was needed and the remarks stored
+  before read as they did. It comes after the remarks on the text, and the
+  revision task gives the agent its exact point under it (see `api.md`). The
+  pins of the remarks on that file are drawn over the part, numbered as in
+  « Remarques (n) », dimmed when the part hides them; a click on a pin opens
+  its remark (to change or remove it while the item is pending, read-only on
+  the history).
 - **On Telegram**, see section 5.
 
 ### Messages between agents

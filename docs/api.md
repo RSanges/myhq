@@ -165,7 +165,8 @@ general comment. `annotations` are the remarks on passages of the body that came
 with a `revise` or `rejected` decision, in document order, each
 `{ "quote": "...", "comment": "...", "position": 552 }` (`position` is optional:
 the offset of the quote in the rendered text of the body, which tells apart two
-passages that read the same); empty for every other item. They are part of the
+passages that read the same); a remark on a point of a 3D part has a `point`
+instead (see `PATCH /api/approvals/[id]`); empty for every other item. They are part of the
 history in `GET /api/state`.
 
 `decisionHistory` lists the decisions the item had before its last one, oldest
@@ -636,7 +637,23 @@ triggered: check `actionDone` before asking for one.
 
 `annotations` (optional, at most 30) attach remarks to passages of the body:
 each has a `quote` (1 to 2000 characters, the passage as rendered), a `comment`
-(1 to 2000 characters) and an optional `position` (integer, 0 or more). They go
+(1 to 2000 characters) and an optional `position` (integer, 0 or more). A
+remark on a point of a 3D part joined to the item has, instead of a
+`position`, a `point`:
+
+```json
+{
+  "quote": "piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z",
+  "comment": "Paroi trop fine ici.",
+  "point": { "fileId": 4, "x": 12.4, "y": -3, "z": 8.5, "normal": [0, 0, 1] }
+}
+```
+
+`fileId` is the id of the file in `files` (a positive integer); `x`, `y`, `z`
+the point in millimetres in the part's own frame (Z up; the desk rounds them to
+the tenth; each between -1000000 and 1000000); `normal` the outward unit normal
+of the face hit (three numbers between -1 and 1, rounded to the hundredth by
+the desk). Any other key is `INVALID_INPUT`. They go
 with `revise` and `rejected` only (`approved` with annotations is
 `INVALID_INPUT`). A `revise` with at least one annotation needs no `note`; a
 `rejected` always needs its reason. They are stored with the decision, and the
@@ -649,6 +666,14 @@ note:
 2. ...
 
 Remarque générale : <note>
+```
+
+A remark with a `point` is followed by a line with the exact point, numbers
+with a dot (one decimal for the coordinates, two for the normal):
+
+```
+2. À propos de « piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z » : Paroi trop fine ici.
+   Point dans le repère de la pièce (mm) : x=12.4 y=-3.0 z=8.5 ; normale sortante de la face : (0.00, 0.00, 1.00)
 ```
 
 Without annotations the text is the note alone, as before. The desk's controls
