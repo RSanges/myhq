@@ -242,7 +242,8 @@ export function RoomPage() {
     <div className="wall-page room-page chat-main" inert={chat.open && !wide}>
       <header className="room-top">
         <SiteNav current="floor" />
-        <h1 className="room-title wall-display">{title}</h1>
+        {/* The nav already says "L'étage": the title shows only when it adds a room name, and stays for screen readers. */}
+        <h1 className={title === strings.nav.floor ? "sr-only" : "room-title wall-display"}>{title}</h1>
         {model.loaded && single && roomNames.length > 0 && (
           <div className="room-rooms" role="group" aria-label={t.single.roomsLabel}>
             {roomNames.map((name) => {
