@@ -5,7 +5,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { ChatPanel } from "./chat-panel";
 import { Desk, WatchDesk } from "./desk";
-import { AgendaView, ItemsView, JournalView, PostitsView } from "./desk-module-views";
+import { markDeskSeen } from "./api";
+import { AgendaView, ItemsView, JournalView, PostitsView, StandardView } from "./desk-module-views";
 import { formatClock } from "./format";
 import { selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
 import { RECEPTION_ROOM } from "./reception";
@@ -52,7 +53,9 @@ export function CommandError({ object, onRetry }: { object: DeskObject; onRetry:
  * desk, the object's label and count, and its own interface, chosen by the
  * object and its source (the approval cards for a pile of decisions, the
  * watch items for a tray, a reading view for the newspaper, the week for a
- * calendar, notes for the post-its, the conversation for the phone).
+ * calendar, notes for the post-its, what is stuck for the Standard, the
+ * conversation for a phone on the chat). Opening the page marks the object
+ * seen on the server, which sets its unread count back to zero.
  */
 export function DeskModulePage({ id }: { id: string }) {
   const hq = useHq();
@@ -67,6 +70,19 @@ export function DeskModulePage({ id }: { id: string }) {
   useEffect(() => {
     if (object) document.title = t.pageTitle(object.label, object.count);
   }, [object]);
+
+  // Seen once per opening: what the unread sources (summaries, chat) counted until now is read.
+  useEffect(() => {
+    let closed = false;
+    markDeskSeen(id)
+      .then(() => {
+        if (!closed) reload();
+      })
+      .catch(() => undefined);
+    return () => {
+      closed = true;
+    };
+  }, [id, reload]);
 
   if (object?.object === "phone" && coreSources(object).includes("chat")) {
     return (
@@ -188,6 +204,7 @@ function ModuleBody({
     const seen = history.filter((approval) => approval.informational && matchesTypes(types)(approval));
     return <WatchDesk unseen={unseen} seen={seen} agents={agents} dispatch={dispatch} target={target} />;
   }
+  if (sources.includes("blocked")) return <StandardView object={object} onChange={reload} />;
   if (object.object === "newspaper") return <JournalView object={object} agents={agents} onChange={reload} />;
   if (object.object === "calendar") return <AgendaView object={object} />;
   if (object.object === "postits") return <PostitsView object={object} />;

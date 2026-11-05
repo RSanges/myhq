@@ -751,7 +751,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram in full (an alert line, then its body as is, cut in messages of 4000 characters) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 | `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item in full with its link, without « Vu » buttons (cut in several messages only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
 
-| `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone. |
+| `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone (the Standard). |
 
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
@@ -825,14 +825,26 @@ Sources of the core:
 |---|---|---|
 | `approvals` | Pending items. | Every pending item, oldest first (the object also gets the room colour of each one, the spines of the pile). |
 | `watch:<type>`, `watch:*` | Unseen informational items of that type (of any type for `*`). | The unseen ones, oldest first, then the 20 last seen ones (`tone: "muted"`). |
-| `summaries` | Summaries of the day. | The 20 last run summaries (runs ended `done`) of the agents with `notifyRuns: "summary"`, the briefs and recaps they send, newest first. |
-| `chat` | Replies and messages of the bot since the user last wrote. | The 10 last messages of the conversation. |
+| `summaries` | Summaries not seen yet: the ones that ended since the object's page was last opened (the ones of the day while it was never opened). | The 20 last run summaries (runs ended `done`) of the agents with `notifyRuns: "summary"`, the briefs and recaps they send, newest first. |
+| `chat` | Replies and messages of the bot since the user last wrote and since the object's page was last opened. | The 10 last messages of the conversation. |
+| `blocked` | The agents that have something stuck (one per agent, however many entries). | What is stuck at the agents of every room, newest first: the blocked tasks, the pending tasks that nothing will take on its own, the failed or interrupted runs of the last 24 hours whose tasks were not taken again (`architecture.md`, "The Standard"). |
 
 A list (`["watch:brief", "summaries"]`) adds up the counts and merges the
 items, newest first. Without a `desk` block the desk is: `signer` (pile,
 `approvals`), `courrier` (tray, `watch:mail_alert`), `journal` (newspaper,
-`["watch:brief", "summaries"]`) and `telephone` (phone, `chat`); post-its and a
-calendar exist only when configured, since only a home knows where they live.
+`["watch:brief", "summaries"]`) and `telephone` (phone, `blocked`, « Standard »);
+post-its and a calendar exist only when configured, since only a home knows
+where they live. A phone on `chat` is still possible: its page is then the
+conversation panel.
+
+**Seen.** Opening the page of an object (`/bureau/<id>`) marks it seen on the
+server (`POST /api/desk/<id>/seen`, one row per object id in the `desk_seen`
+table of the database). Its `summaries` and `chat` sources then count only what
+came after that instant: what existed when the page was opened is read, what
+arrives later counts again. The sources that wait for a decision (`approvals`)
+or a gesture (`watch:*` and its « Vu », what is stuck for `blocked`) keep their
+own count whatever the mark. The mark belongs to the object id: renaming an
+object starts it over.
 An invalid block is reported (`configError` of `GET /api/desk`, and a line on
 the pages) and the default desk is shown; the rest of `myhq.json` is not affected.
 

@@ -9,9 +9,12 @@ import {
   chatHistorySchema,
   chatReplySchema,
   clearedSchema,
+  closeResponseSchema,
   deskSchema,
+  deskSeenSchema,
   errorBodySchema,
   itemAskResponseSchema,
+  relaunchResponseSchema,
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
@@ -90,6 +93,18 @@ export async function saveSettingsGroup(group: "layout" | "limits" | "notificati
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
 
 export const fetchDesk = (): Promise<Desk> => request("/api/desk", deskSchema);
+
+/** The page of a desk object was opened: what its unread sources counted is seen. */
+export const markDeskSeen = (id: string) => request(`/api/desk/${encodeURIComponent(id)}/seen`, deskSeenSchema, { method: "POST" });
+
+/** What the actions of the Standard act on: a task, or a failed or interrupted run and its tasks. */
+export type BlockedTarget = { kind: "task" | "run"; id: number };
+
+/** « Relancer »: the tasks go back to pending and the agent is woken at once, or the answer says why it could not be. */
+export const relaunchBlocked = (target: BlockedTarget) => request("/api/blocked/relaunch", relaunchResponseSchema, jsonInit("POST", target));
+
+/** « Clore »: the tasks are done, closed by the owner. */
+export const closeBlocked = (target: BlockedTarget) => request("/api/blocked/close", closeResponseSchema, jsonInit("POST", target));
 
 export const fetchRoutines = () => request("/api/routines", routinesResponseSchema);
 

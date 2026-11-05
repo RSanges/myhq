@@ -3,8 +3,9 @@ import path from "node:path";
 import { z } from "zod";
 import { strings } from "../ui/strings";
 import { app } from "./app";
+import { listBlocked, stuckAgents, type BlockedEntry } from "./blocked";
 import { isInside, type Env, type HqConfig } from "./config";
-import type { ApprovalRow, Db, RunRow } from "./db";
+import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import {
   DeskCommands,
   type CommandResult,
@@ -12,7 +13,7 @@ import {
   type DeskCommandErrorCode,
   type DeskTone,
 } from "./desk-command";
-import { errorResponse } from "./errors";
+import { errorResponse, HqError } from "./errors";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { loadHome, type Home } from "./rooms";
 import { dayKey, dayRange } from "./time";
@@ -28,11 +29,12 @@ export type DeskObjectKind = (typeof DESK_OBJECTS)[number];
 
 const WATCH_SOURCE = /^watch:(\*|[a-z][a-z0-9_]{0,62})$/;
 
-/** A source of the core: pending decisions, unseen items of a type, run summaries, the conversation. */
+/** A source of the core: pending decisions, unseen items of a type, run summaries, the conversation, what is stuck at the agents. */
 export const coreSourceSchema = z.union([
   z.literal("approvals"),
   z.literal("summaries"),
   z.literal("chat"),
+  z.literal("blocked"),
   z.string().regex(WATCH_SOURCE, "watch:<type> (snake_case) or watch:*"),
 ]);
 export type CoreSource = z.infer<typeof coreSourceSchema>;
@@ -79,7 +81,7 @@ export const deskConfigSchema = z
   });
 export type DeskConfig = z.infer<typeof deskConfigSchema>;
 
-/** The desk of a home without a `desk` block: the pile, the tray, the newspaper and the phone. */
+/** The desk of a home without a `desk` block: the pile, the tray, the newspaper and the phone (the Standard). */
 export function defaultDesk(): DeskConfig {
   const labels = strings.deskModules.defaults;
   return {
@@ -87,7 +89,7 @@ export function defaultDesk(): DeskConfig {
       { id: "signer", object: "pile", label: labels.pile, source: "approvals" },
       { id: "courrier", object: "tray", label: labels.tray, source: "watch:mail_alert" },
       { id: "journal", object: "newspaper", label: labels.newspaper, source: ["watch:brief", "summaries"] },
-      { id: "telephone", object: "phone", label: labels.phone, source: "chat" },
+      { id: "telephone", object: "phone", label: labels.phone, source: "blocked" },
     ],
   };
 }
@@ -135,10 +137,24 @@ export type DeskRef =
       forRoom: string | null;
     }
   | { kind: "run"; id: number; room: string; agentId: string }
-  | { kind: "chat"; id: number; role: string };
+  | { kind: "chat"; id: number; role: string }
+  | {
+      kind: "blocked";
+      /** `task` (blocked), `pending` (nothing takes it) or `run` (failed or interrupted); the actions take `task` or `run`. */
+      entry: BlockedEntry["entry"];
+      /** The task id, or the run id. */
+      id: number;
+      room: string;
+      agentId: string;
+      state: BlockedEntry["state"];
+      /** Why it is stuck, one sentence. */
+      reason: string;
+      /** How many tasks the actions act on. */
+      tasks: number;
+    };
 
 export type DeskItemDto = {
-  /** Unique in the object: `approval-12`, `run-30`, `chat-4`, or the command's own id. */
+  /** Unique in the object: `approval-12`, `run-30`, `chat-4`, `blocked-task-7`, or the command's own id. */
   id: string;
   title: string;
   /** Markdown, null when there is none. */
@@ -157,7 +173,7 @@ export type DeskObjectDto = {
   id: string;
   object: DeskObjectKind;
   label: string;
-  /** `approvals`, `watch:mail_alert`, `watch:brief+summaries`, `chat` or `command`. */
+  /** `approvals`, `watch:mail_alert`, `watch:brief+summaries`, `chat`, `blocked` or `command`. */
   source: string;
   status: "ok" | "error";
   error: { code: DeskCommandErrorCode; message: string } | null;
@@ -246,14 +262,42 @@ function summaryWhere(agents: { room: string; agent: string }[]): { sql: string;
 
 type CoreRead = { count: number; items: DeskItemDto[] };
 
-/** The count of a core source, without its items (the `desk` event). */
-export function coreCount(db: Db, home: Home, source: CoreSource, config: Pick<HqConfig, "timeZone">, at: Date): number {
+// --- Seen ----------------------------------------------------------------------------------
+
+/** When the owner last opened the page of the object (`desk_seen`), null when never. */
+export function deskSeenAt(db: Db, objectId: string): string | null {
+  const row = db.prepare("SELECT seen_at FROM desk_seen WHERE object_id = ?").get(objectId) as { seen_at: string } | undefined;
+  return row?.seen_at ?? null;
+}
+
+/**
+ * Marks the object seen now: its `summaries` and `chat` sources stop counting
+ * what exists at this instant, and count again what comes after. The other
+ * sources keep their own logic (a decision, a « Vu », what is stuck).
+ */
+export function markDeskSeen(db: Db, objectId: string, at: string = now()): string {
+  db.prepare(
+    "INSERT INTO desk_seen (object_id, seen_at) VALUES (?, ?) ON CONFLICT (object_id) DO UPDATE SET seen_at = excluded.seen_at",
+  ).run(objectId, at);
+  return at;
+}
+
+/** The count of a core source, without its items (the `desk` event). `seenAt`: when the object's page was last opened. */
+export function coreCount(db: Db, home: Home, source: CoreSource, config: HqConfig, at: Date, seenAt: string | null = null): number {
   if (source === "approvals") {
     return (db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get() as { n: number }).n;
   }
   if (source === "summaries") {
     const where = summaryWhere(notifyRunAgents(home));
     if (!where) return 0;
+    if (seenAt) {
+      return (
+        db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE ${where.sql} AND COALESCE(ended_at, started_at) > ?`).get(...where.params, seenAt) as {
+          n: number;
+        }
+      ).n;
+    }
+    // Never opened: the summaries of the day.
     const { start } = dayRange(dayKey(at, config.timeZone), config.timeZone);
     return (
       db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE ${where.sql} AND COALESCE(ended_at, started_at) >= ?`).get(...where.params, start.toISOString()) as {
@@ -261,7 +305,8 @@ export function coreCount(db: Db, home: Home, source: CoreSource, config: Pick<H
       }
     ).n;
   }
-  if (source === "chat") return chatCount(db);
+  if (source === "chat") return chatCount(db, seenAt);
+  if (source === "blocked") return stuckAgents(listBlocked(db, home, config, at));
   const type = watchType(source);
   return (
     db
@@ -270,20 +315,51 @@ export function coreCount(db: Db, home: Home, source: CoreSource, config: Pick<H
   ).n;
 }
 
-/** Replies and messages of the bot since the user last wrote. */
-function chatCount(db: Db): number {
+/** Replies and messages of the bot since the user last wrote, and since the object was last opened. */
+function chatCount(db: Db, seenAt: string | null): number {
   return (
     db
       .prepare(
-        "SELECT COUNT(*) AS n FROM chat_messages WHERE role <> 'user' AND id > COALESCE((SELECT MAX(id) FROM chat_messages WHERE role = 'user'), 0)",
+        `SELECT COUNT(*) AS n FROM chat_messages WHERE role <> 'user' AND id > COALESCE((SELECT MAX(id) FROM chat_messages WHERE role = 'user'), 0)${
+          seenAt ? " AND created_at > ?" : ""
+        }`,
       )
-      .get() as { n: number }
+      .get(...(seenAt ? [seenAt] : [])) as { n: number }
   ).n;
 }
 
-function readCore(db: Db, home: Home, source: CoreSource, objectId: string, config: Pick<HqConfig, "timeZone">, at: Date): CoreRead {
+function blockedItem(entry: BlockedEntry, objectId: string, colors: Map<string, string | null>): DeskItemDto {
+  const id = `blocked-${entry.entry}-${entry.id}`;
+  return {
+    id,
+    title: entry.agentName,
+    body: entry.text,
+    at: entry.since,
+    end: null,
+    allDay: false,
+    href: deskHref(objectId, id),
+    tone: entry.entry === "pending" ? "warn" : "alert",
+    color: colors.get(entry.room) ?? null,
+    ref: {
+      kind: "blocked",
+      entry: entry.entry,
+      id: entry.id,
+      room: entry.room,
+      agentId: entry.agentId,
+      state: entry.state,
+      reason: entry.reason,
+      tasks: entry.taskIds.length,
+    },
+  };
+}
+
+function readCore(db: Db, home: Home, source: CoreSource, objectId: string, config: HqConfig, at: Date, seenAt: string | null): CoreRead {
   const colors = roomColors(home);
-  const count = coreCount(db, home, source, config, at);
+  if (source === "blocked") {
+    const entries = listBlocked(db, home, config, at);
+    return { count: stuckAgents(entries), items: entries.map((entry) => blockedItem(entry, objectId, colors)) };
+  }
+  const count = coreCount(db, home, source, config, at, seenAt);
   if (source === "approvals") {
     const rows = db.prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at, id").all() as ApprovalRow[];
     return { count, items: rows.map((row) => approvalItem(row, objectId, colors, null)) };
@@ -414,7 +490,7 @@ function fromCommand(result: CommandResult): Omit<DeskObjectDto, "id" | "object"
 }
 
 export type DeskDeps = {
-  config: Pick<HqConfig, "home" | "timeZone">;
+  config: HqConfig;
   db: Db;
   commands: DeskCommands;
   /** The loaded home (rooms, colours, agents); read from the disk when absent. */
@@ -434,7 +510,8 @@ async function resolveObject(object: DeskObjectConfig, deps: DeskDeps & { home: 
     return { ...head, ...fromCommand(await deps.commands.get(spec)) };
   }
   const list = Array.isArray(source) ? source : [source];
-  const reads = list.map((each) => readCore(deps.db, deps.home, each, object.id, deps.config, deps.at));
+  const seenAt = deskSeenAt(deps.db, object.id);
+  const reads = list.map((each) => readCore(deps.db, deps.home, each, object.id, deps.config, deps.at, seenAt));
   // A single source keeps its own order (the pile oldest first); several are merged, newest first.
   const items = reads.length === 1 ? reads[0]!.items : reads.flatMap((read) => read.items).sort((a, b) => itemTime(b) - itemTime(a));
   return {
@@ -466,7 +543,10 @@ export async function resolveDesk(deps: DeskDeps): Promise<DeskDto> {
 export async function deskCounts(deps: DeskDeps): Promise<DeskCountsDto> {
   const { desk } = readDeskConfig(deps.config.home);
   const at = deps.at ?? new Date();
-  const needsHome = desk.objects.some((object) => object.source === "summaries" || (Array.isArray(object.source) && object.source.includes("summaries")));
+  const homeSources: CoreSource[] = ["summaries", "blocked"];
+  const needsHome = desk.objects.some((object) =>
+    homeSources.some((each) => object.source === each || (Array.isArray(object.source) && object.source.includes(each))),
+  );
   const home = deps.home ?? (needsHome ? loadHome(deps.config.home) : { root: deps.config.home, rooms: [], invalid: [] });
   const objects = await Promise.all(
     desk.objects.map(async (object) => {
@@ -478,9 +558,10 @@ export async function deskCounts(deps: DeskDeps): Promise<DeskCountsDto> {
         return { id: object.id, count: result.ok ? result.output.count : 0, status: result.ok ? ("ok" as const) : ("error" as const) };
       }
       const list = Array.isArray(source) ? source : [source];
+      const seenAt = deskSeenAt(deps.db, object.id);
       return {
         id: object.id,
-        count: list.reduce((sum, each) => sum + coreCount(deps.db, home, each, deps.config, at), 0),
+        count: list.reduce((sum, each) => sum + coreCount(deps.db, home, each, deps.config, at, seenAt), 0),
         status: "ok" as const,
       };
     }),
@@ -590,6 +671,20 @@ export async function deskResponse(): Promise<Response> {
   try {
     const { config, db } = app();
     return Response.json(await resolveDesk({ config, db, commands: deskCommands(config.home) }));
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+/** Response of POST /api/desk/<id>/seen: the owner opened the object's page. */
+export function deskSeenResponse(objectId: string): Response {
+  try {
+    const { config, db } = app();
+    const { desk } = readDeskConfig(config.home);
+    if (!desk.objects.some((object) => object.id === objectId)) {
+      throw new HqError("DESK_OBJECT_NOT_FOUND", 404, `The desk has no object "${objectId}".`);
+    }
+    return Response.json({ id: objectId, seenAt: markDeskSeen(db, objectId) });
   } catch (error) {
     return errorResponse(error);
   }

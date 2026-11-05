@@ -3,11 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { DeskCommands, parseCommandOutput, type CommandSpec } from "../src/server/desk-command";
+import { POST as seenRoute } from "../src/app/api/desk/[id]/seen/route";
 import {
   commandSpec,
   defaultDesk,
   deskCounts,
   deskResponse,
+  markDeskSeen,
   readDeskConfig,
   resolveDesk,
   watchDesk,
@@ -86,9 +88,9 @@ test("desk config: the default desk without myhq.json, without the block, and wi
       ["signer", "pile", "approvals"],
       ["courrier", "tray", "watch:mail_alert"],
       ["journal", "newspaper", ["watch:brief", "summaries"]],
-      ["telephone", "phone", "chat"],
+      ["telephone", "phone", "blocked"],
     ],
-    "pile, tray, newspaper and phone; no post-its nor calendar unless configured",
+    "pile, tray, newspaper and phone (the Standard); no post-its nor calendar unless configured",
   );
   writeSettings(home, { language: "fr" });
   assert.deepEqual(readDeskConfig(home), { desk: defaultDesk(), error: null });
@@ -282,8 +284,10 @@ test("GET /api/desk: the default desk with its counts, items, spines and links",
   assert.equal(journal.items[0]!.body, "Le récap du soir.");
 
   const phone = byId.telephone!;
-  assert.equal(phone.count, 2, "the reply and the alert since the user last wrote");
-  assert.deepEqual(phone.items.map((item) => item.body), ["Salut", "Bonjour", "Un item attend"]);
+  assert.equal(phone.label, "Standard");
+  assert.equal(phone.source, "blocked");
+  assert.equal(phone.count, 0, "nothing stuck at the agents");
+  assert.deepEqual(phone.items, []);
 });
 
 test("GET /api/desk: a command object, ok or failing, never fails the route", async () => {
@@ -386,4 +390,66 @@ test("resolveDesk: the counts of the summaries are the ones of today", async () 
   const journal = (desk: DeskDto) => desk.objects.find((object) => object.id === "journal")!;
   assert.equal(journal(day).count, 2, "the unseen brief and the summary of the day");
   assert.equal(journal(later).count, 1, "only the unseen brief two days later");
+});
+
+// --- Seen -------------------------------------------------------------------------------
+
+test("seen: opening the newspaper sets its summaries back to zero, what comes after counts again; the unseen brief keeps its « Vu »", async () => {
+  const config = makeHome({}, ROOM);
+  const db = getDbAt(config.dbPath);
+  seed(db);
+  const commands = new DeskCommands({ env: {} });
+  const at = new Date("2026-11-04T20:00:00.000Z");
+  const journal = async () => (await resolveDesk({ config, db, commands, at })).objects.find((object) => object.id === "journal")!;
+  assert.equal((await journal()).count, 2, "never opened: the unseen brief and the summary of the day");
+
+  markDeskSeen(db, "journal", "2026-11-04T19:00:00.000Z");
+  assert.equal((await journal()).count, 1, "the summary that existed is seen; the brief waits for its « Vu »");
+  assert.equal((await journal()).items.length, 2, "the items stay on the page");
+  assert.deepEqual((await deskCounts({ config, db, commands, at })).objects.find((object) => object.id === "journal")?.count, 1);
+
+  db.prepare(
+    "INSERT INTO runs (room, agent_id, engine, task, status, started_at, ended_at, summary) VALUES ('demo', 'brief', 'claude', 't', 'done', ?, ?, ?)",
+  ).run("2026-11-04T19:29:00.000Z", "2026-11-04T19:30:00.000Z", "Le récap de la nuit.");
+  assert.equal((await journal()).count, 2, "a summary that came after counts");
+  assert.equal((await resolveDesk({ config, db, commands, at: new Date("2026-11-06T09:00:00.000Z") })).objects.find((object) => object.id === "journal")!.count, 2, "no reset at midnight any more");
+  db.prepare("UPDATE approvals SET status = 'seen' WHERE type = 'brief'").run();
+  assert.equal((await journal()).count, 1);
+});
+
+test("seen: the chat source counts the messages of the bot since the user wrote and since its page was opened, for any home", async () => {
+  const config = makeHome({}, ROOM);
+  writeSettings(config.home, { desk: { objects: [{ id: "tel", object: "phone", label: "Téléphone", source: "chat" }] } });
+  const db = getDbAt(config.dbPath);
+  seed(db);
+  const commands = new DeskCommands({ env: {} });
+  const phone = async () => (await resolveDesk({ config, db, commands })).objects[0]!;
+  assert.equal((await phone()).count, 2, "the reply and the alert since the user last wrote");
+  assert.deepEqual((await phone()).items.map((item) => item.body), ["Salut", "Bonjour", "Un item attend"]);
+  markDeskSeen(db, "tel", "2026-11-04T08:30:00.000Z");
+  assert.equal((await phone()).count, 1, "the reply was there when the page opened; the alert came after");
+  markDeskSeen(db, "tel", "2026-11-04T10:00:00.000Z");
+  assert.equal((await phone()).count, 0);
+  db.prepare("INSERT INTO chat_messages (role, kind, channel, text, created_at) VALUES ('bot', 'alert', 'telegram', 'Encore', ?)").run(
+    "2026-11-04T11:00:00.000Z",
+  );
+  assert.equal((await phone()).count, 1);
+  assert.equal(markDeskSeen(db, "other", "2026-11-04T12:00:00.000Z"), "2026-11-04T12:00:00.000Z");
+  assert.equal((await phone()).count, 1, "the mark is per object");
+});
+
+test("POST /api/desk/<id>/seen: marks an object of the desk, 404 for another id, 400 for an invalid one", async () => {
+  const config = makeHome({}, ROOM);
+  process.env.MYHQ_HOME = config.home;
+  const db = getDbAt(config.dbPath);
+  const post = (id: string) => seenRoute(new Request(`http://127.0.0.1/api/desk/${id}/seen`, { method: "POST" }), { params: Promise.resolve({ id }) });
+  const ok = await post("journal");
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { id: string; seenAt: string };
+  assert.equal(body.id, "journal");
+  assert.equal((db.prepare("SELECT seen_at FROM desk_seen WHERE object_id = 'journal'").get() as { seen_at: string }).seen_at, body.seenAt);
+  const missing = await post("agenda");
+  assert.equal(missing.status, 404);
+  assert.equal(((await missing.json()) as { error: { code: string } }).error.code, "DESK_OBJECT_NOT_FOUND");
+  assert.equal((await post("Not An Id")).status, 400);
 });

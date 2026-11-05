@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { errorText, markSeen } from "./api";
+import { closeBlocked, errorText, markSeen, relaunchBlocked, type BlockedTarget } from "./api";
 import { addDayKey, formatFullDay, formatHour, formatLongDay, formatDateTime, localDayKey } from "./format";
 import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
+import { RECEPTION_ROOM } from "./reception";
 import { chipStyle } from "./room-color";
 import type { DeskItem, DeskObject } from "./schemas";
 import { strings } from "./strings";
@@ -12,7 +13,8 @@ import { Badge, buttonClass, ErrorNote } from "./ui";
 
 // The interfaces of the desk objects whose data comes from GET /api/desk
 // rather than from the state of the desk: the newspaper, the calendar, the
-// post-its, and a plain list for anything else.
+// post-its, the Standard (what is stuck at the agents), and a plain list for
+// anything else.
 
 const t = strings.deskModules;
 
@@ -292,6 +294,175 @@ export function PostitsView({ object }: { object: DeskObject }) {
               </li>
             );
           })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- The Standard ----------------------------------------------------------------------
+
+type BlockedRef = Extract<NonNullable<DeskItem["ref"]>, { kind: "blocked" }>;
+
+/** Since when something is stuck, as « depuis 2 h ». */
+export function formatSince(iso: string, at: number = Date.now()): string {
+  const since = t.standard.since;
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return iso;
+  const minutes = Math.floor((at - time) / 60_000);
+  if (minutes < 1) return since.now;
+  if (minutes < 60) return since.minutes(minutes);
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? since.hours(hours) : since.days(Math.floor(hours / 24));
+}
+
+const STATE_TONE: Record<BlockedRef["state"], "danger" | "warn"> = {
+  blocked: "danger",
+  pending: "warn",
+  failed: "danger",
+  cancelled: "warn",
+};
+
+type Outcome = { tone: "ok" | "warn"; text: string };
+
+/** What an action said, in French: the run started, or why the agent could not be woken. */
+function relaunchOutcome(result: Awaited<ReturnType<typeof relaunchBlocked>>): Outcome {
+  if (result.run) return { tone: "ok", text: t.standard.relaunched(result.run.id) };
+  const code = result.waiting?.code ?? "";
+  return { tone: "warn", text: t.standard.waiting[code] ?? t.standard.waitingOther };
+}
+
+function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: BlockedRef; onDone: (outcome: Outcome) => void }) {
+  const [confirm, setConfirm] = useState<"relaunch" | "close" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tint = chipStyle(item.color);
+  const run = refData.entry === "run";
+  const target: BlockedTarget = { kind: run ? "run" : "task", id: refData.id };
+  const room = refData.room === RECEPTION_ROOM ? strings.room.reception.name : refData.room;
+  const act = async (action: "relaunch" | "close") => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (action === "relaunch") {
+        const said = relaunchOutcome(await relaunchBlocked(target));
+        onDone({ ...said, text: t.standard.outcome(item.title, said.text) });
+      } else {
+        await closeBlocked(target);
+        onDone({ tone: "ok", text: t.standard.outcome(item.title, t.standard.closed) });
+      }
+      setConfirm(null);
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const question =
+    confirm === "relaunch"
+      ? run
+        ? t.standard.confirm.relaunchRun(refData.tasks)
+        : t.standard.confirm.relaunch
+      : run
+        ? t.standard.confirm.closeRun(refData.tasks)
+        : t.standard.confirm.close;
+  return (
+    <li
+      id={item.id}
+      style={tint ?? undefined}
+      className={`deep-target space-y-3 rounded-lg border border-line bg-card p-4 ${tint ? "border-l-4 border-l-[var(--room-color)]" : ""}`}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-xs font-medium">
+          <span aria-hidden className={`size-2 rounded-full ${tint ? "bg-[var(--room-color)]" : "bg-muted"}`} />
+          {room}
+        </span>
+        <span className="font-semibold break-words">{item.title}</span>
+        <Badge tone={STATE_TONE[refData.state]}>{t.standard.state[refData.state]}</Badge>
+        {item.at && (
+          <span className="text-xs text-muted sm:ml-auto" title={formatDateTime(item.at)}>
+            {formatSince(item.at)}
+          </span>
+        )}
+      </div>
+      <p className="text-sm break-words">{refData.reason}</p>
+      {item.body && (
+        <details className="rounded-md bg-soft">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+            {run ? t.standard.runText(refData.id) : t.standard.taskText}
+            {refData.tasks > 1 ? `, ${t.standard.tasks(refData.tasks)}` : ""}
+          </summary>
+          <div className="px-3 pb-3 text-sm">
+            <Markdown source={item.body} />
+          </div>
+        </details>
+      )}
+      {confirm ? (
+        <div className="space-y-2 rounded-md border border-line p-3">
+          <p className="text-sm">{question}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass(confirm === "close" ? "danger" : "primary")}
+              disabled={busy}
+              onClick={() => void act(confirm)}
+            >
+              {busy ? t.standard.sending : confirm === "relaunch" ? t.standard.confirm.yesRelaunch : t.standard.confirm.yesClose}
+            </button>
+            <button type="button" className={buttonClass()} disabled={busy} onClick={() => setConfirm(null)}>
+              {t.standard.confirm.cancel}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={buttonClass("primary")} onClick={() => setConfirm("relaunch")}>
+            {t.standard.relaunch}
+          </button>
+          <button type="button" className={buttonClass()} onClick={() => setConfirm("close")}>
+            {t.standard.close}
+          </button>
+        </div>
+      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </li>
+  );
+}
+
+/**
+ * The Standard: what is stuck at the agents, newest first. Each entry says
+ * its room, its agent, since when and why, with the text of the task folded,
+ * and two actions behind a light confirmation: « Relancer » and « Clore ».
+ */
+export function StandardView({ object, onChange }: { object: DeskObject; onChange: () => void }) {
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const entries = object.items.flatMap((item) => (item.ref?.kind === "blocked" ? [{ item, ref: item.ref }] : []));
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted">{t.standard.hint}</p>
+      {outcome && (
+        <p
+          role="status"
+          className={`rounded-md px-3 py-2 text-sm ${outcome.tone === "ok" ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn"}`}
+        >
+          {outcome.text}
+        </p>
+      )}
+      {entries.length === 0 ? (
+        <Empty text={t.standard.empty} />
+      ) : (
+        <ul className="space-y-3">
+          {entries.map(({ item, ref }) => (
+            <StandardEntry
+              key={item.id}
+              item={item}
+              refData={ref}
+              onDone={(next) => {
+                setOutcome(next);
+                onChange();
+              }}
+            />
+          ))}
         </ul>
       )}
     </div>

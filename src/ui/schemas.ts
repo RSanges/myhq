@@ -265,6 +265,16 @@ const deskRefSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("run"), id: z.number().int(), room: z.string(), agentId: z.string() }),
   z.object({ kind: z.literal("chat"), id: z.number().int(), role: z.string() }),
+  z.object({
+    kind: z.literal("blocked"),
+    entry: z.enum(["task", "pending", "run"]),
+    id: z.number().int(),
+    room: z.string(),
+    agentId: z.string(),
+    state: z.enum(["blocked", "pending", "failed", "cancelled"]),
+    reason: z.string(),
+    tasks: z.number().int(),
+  }),
 ]);
 export const deskItemSchema = z.object({
   id: z.string(),
@@ -299,6 +309,17 @@ export const deskEventSchema = z.object({
   objects: z.array(z.object({ id: z.string(), count: z.number().int(), status: z.enum(["ok", "error"]) })),
   at: z.string(),
 });
+
+/** POST /api/desk/<id>/seen. */
+export const deskSeenSchema = z.object({ id: z.string(), seenAt: z.string() });
+
+/** POST /api/blocked/relaunch and /api/blocked/close. */
+export const relaunchResponseSchema = z.object({
+  tasks: z.array(z.number().int()),
+  run: runSchema.nullable(),
+  waiting: z.object({ code: z.string(), message: z.string() }).nullable(),
+});
+export const closeResponseSchema = z.object({ tasks: z.array(z.number().int()) });
 
 export type DeskObject = z.infer<typeof deskObjectSchema>;
 export type DeskItem = z.infer<typeof deskItemSchema>;

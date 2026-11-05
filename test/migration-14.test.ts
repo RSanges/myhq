@@ -25,10 +25,10 @@ function tempDb(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "myhq-migration14-")), "hq.db");
 }
 
-/** A database as it is after the real migrations 1 to 14, then put back at version 13 without its table. */
+/** A database as it is after the real migrations, then put back at version 13 without the table of 14 (the later ones run again, idempotent). */
 function databaseOfService(file: string): void {
   const db = openDb(file);
-  db.exec("DROP TABLE approval_files; DELETE FROM schema_migrations WHERE version = 14;");
+  db.exec("DROP TABLE approval_files; DELETE FROM schema_migrations WHERE version >= 14;");
   db.close();
 }
 
@@ -42,7 +42,7 @@ const REFERENCE = (() => {
 
 test("migration 14: a new database goes through 13 then 14 and has the table once", () => {
   const db = openDb(tempDb());
-  assert.deepEqual(versions(db), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  assert.deepEqual(versions(db), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   assert.deepEqual(approvalFilesSchema(db), REFERENCE);
   assert.equal(REFERENCE.columns.length, 8);
   assert.deepEqual(REFERENCE.index, [{ name: "approval_files_approval" }]);
@@ -58,7 +58,7 @@ test("migration 14: the database in service (version 13 without the table) gets 
   raw.close();
 
   const db = openDb(file);
-  assert.equal(Math.max(...versions(db)), 14);
+  assert.equal(Math.max(...versions(db)), 15, "and the later ones");
   assert.deepEqual(approvalFilesSchema(db), REFERENCE);
   db.close();
 });
@@ -119,7 +119,7 @@ test("migration 14: it is a no-op when the table and its rows already exist", ()
   db.close();
 
   const again = openDb(file);
-  assert.equal(Math.max(...versions(again)), 14);
+  assert.equal(Math.max(...versions(again)), 15, "and the later ones");
   assert.deepEqual(again.prepare("SELECT name FROM approval_files").all(), [{ name: "a.png" }]);
   assert.deepEqual(approvalFilesSchema(again), REFERENCE);
   again.close();

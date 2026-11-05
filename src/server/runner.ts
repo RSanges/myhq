@@ -345,7 +345,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
   });
 }
 
-type WakeCandidate = {
+export type WakeCandidate = {
   room: string;
   agent_id: string;
   source: "approval" | "message" | "revise" | "chat";
@@ -355,7 +355,7 @@ type WakeCandidate = {
 };
 
 /** Whether a task of this source wakes the agent: every one does unless the agent opted out (`queue`). */
-function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
+export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
   switch (source) {
     case "approval":
       return agent.onApproval === "task";
@@ -433,7 +433,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
  * sender's messages. Two agents answering each other ("received", "waiting")
  * then wake each other once per window, not at each message.
  */
-function pairWokeRecently(db: Db, candidate: WakeCandidate, since: string): boolean {
+export function pairWokeRecently(db: Db, candidate: WakeCandidate, since: string): boolean {
   if (!candidate.from_room || !candidate.from_agent) return false;
   return (
     db

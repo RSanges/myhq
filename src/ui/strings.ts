@@ -712,6 +712,10 @@ export const strings = {
       AGENT_PROPOSAL_INVALID: "La proposition d'agent est invalide : rien n'a été écrit. Le détail est dans le journal.",
       CHAT_NOT_CONFIGURED: "La conversation n'est pas configurée (section chat de assistant.json).",
       EXPORT_NOT_CONFIGURED: "L'export quotidien n'est pas configuré (export.dir dans myhq.json).",
+      TASK_NOT_FOUND: "Tâche introuvable.",
+      RUN_NOT_FOUND: "Tour introuvable.",
+      NOT_BLOCKED: "Ce n'est plus coincé : la tâche a été reprise ou close entre-temps.",
+      DESK_OBJECT_NOT_FOUND: "Ce module n'existe pas sur ce bureau.",
       INTERNAL: "Erreur interne du serveur.",
     } as Record<string, string>,
   },
@@ -760,7 +764,7 @@ export const strings = {
       pile: "À signer",
       tray: "Courrier",
       newspaper: "Journal",
-      phone: "Téléphone",
+      phone: "Standard",
     },
     /** Who wrote a message of the conversation, as an item of the phone. */
     chatWho: {
@@ -823,6 +827,80 @@ export const strings = {
       freeSlot: (start: string, end: string) => `${start} à ${end}`,
       noEvent: "Aucun rendez-vous.",
       readOnly: "Lecture seule : pour changer un rendez-vous, demande-le à l'assistant.",
+    },
+    standard: {
+      hint: "Ce qui est coincé chez les agents : une tâche bloquée, une tâche qui attend sans que rien ne la reprenne, un tour qui a échoué.",
+      empty: "Rien de coincé : chaque agent a ce qu'il lui faut.",
+      count: (agents: number) => (agents === 1 ? "1 agent coincé" : `${agents} agents coincés`),
+      since: {
+        now: "depuis moins d'une minute",
+        minutes: (n: number) => `depuis ${n} min`,
+        hours: (n: number) => `depuis ${n} h`,
+        days: (n: number) => `depuis ${n} j`,
+      },
+      state: {
+        blocked: "Bloquée",
+        pending: "En attente",
+        failed: "Tour échoué",
+        cancelled: "Tour interrompu",
+      } as Record<string, string>,
+      taskText: "Texte de la tâche",
+      runText: (runId: number) => `Consigne du tour #${runId}`,
+      tasks: (count: number) => (count === 1 ? "1 tâche" : `${count} tâches`),
+      relaunch: "Relancer",
+      close: "Clore",
+      confirm: {
+        relaunch: "La tâche repart et l'agent est réveillé tout de suite (verrou, plafond et ressources comme d'habitude).",
+        relaunchRun: (tasks: number) =>
+          tasks === 1
+            ? "Sa tâche repart et l'agent est réveillé tout de suite (verrou, plafond et ressources comme d'habitude)."
+            : `Ses ${tasks} tâches repartent et l'agent est réveillé tout de suite (verrou, plafond et ressources comme d'habitude).`,
+        close: "La tâche est marquée faite, avec la note « close par le propriétaire ». L'agent n'est pas réveillé.",
+        closeRun: (tasks: number) =>
+          tasks === 1
+            ? "Sa tâche est marquée faite, avec la note « close par le propriétaire ». L'agent n'est pas réveillé."
+            : `Ses ${tasks} tâches sont marquées faites, avec la note « close par le propriétaire ». L'agent n'est pas réveillé.`,
+        yesRelaunch: "Oui, relancer",
+        yesClose: "Oui, clore",
+        cancel: "Annuler",
+      },
+      sending: "Envoi...",
+      relaunched: (runId: number) => `Relancée : le tour #${runId} a démarré.`,
+      /** What an action did, after the agent's name. */
+      outcome: (agent: string, text: string) => `${agent} : ${text.charAt(0).toLowerCase()}${text.slice(1)}`,
+      closed: "Close.",
+      /** Why a relaunch could not wake the agent: the task stays pending. */
+      waiting: {
+        AGENT_BUSY: "La tâche est repartie, mais l'agent a déjà un tour en cours : relance-la à la fin de ce tour.",
+        RESOURCE_BUSY: "La tâche est repartie, mais une ressource de l'agent (le GPU par exemple) est prise par un autre tour : relance-la à la fin de ce tour.",
+        DAILY_CAP_REACHED: "La tâche est repartie, mais le plafond du jour est atteint : elle attend demain, ou un plafond relevé dans les réglages.",
+        SHUTTING_DOWN: "La tâche est repartie, mais MyHQ s'arrête : relance-la après le redémarrage.",
+        ROOM_NOT_FOUND: "La tâche est repartie, mais son agent n'est dans aucune salle du home : personne ne la prendra.",
+        AGENT_NOT_FOUND: "La tâche est repartie, mais son agent n'existe plus dans sa salle : personne ne la prendra.",
+        ROOM_INVALID: "La tâche est repartie, mais la salle de son agent est invalide : corrige son room.json.",
+      } as Record<string, string>,
+      waitingOther: "La tâche est repartie, mais l'agent n'a pas pu être réveillé.",
+      /** The note of a task the owner closed from the Standard (stored on the task). */
+      closedNote: "Close par le propriétaire.",
+      /** Why an entry is stuck, one sentence, written by the server (GET /api/desk). */
+      reasons: {
+        blocked: (note: string) => `Bloquée par l'agent : ${note}`,
+        blockedNoNote: "Bloquée par l'agent, sans dire pourquoi.",
+        runFailed: (runId: number, summary: string) => `Le tour #${runId} a échoué : ${summary}`,
+        runCancelled: (runId: number) => `Le tour #${runId} a été interrompu : MyHQ s'est arrêté pendant le tour.`,
+        busy: (runId: number) => `Agent occupé : son tour #${runId} tourne, et sa fin ne reprendra pas cette tâche.`,
+        cap: (today: number, cap: number) => `Plafond du jour atteint (${today} tours sur ${cap}) : elle repart quand le compteur le permet.`,
+        resource: (resource: string, runId: number, holder: string) =>
+          `Ressource « ${resource} » occupée par le tour #${runId} de ${holder} : elle repart à la fin de ce tour.`,
+        pingPong: (from: string, minutes: number) =>
+          `Fenêtre anti ping-pong : ${from} a déjà réveillé cet agent il y a moins de ${minutes} min.`,
+        stopping: "MyHQ s'arrête : elle repart après le redémarrage.",
+        givenBack: (runId: number) => `Rendue par le tour #${runId}, qui a échoué : aucun réveil ne la reprendra seul.`,
+        interruptedTwice: "Deux tours interrompus de suite : aucun réveil ne la reprendra seul.",
+        noWake: "Aucun réveil ne la reprendra seul : elle attend le prochain tour de l'agent.",
+        notWoken: "Elle aurait dû réveiller l'agent, sans raison connue : le journal du serveur peut le dire.",
+        unknownAgent: "Son agent n'est plus dans les salles du home.",
+      },
     },
     postits: {
       hint: "Ta liste À faire, lue telle quelle.",

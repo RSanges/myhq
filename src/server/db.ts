@@ -510,6 +510,18 @@ CREATE TABLE IF NOT EXISTS approval_files (
 CREATE INDEX IF NOT EXISTS approval_files_approval ON approval_files (approval_id);
 `,
   },
+  {
+    version: 15,
+    sql: `
+-- When the owner last opened the page of a desk object (/bureau/<id>): the
+-- sources that count what is unread (summaries, chat) only count what came
+-- after it. One row per object id of myhq.json's desk block.
+CREATE TABLE IF NOT EXISTS desk_seen (
+  object_id TEXT PRIMARY KEY,
+  seen_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

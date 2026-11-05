@@ -38,6 +38,10 @@ Every error has the same shape and an HTTP status:
 | `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `SETTINGS_FILE_INVALID` | 409 | A save of the settings page that writes `myhq.json` while the file is not valid JSON or not a JSON object. Nothing is written; the file is left for the user to fix. |
+| `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a task id that does not exist. |
+| `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a run id that does not exist. |
+| `NOT_BLOCKED` | 409 | `POST /api/blocked/relaunch` or `/close` on a task that is neither `blocked` nor `pending`, or on a run that is not failed or interrupted, or has no task left blocked or given back. Nothing is changed. |
+| `DESK_OBJECT_NOT_FOUND` | 404 | `POST /api/desk/<id>/seen` with an id that is not an object of the desk. |
 | `SETTINGS_GROUP_NOT_FOUND` | 404 | `PUT /api/settings/<group>` with a group that is not `layout`, `limits`, `notifications` or `rooms`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
@@ -532,9 +536,13 @@ A failing command never fails the route: its object has `status: "error"`.
 ```
 
 - `source`: the core's source (`approvals`, `watch:mail_alert`, `summaries`,
-  `chat`), several joined by `+` (`watch:brief+summaries`), or `command`.
+  `chat`, `blocked`), several joined by `+` (`watch:brief+summaries`), or `command`.
+- `count`: for `summaries` and `chat`, only what came after the object's page
+  was last opened (`POST /api/desk/<id>/seen`); for `blocked`, the number of
+  agents that have something stuck.
 - `items[].ref`: what an item of the core is (`approval`, `run` for a run
-  summary, `chat` for a message), `null` for an item of a command. `color` is
+  summary, `chat` for a message, `blocked` for an entry of the Standard),
+  `null` for an item of a command. `color` is
   the colour of its room, `null` for a neutral room or a command. An approval
   a shared room delivered has `ref.forRoom`, the room that ordered it, and
   takes that room's colour (`ref.room` and `ref.agentId` stay the producing
@@ -550,6 +558,71 @@ A failing command never fails the route: its object has `status: "error"`.
   contract). The command's stderr is in the server's log, never here.
 - `configError`: why the `desk` block was not used (the default desk is then
   returned), `null` otherwise.
+
+An entry of the Standard (source `blocked`, `architecture.md`, "The Standard"):
+
+```json
+{
+  "id": "blocked-run-41",
+  "title": "Scout",
+  "body": "Handle the pending tasks of your mailbox, listed below.
+
+- Sum up this week's announcements.",
+  "at": "2026-11-04T08:00:00.000Z",
+  "end": null,
+  "allDay": false,
+  "href": "/bureau/telephone#blocked-run-41",
+  "tone": "alert",
+  "color": "#ff3d7f",
+  "ref": { "kind": "blocked", "entry": "run", "id": 41, "room": "demo", "agentId": "scout", "state": "failed", "reason": "Le tour #41 a échoué : Budget exceeded.", "tasks": 2 }
+}
+```
+
+`ref.entry` is `task` (a blocked task), `pending` (a pending task nothing
+takes) or `run` (a failed or interrupted run, `ref.id` is the run); `state` is
+`blocked`, `pending`, `failed` or `cancelled`; `tasks` is how many tasks the
+actions act on. `title` is the agent's name, `body` the text of the task (for a run,
+its instruction, then the tasks it gave back as a Markdown list), `at` since
+when it is stuck, `reason` one sentence in
+the language of the interface.
+
+### `POST /api/desk/[id]/seen`
+
+The owner opened the page of a desk object. The `summaries` and `chat` sources
+of that object stop counting what exists now, and count what comes after (the
+other sources are not affected). No body. Idempotent: it moves the mark to now.
+
+Response `200`: `{ "id": "journal", "seenAt": "2026-11-04T09:00:00.000Z" }`.
+
+Errors: `INVALID_INPUT` (not an object id), `DESK_OBJECT_NOT_FOUND` (404).
+
+### `POST /api/blocked/relaunch`
+
+« Relancer » on the Standard. Body: `{ "kind": "task" | "run", "id": 12 }` (a
+`pending` entry is a `task`). The tasks of the target (the task; for a run,
+its instruction left blocked and the tasks it gave back) go back to `pending`,
+then a run of their agent starts at once with reason `relaunch`, taking its
+mailbox, under the agent lock, the shared resources and the daily cap.
+
+Response `200`:
+
+```json
+{ "tasks": [12], "run": { "...Run shape": "..." }, "waiting": null }
+```
+
+When the run cannot start, `run` is `null`, the tasks stay pending, and
+`waiting` says why: `{ "code": "RESOURCE_BUSY", "message": "..." }` (also
+`AGENT_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`, or `ROOM_NOT_FOUND`,
+`AGENT_NOT_FOUND`, `ROOM_INVALID` when the agent is no longer in the home).
+
+Errors: `INVALID_INPUT`, `TASK_NOT_FOUND` or `RUN_NOT_FOUND` (404), `NOT_BLOCKED` (409).
+
+### `POST /api/blocked/close`
+
+« Clore » on the Standard. Same body. The tasks of the target are `done`, with
+the note « Close par le propriétaire. ». Nothing wakes.
+
+Response `200`: `{ "tasks": [12] }`. Errors: as for the relaunch.
 
 ### `GET /api/sprites/[room]/[agent]`
 

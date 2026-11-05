@@ -677,12 +677,56 @@ exists. Consequences:
   unless the run was started by the owner (`POST /api/onboarding` or the chat:
   a run without a `reason`).
 
+### The Standard
+
+The `blocked` source of the desk (`src/server/blocked.ts`, shown by the phone
+of the default desk, « Standard ») lists what is stuck at the agents of every
+room, so that nothing waits in silence:
+
+- **Blocked tasks**: every task `blocked`, with its note (an agent's
+  `hq_task_update`, for example). The instruction of a failed or interrupted
+  run is not listed here but with its run.
+- **Pending tasks nothing takes**: a task `pending` for more than 15 minutes
+  (since it was created) that no wake-up will take on its own. A task newer
+  than the run of its agent in progress is not listed (the end of that run
+  wakes the agent); a task that waits by design is not either (`onMessage`,
+  `onRevise` or `onApproval` set to `"queue"`). The reason is the probable
+  one MyHQ knows, in this order: the agent is busy with a run whose end will
+  not take it, MyHQ is stopping, the daily cap is reached, a shared resource
+  (the GPU) is held by another run, the anti ping-pong window of the pair, a
+  failed run gave it back, two interruptions in a row, or simply no wake-up
+  that takes it (a task older than the agent's last run, a `manual` one).
+- **Failed or interrupted runs** that ended in the last 24 hours and whose
+  tasks were not taken again: the run's own instruction, still blocked, and
+  the mailbox tasks it gave back, still pending (recognized as the pending
+  tasks of the agent without a run that were given back at the instant the run
+  ended). A later run of the agent with the same instruction that ended done
+  (or runs) means the work was taken again: the run is not listed.
+
+Each entry gives its room (and colour), its agent, since when (the block, the
+creation of the pending task, the end of the run), the reason in one sentence
+and the text of the task (for a run, its instruction then the tasks it gave
+back). The count of the object is the number of agents
+stuck, not of entries. Two actions, with a light confirmation on the page:
+
+- **Relancer** (`POST /api/blocked/relaunch`): the tasks of the entry go back
+  to `pending` (without a run) and the agent is woken at once by a run that
+  takes its mailbox, reason `relaunch`, under the usual rules (agent lock,
+  shared resources, daily cap). When the run cannot start, the tasks stay
+  pending, the answer says why (`waiting`), and the entry stays on the
+  Standard with its reason. A relaunched task is older than the agent's runs,
+  so the automatic wake-ups do not take it: the next run of the agent, or
+  another relaunch, does.
+- **Clore** (`POST /api/blocked/close`): the tasks of the entry are `done`
+  with the note « Close par le propriétaire. ». Nothing wakes.
+
 ### Why a run started
 
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
 `/run` or a routine): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
-own `approval`, `message`, `revise`, `chat` and `agent_need`. It is in the Run shape (API, live stream, daily
+own `approval`, `message`, `revise`, `chat`, `agent_need` and `relaunch` (the
+Standard). It is in the Run shape (API, live stream, daily
 export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.
@@ -1602,15 +1646,16 @@ the room (README, "Trying the room without a real run").
 
 The desk (`/bureau`, a click on the user's office of the floor) opens on a scene, the hub: the user's office in isometric
 pixel art, where each object on the desk is a module (a pile of items to sign,
-a mail tray, a newspaper, post-its, a wall calendar, a phone). It stands on
-the model, the data, the API and one page per object.
+a mail tray, a newspaper, post-its, a wall calendar, a phone, the Standard of
+what is stuck). It stands on the model, the data, the API and one page per
+object.
 
 - **The model** (`src/server/desk.ts`): `desk.objects` of `myhq.json` lists the
   objects, each `{ id, object, label, source }` (schema and defaults in
   `home-layout.md`). It is read apart from the rest of the file, so an invalid
   block falls back to the default desk without touching `notifyTypes` or the
   export. A source of the core is read from the database at each request
-  (`approvals`, `watch:<type>`, `summaries`, `chat`); a command of the home
+  (`approvals`, `watch:<type>`, `summaries`, `chat`, `blocked`); a command of the home
   goes through `DeskCommands` (`src/server/desk-command.ts`): the system shell
   in the home, the environment of the home's other commands, a timeout (the
   desk does not wait for a program that keeps the output open after the shell
@@ -1637,10 +1682,22 @@ the model, the data, the API and one page per object.
   on a wide screen; an unseen brief can be marked read there. The calendar
   shows today in large and the next seven days beside it (under it on a phone),
   each with its events and its free slots, read-only. The post-its are notes,
-  numbered as the list numbers them, the late ones marked. The phone is the
-  conversation panel as the page itself. Any other pairing gets a plain list.
-  Each page follows the live stream like the desk does (`useHq`), and reads
-  `GET /api/desk` again on each `desk` message (`useDesk`).
+  numbered as the list numbers them, the late ones marked. An object on
+  `blocked` is the Standard (see "The Standard" in section 1): one card per
+  entry, its room chip and colour, its agent, « depuis 2 h », the reason, the
+  text of the task folded, and « Relancer » and « Clore », each asking a
+  light confirmation in the card before it acts; what the action did (the run
+  started, or why the agent could not be woken) is said above the list. A
+  phone on `chat` is the conversation panel as the page itself. Any other
+  pairing gets a plain list. Each page follows the live stream like the desk
+  does (`useHq`), and reads `GET /api/desk` again on each `desk` message
+  (`useDesk`).
+- **Seen**: opening a page marks its object seen (`POST /api/desk/<id>/seen`,
+  the `desk_seen` table, migration 15), once per opening. The `summaries` and
+  `chat` sources of that object then count only what came after: the count of
+  the newspaper falls back to its unseen briefs when its page is opened, and a
+  summary that arrives later counts again, instead of the whole day until
+  midnight. The other sources keep their own logic (`home-layout.md`, "Seen").
 - **Deep links** keep working: `/bureau#approval-<id>` opens the item on the
   desk (the floor sends an old `/#approval-<id>` there), and the items of a
   module link to `/bureau/<id>#approval-<id>`, which
@@ -1657,7 +1714,7 @@ the model, the data, the API and one page per object.
   bottom (`spines`, a neutral grey for a room without a colour); the tray has
   as many letters as its count (5 at most), the monitor as many post-its; the
   newspaper is there when its count is not zero; the phone lights its lamp
-  when it has something unread, and the wall calendar marks today (the
+  when its count is above zero (for the Standard, an agent stuck), and the wall calendar marks today (the
   browser's day). The tint masks are applied as the build does (colour times
   the grey of the mask), cached per frame and colour. The scene is drawn at
   1x on an offscreen canvas, then on the page at the largest integer scale in
@@ -1676,7 +1733,7 @@ the model, the data, the API and one page per object.
   tooltip, and a click opens it. An object with nothing drawn (no post-it, no
   newspaper) is listed under the scene (« Aussi sur le bureau »). The scene
   follows `useDesk`, so it changes on each `desk` event without a reload; the
-  phone's lamp blinks while it has something unread, unless
+  phone's lamp blinks while its count is above zero, unless
   `prefers-reduced-motion` asks otherwise. On a phone (under 40rem) the scene
   fits the width and a list of the modules follows it (label, count, link);
   should the assets fail to load, that list stands in for the scene.
