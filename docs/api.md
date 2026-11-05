@@ -1227,10 +1227,12 @@ database, and their effects reach the interface through `/api/events`.
 counterpart of the `Approval` objects above (the API is the owner's view, the
 tool the agent's, limited to its reach):
 
-- `hq_items { id }` returns `{ id, type, title, status, room, agent, forRoom,
-  submittedAt, decidedAt, note, remarks: [{ quote, comment, point? }], files:
-  [name] }`. `status` is `pending`, `approved`, `rejected`, `revise`, `unseen`
-  or `seen`. No body.
+- `hq_items { id, maxChars? }` returns `{ id, type, title, status, room, agent,
+  forRoom, submittedAt, decidedAt, note, body, bodyTruncated, remarks: [{ quote,
+  comment, point? }], files: [{ name, path? }] }`. `status` is `pending`,
+  `approved`, `rejected`, `revise`, `unseen` or `seen`. `body` is cut to
+  `maxChars` (default 20000, at most 60000). `path` is the absolute path of the
+  read-only copy of the file, when it is on disk.
 - `hq_items { status?, type? }` returns `{ items: [{ id, type, title, status,
   room, agent, forRoom, submittedAt, decidedAt }], truncated }`: the items
   created or decided in the last 30 days, newest first, at most 50, among the

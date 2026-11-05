@@ -111,7 +111,7 @@ room) and writes directly to SQLite. Ten tools, all validated with zod:
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
 | `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, `forRoom`, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
-| `hq_items(id?, status?, type?)` | Read the state of items at any time (read-only, it marks nothing seen). With `id`: type, title, `status`, `decidedAt` and `note` of the decision, `remarks` (the annotations, with their points), producing `room` and `agent`, `forRoom`, attached file `files` (names). Without `id`: the recent items (30 days, by last activity, newest first, at most 50, `truncated` when more) that the agent may read, filtered by `status` and `type`. See "Reading the state of an item". |
+| `hq_items(id?, status?, type?)` | Read the state of items at any time (read-only, it marks nothing seen). With `id`: the `body` (cut to `maxChars`, 20000 by default and 60000 at most, `bodyTruncated`), type, title, `status`, `decidedAt` and `note` of the decision, `remarks` (the annotations, with their points), producing `room` and `agent`, `forRoom`, and `files` (name and, when the copy is on disk, its `path`). Without `id`: the recent items (30 days, by last activity, newest first, at most 50, `truncated` when more) that the agent may read, filtered by `status` and `type`. See "Reading the state of an item". |
 | `hq_rooms()` | List the shared rooms and their agents (id and name): the studios an agent may order from. Read-only. |
 | `hq_suggest_agent(need)` | For an order nobody in the office can do: the need goes to the receptionist, which proposes a new agent to the user (see "Proposing a missing agent"). At most one per need text in 24 hours. |
 
@@ -167,12 +167,19 @@ it never marks anything seen nor touches `seen_by_agent_at`.
   `approved`, `rejected`, `revise`, `unseen`, `seen`), `room` and `agent` (the
   producer), `forRoom`, `submittedAt`, `decidedAt`, `note` (the decision's
   general note), `remarks` (the annotations: `quote`, `comment` and, for a
-  remark on a file, its `point`) and `files` (the names of the attached files).
-  Never the body.
+  remark on a file, its `point`), `files` (each `{ name, path? }`) and the
+  content: `body`, cut to `maxChars` (default 20000, at most 60000, `maxChars`
+  being only for a read by id) with `bodyTruncated` when it was cut. This is
+  what lets an agent read the text of an approved item it did not write (the
+  script a studio must produce from). `path` is the absolute path of MyHQ's
+  frozen copy, `<home>/data/attachments/<approvalId>/<fileId><ext>`, given only
+  when the file is on disk: read it, never change it (whether the agent's tools
+  may open it is up to its `allowedTools`).
 - **List** (`hq_items {}`, optional `status` and `type`): the items active in
   the last 30 days (created or decided), newest first, at most 50 (`truncated`
   says when there were more). Each entry: the same fields without `note`,
-  `remarks` and `files`. `status` and `type` do not combine with `id`.
+  `remarks`, `files` and the body. `status`, `type` and `maxChars` do not
+  combine with the wrong mode (the filters with `id`, `maxChars` without it).
 - **Who may read what.** An agent reads the items of its room (which includes
   the ones it produced), and those delivered for its room (`for_room`) by a
   shared room. An agent of a shared room also reads the items of the rooms that
@@ -183,7 +190,8 @@ it never marks anything seen nor touches `seen_by_agent_at`.
   out of reach (which says nothing about its status), distinct from « No item
   #N exists ».
 - **Prompts.** Every run prompt ends its tool presentation with: before saying
-  that an item is not approved, or does not exist, check it with `hq_items`.
+  that an item is not approved, or does not exist, check it with `hq_items`,
+  and read the content of an item with `hq_items` and its id.
 
 ### Routines
 

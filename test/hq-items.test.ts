@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { openDb, type Db } from "../src/server/db";
-import { hqItems, ITEMS_LIST_MAX, ToolError, type HqContext } from "../src/mcp/tools";
+import { hqItems, ITEM_BODY_DEFAULT, ITEM_BODY_MAX, ITEMS_LIST_MAX, ToolError, type HqContext } from "../src/mcp/tools";
 
 let dir: string;
 let db: Db;
@@ -123,11 +123,39 @@ test("hq_items by id gives the state, decision, remarks, producer, forRoom and f
     { quote: "first line", comment: "too long" },
     { quote: "clip.png", comment: "crop here", point: { fileId: 1, kind: "image", x: 0.5, y: 0.25 } },
   ]);
-  assert.deepEqual(got.files, ["clip.png"]);
-  assert.ok(!("body" in got));
+  assert.equal(got.body, "a long body");
+  assert.equal(got.bodyTruncated, false);
+  // The copy is not on disk yet: the name alone.
+  assert.deepEqual(got.files, [{ name: "clip.png" }]);
   const approved = hqItems(db, ctx("planygo", "social"), { id: own }) as Record<string, unknown>;
   assert.equal(approved.status, "approved");
   assert.equal(approved.note, "Go");
+});
+
+test("hq_items gives the body, cut to maxChars, and the path of a file copy once it is on disk", () => {
+  const social = ctx("planygo", "social");
+  const cut = hqItems(db, social, { id: revised, maxChars: 6 }) as { body: string; bodyTruncated: boolean };
+  assert.deepEqual([cut.body, cut.bodyTruncated], ["a long", true]);
+  const exact = hqItems(db, social, { id: revised, maxChars: 11 }) as { body: string; bodyTruncated: boolean };
+  assert.deepEqual([exact.body, exact.bodyTruncated], ["a long body", false]);
+  const big = item({ room: "planygo", agent: "social", title: "Big", status: "approved" });
+  db.prepare("UPDATE approvals SET body = ? WHERE id = ?").run("x".repeat(ITEM_BODY_DEFAULT + 5), big);
+  const dflt = hqItems(db, social, { id: big }) as { body: string; bodyTruncated: boolean };
+  assert.equal(dflt.body.length, ITEM_BODY_DEFAULT);
+  assert.equal(dflt.bodyTruncated, true);
+  assert.throws(() => hqItems(db, social, { id: big, maxChars: ITEM_BODY_MAX + 1 }));
+  assert.throws(() => hqItems(db, social, { maxChars: 10 }), /give its id/);
+  // The frozen copy sits at attachments/<approvalId>/<fileId><ext> next to the database.
+  const fileId = (db.prepare("SELECT id FROM approval_files WHERE approval_id = ?").get(revised) as { id: number }).id;
+  const copy = path.join(dir, "attachments", String(revised), `${fileId}.png`);
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  fs.writeFileSync(copy, "png");
+  const got = hqItems(db, social, { id: revised }) as { files: { name: string; path?: string }[] };
+  assert.deepEqual(got.files, [{ name: "clip.png", path: copy }]);
+  assert.equal(fs.readFileSync(got.files[0]!.path!, "utf8"), "png");
+  // No body in the list.
+  assert.ok(list(social).items.every((entry) => !("body" in entry)));
+  db.prepare("DELETE FROM approvals WHERE id = ?").run(big);
 });
 
 test("hq_items can be read again and again: it marks nothing seen", () => {

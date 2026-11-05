@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { Env } from "../server/config";
@@ -6,6 +7,7 @@ import {
   AttachmentError,
   attachmentInputSchema,
   attachmentMaxBytes,
+  attachmentPath,
   MAX_ATTACHMENTS,
   resolveAttachment,
   storeAttachments,
@@ -65,6 +67,10 @@ export function readContext(env: Env): HqContext {
     attachmentMaxBytes: attachmentMaxBytes({ HQ_ATTACHMENT_MAX_MB: parsed.data.HQ_ATTACHMENT_MAX_MB }),
   };
 }
+
+/** hq_items: the body of an item is cut to `maxChars` characters, 20000 unless asked, 60000 at most. */
+export const ITEM_BODY_DEFAULT = 20_000;
+export const ITEM_BODY_MAX = 60_000;
 
 /** Input shapes of the ten tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
@@ -132,6 +138,13 @@ export const inputs = {
       .optional()
       .describe("List only: keep the items in this status (pending, approved, rejected, revise, unseen, seen)."),
     type: z.string().min(1).max(63).optional().describe("List only: keep the items of this type."),
+    maxChars: z
+      .number()
+      .int()
+      .min(1)
+      .max(ITEM_BODY_MAX)
+      .optional()
+      .describe(`With id only: the most characters of the body to give (default ${ITEM_BODY_DEFAULT}, at most ${ITEM_BODY_MAX}); bodyTruncated tells when it was cut.`),
   },
   hq_rooms: {},
   hq_suggest_agent: {
@@ -559,13 +572,16 @@ const marks = (values: readonly unknown[]) => values.map(() => "?").join(", ");
 /**
  * Reads the state of items, never marks anything seen (unlike
  * hq_read_decisions, which gives a decision once). With `id`: the item, its
- * decision and remarks. Without: the recent items (30 days, newest first, at
+ * body (cut to `maxChars`), decision and remarks. Without: the recent items (30 days, newest first, at
  * most ITEMS_LIST_MAX) of the rooms the agent may read, optionally filtered by
  * status and type. An item outside those rooms is refused, with an error that
  * says it is out of reach, not that it does not exist.
  */
 export function hqItems(db: Db, ctx: HqContext, args: Args<"hq_items">) {
   const parsed = z.object(inputs.hq_items).parse(args);
+  if (parsed.id === undefined && parsed.maxChars !== undefined) {
+    throw new ToolError("hq_items: maxChars applies to the body of one item; give its id.");
+  }
   const rooms = readableRooms(db, ctx);
   const scope = `(room IN (${marks(rooms)}) OR for_room IN (${marks(rooms)}))`;
   if (parsed.id !== undefined) {
@@ -579,7 +595,11 @@ export function hqItems(db: Db, ctx: HqContext, args: Args<"hq_items">) {
         `Item #${parsed.id} is outside what you may read: only the items of your room, those you produced, those delivered for your room and, for a shared room, those of the rooms that ordered from it. This does not tell you whether it is approved.`,
       );
     }
-    const files = db.prepare("SELECT name FROM approval_files WHERE approval_id = ? ORDER BY id").all(row.id) as { name: string }[];
+    const files = db
+      .prepare("SELECT id, name FROM approval_files WHERE approval_id = ? ORDER BY id")
+      .all(row.id) as { id: number; name: string }[];
+    const dataDir = path.dirname(path.resolve(ctx.dbPath));
+    const limit = parsed.maxChars ?? ITEM_BODY_DEFAULT;
     return {
       id: row.id,
       type: row.type,
@@ -591,12 +611,18 @@ export function hqItems(db: Db, ctx: HqContext, args: Args<"hq_items">) {
       submittedAt: row.created_at,
       decidedAt: row.decided_at,
       note: row.decision_note,
+      body: row.body.slice(0, limit),
+      bodyTruncated: row.body.length > limit,
       remarks: parseAnnotations(row.annotations).map((a) => ({
         quote: a.quote,
         comment: a.comment,
         ...(a.point ? { point: a.point } : {}),
       })),
-      files: files.map((file) => file.name),
+      // `path` is MyHQ's frozen copy of the file (read it, never change it), given when it is on disk.
+      files: files.map((file) => {
+        const copy = attachmentPath(dataDir, row.id, file.id, file.name);
+        return fs.existsSync(copy) ? { name: file.name, path: copy } : { name: file.name };
+      }),
     };
   }
   const since = new Date(Date.now() - ITEMS_WINDOW_MS).toISOString();
