@@ -242,6 +242,16 @@ test("the run prompt tells a room about the shared rooms, and a shared room how 
   assert.match(toDemo, /Read the content of an item .* with hq_items and its id/);
 });
 
+test("the run prompt asks for the final report in the language of the home", () => {
+  const { config } = setup();
+  const demo = loadHome(config.home).rooms.find((room) => room.name === "demo")!;
+  const params = { room: demo, agent: demo.agents[0]!, runId: 1, task: "T", mailbox: [] };
+  assert.match(buildPrompt({ ...params, language: "fr" }), /Write your final report, the last message of your run, in French,/);
+  assert.match(buildPrompt({ ...params, language: "fr" }), /Language of this home: French./);
+  assert.match(buildPrompt(params), /in English,/, "English when the home has no language");
+  assert.match(buildPrompt({ ...params, language: "xx-not-a-tag" }), /in xx-not-a-tag,/, "an unknown tag is kept as it is");
+});
+
 test("hq_submit forRoom: a shared room delivers to the room that ordered; refused for a room that is not shared or unknown", () => {
   const { config, db } = setup();
   const video = ctxOf(db, config, "studio", "video");

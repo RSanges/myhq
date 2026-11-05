@@ -91,17 +91,24 @@ test("a stop waits for the runs in progress, interrupts the ones still going aft
 
 test("the shutdown message of pm2 stops the runs, then exits; a second one exits at once", async () => {
   (globalThis as unknown as { __myhqRunner: { stopping: boolean } }).__myhqRunner.stopping = false;
-  const codes: number[] = [];
+  const codes: (number | string)[] = [];
   let exited!: () => void;
   const first = new Promise<void>((resolve) => (exited = resolve));
-  installShutdown({ ...home(), shutdownGraceMs: 50 }, (code) => {
-    codes.push(code);
-    exited();
-  });
+  installShutdown(
+    { ...home(), shutdownGraceMs: 50 },
+    (code) => {
+      codes.push(code);
+      exited();
+    },
+    async () => {
+      codes.push("servers closed");
+    },
+  );
   process.emit("message", "shutdown", undefined);
   assert.equal(isStopping(), true);
   process.emit("message", "shutdown", undefined);
   await first;
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.deepEqual(codes, [1, 0]);
+  // The servers are closed after the runs and before the exit.
+  assert.deepEqual(codes, [1, "servers closed", 0]);
 });

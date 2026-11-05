@@ -12,7 +12,8 @@
     "build:mcp": "tsx scripts/build-mcp.ts",
     "mcp": "tsx src/mcp/server.ts",
     "init": "tsx scripts/init.ts",
-    "wait-idle": "tsx scripts/wait-idle.ts"
+    "wait-idle": "tsx scripts/wait-idle.ts",
+    "deploy": "tsx scripts/deploy.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

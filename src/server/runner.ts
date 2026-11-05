@@ -9,9 +9,10 @@ import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
+import { exitProcess } from "./exit";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
-import { wakeOnboarding } from "./onboarding";
+import { languageName, wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { startRelaunchRequests } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
@@ -111,6 +112,10 @@ function runnerState(): RunnerState {
   };
   return globalForRunner.__myhqRunner;
 }
+
+/** How long the servers get to close at a stop, and how long a stuck stop may last after the grace. */
+const CLEANUP_MS = 4_000;
+const FORCE_EXIT_MS = 15_000;
 
 /** The summary of a run interrupted because MyHQ stopped during it (status `cancelled`). */
 export const INTERRUPTED_SUMMARY = "Interrupted: MyHQ stopped during the run.";
@@ -214,12 +219,19 @@ export async function stopRuns(graceMs: number, pollMs = 250): Promise<{ ended: 
  * Makes a stop of the app wait for the runs in progress: on SIGINT, SIGTERM
  * or the `shutdown` message of pm2 (`shutdown_with_message`, the only way to
  * stop a process gently on Windows), no run starts any more, the runs in
- * progress get `config.shutdownGraceMs` to end, then the process exits. A
+ * progress get `config.shutdownGraceMs` to end, then `cleanup` runs (the HTTP
+ * servers are closed, at most `CLEANUP_MS`) and the process exits, whatever
+ * happens: a stop that gets stuck is cut `FORCE_EXIT_MS` after the grace. A
  * second signal exits at once. Next.js stops the server on its own on these
- * signals unless NEXT_MANUAL_SIG_HANDLE is set (ecosystem.config.cjs sets it).
- * Installed once per process, by the server only.
+ * signals unless NEXT_MANUAL_SIG_HANDLE is set (ecosystem.config.cjs sets it),
+ * so closing the server and exiting is up to MyHQ. Installed once per
+ * process, by the server only.
  */
-export function installShutdown(config: HqConfig, exit: (code: number) => void = (code) => process.exit(code)): void {
+export function installShutdown(
+  config: HqConfig,
+  exit: (code: number) => void = exitProcess,
+  cleanup: () => Promise<unknown> = async () => undefined,
+): void {
   const state = runnerState();
   if (state.shutdownHook) return;
   state.shutdownHook = true;
@@ -231,9 +243,20 @@ export function installShutdown(config: HqConfig, exit: (code: number) => void =
     }
     const seconds = Math.round(config.shutdownGraceMs / 1000);
     console.log(`[runner] ${why}: no new run, waiting up to ${seconds} s for ${state.active.size} run(s) in progress`);
+    // Last resort: whatever blocks the steps below, the process does not outlive this.
+    setTimeout(() => {
+      console.warn("[runner] the stop is stuck: exiting now");
+      exit(1);
+    }, config.shutdownGraceMs + FORCE_EXIT_MS).unref();
     void stopRuns(config.shutdownGraceMs)
       .then(({ ended, interrupted }) => console.log(`[runner] stopping: ${ended} run(s) ended, ${interrupted} interrupted`))
       .catch((error: unknown) => console.error("[runner] stopping the runs failed", error))
+      .then(() =>
+        Promise.race([
+          cleanup().catch((error: unknown) => console.error("[runner] closing the servers failed", error)),
+          new Promise((resolve) => setTimeout(resolve, CLEANUP_MS).unref()),
+        ]),
+      )
       .finally(() => exit(0));
   };
   process.on("SIGINT", () => stop("SIGINT"));
@@ -271,11 +294,15 @@ export function buildPrompt(params: {
   mailbox: TaskRow[];
   /** The other shared rooms of the home, which this agent may order from. */
   sharedRooms?: readonly string[];
+  /** The language of the home (`language` in myhq.json): the one of the final report. */
+  language?: string;
 }) {
+  const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_task_update for your task, hq_submit for anything to approve. Never publish anything yourself.",
     "A decision comes to you once (hq_read_decisions). Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
+    `Language of this home: ${language}. Write your final report, the last message of your run, in ${language}, whatever the language of the task, of your role or of the files you worked on. Tool names, ids and code stay as they are.`,
   ];
   if (params.room.shared) {
     lines.push(
@@ -343,7 +370,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     agent,
     task,
     reason: request.reason ?? null,
-    prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox, sharedRooms }),
+    prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox, sharedRooms, language: promptLanguage(config.home) }),
   });
 }
 

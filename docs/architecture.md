@@ -194,7 +194,9 @@ it never marks anything seen nor touches `seen_by_agent_at`.
   #N exists ».
 - **Prompts.** Every run prompt ends its tool presentation with: before saying
   that an item is not approved, or does not exist, check it with `hq_items`,
-  and read the content of an item with `hq_items` and its id.
+  and read the content of an item with `hq_items` and its id. It also asks for
+  the final report in the language of the home (`language` in `myhq.json`,
+  English by default), whatever the language of the task or of the role.
 
 ### Routines
 
@@ -642,10 +644,24 @@ routine journals an error), the runs in progress get
 `HQ_SHUTDOWN_GRACE_SECONDS` (90 s by default) to end, then the ones still
 going are interrupted: `cancelled`, summary « Interrupted: MyHQ stopped during
 the run. », no failure alert, their mailbox tasks back to `pending` and their
-own instruction `blocked`, as for a failed run. Then the process exits. A
-second signal exits at once. Next.js would stop the server on its own on these
-signals: `NEXT_MANUAL_SIG_HANDLE=true` (in `ecosystem.config.cjs`) leaves them
-to MyHQ, and pm2's `kill_timeout` (100 s) must stay above the grace.
+own instruction `blocked`, as for a failed run. Then `installShutdown` runs its
+cleanup (`src/instrumentation.ts`): the HTTP servers of the process are closed
+(`closeServers`, `src/server/exit.ts`: the port is freed and the event streams are
+cut) and the Telegram long poll is aborted, so that the next instance does not
+meet a 409. Then the process exits. A second signal exits at once. Next.js would
+stop the server on its own on these signals: `NEXT_MANUAL_SIG_HANDLE=true` (in
+`ecosystem.config.cjs`) leaves them to MyHQ, which therefore has to close the
+server and exit itself. pm2's `kill_timeout` (100 s) must stay above the grace.
+
+The exit is `exitProcess` (`src/server/exit.ts`), not `process.exit`: Node waits
+for the threads of its pool before it really exits, so one call blocked there (a
+name lookup while the network is down, a stalled disk) leaves a process that
+"exited" alive, holding port 4242, until pm2 kills it `kill_timeout` later, or for
+ever once pm2 has lost track of it. `exitProcess` runs the `exit` listeners (lock
+release, run recovery) and kills the process outright, which waits for nothing.
+A timer cuts a stop that got stuck anywhere else, 15 s after the grace. `npm run
+deploy` checks after each restart that the port is held by the process pm2
+follows (`README.md`, "Running as a service").
 
 A process killed outright leaves its runs `running` and their tasks
 `in_progress`. At startup, `app()` first takes the home for its process

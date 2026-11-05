@@ -46,7 +46,7 @@ export function suggestRoomName(folder: string): string {
 }
 
 /** The English name of a BCP 47 tag ("fr" gives "French"), or the tag itself when unknown. */
-function languageName(tag: string): string {
+export function languageName(tag: string): string {
   try {
     return new Intl.DisplayNames(["en"], { type: "language" }).of(tag) ?? tag;
   } catch {

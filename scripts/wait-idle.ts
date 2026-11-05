@@ -59,7 +59,7 @@ export async function waitIdle(options: WaitIdleOptions): Promise<boolean> {
 }
 
 /** HQ_PORT from the environment or `.env.local` (as ecosystem.config.cjs reads it), 4242 otherwise. */
-function port(root: string): string {
+export function port(root: string): string {
   let value = process.env.HQ_PORT;
   try {
     const line = fs
@@ -73,7 +73,7 @@ function port(root: string): string {
   return /^\d{2,5}$/.test(value ?? "") ? value! : "4242";
 }
 
-function option(args: string[], name: string): string | undefined {
+export function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 }

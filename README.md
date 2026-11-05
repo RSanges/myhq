@@ -162,16 +162,35 @@ From then on, closing the terminal does not stop the app. Useful commands:
 
 ```sh
 npm install
-npm run wait-idle            # waits until no run is in progress (GET /api/runs/active)
-npm run build
-pm2 restart myhq
+npm run deploy
 ```
+
+`npm run deploy` ([scripts/deploy.ts](scripts/deploy.ts), Node, same on Windows,
+macOS and Linux) chains the steps below and fails loudly if one does not hold:
+
+1. `npm run build` (`--skip-build` to reuse the last one);
+2. waits until no run is in progress, as `npm run wait-idle` does
+   (`--timeout <seconds>`, 1800 by default; the restart then waits for the runs
+   still going, see below);
+3. `pm2 restart myhq` (`pm2 start ecosystem.config.cjs` when pm2 does not know
+   the app yet);
+4. checks that the process that listens on the port is the one pm2 follows. A
+   process that holds the port without being followed is an orphan of an earlier
+   stop that never ended: if its command line is the `next start` of this very
+   repository it is stopped and the app is started again; any other process on
+   the port is left alone and the deployment fails;
+5. prints the pid, the state in pm2 and the HTTP answer of the app.
+
+Options: `--app` (name in pm2), `--port` (`HQ_PORT` from the environment or
+`.env.local`, 4242 otherwise), `--ecosystem` (file). The manual way is still
+`npm run wait-idle`, `npm run build`, `pm2 restart myhq`.
 
 A restart never cuts a run on purpose: pm2 sends a `shutdown` message
 (`shutdown_with_message` in `ecosystem.config.cjs`), MyHQ starts no new run,
 waits up to `HQ_SHUTDOWN_GRACE_SECONDS` (90 s) for the runs in progress, then
 interrupts the ones still going, whose tasks wake their agents again after the
-restart. pm2's `kill_timeout` (100 s) must stay above that grace. pm2 reads
+restart. Then MyHQ closes its HTTP server and exits within a few seconds, whatever is
+still pending (a stop that gets stuck is cut 15 s after the grace). pm2's `kill_timeout` (100 s) must stay above that grace. pm2 reads
 these settings when the app is started from the file: after a change of
 `ecosystem.config.cjs`, run `pm2 delete myhq`, `pm2 start ecosystem.config.cjs`
 and `pm2 save` once (in a quiet moment, `npm run wait-idle` first). Check with

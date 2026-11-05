@@ -708,6 +708,27 @@ export const strings = {
       "Délai dépassé, des tours sont encore en cours : le redémarrage les attendra (HQ_SHUTDOWN_GRACE_SECONDS) puis les interrompra.",
     unreachable: (url: string) => `MyHQ ne répond pas sur ${url} : aucun tour n'y tourne.`,
   },
+  /** `npm run deploy` (scripts/deploy.ts), in the terminal, to put the new code in service. */
+  deploy: {
+    usage:
+      "Usage : npm run deploy -- [--skip-build] [--timeout <secondes>] [--app myhq] [--port 4242] [--ecosystem ecosystem.config.cjs]",
+    step: (n: number, total: number, label: string) => `[${n}/${total}] ${label}`,
+    building: "Construction (npm run build)",
+    buildFailed: "La construction a échoué : rien n'est redémarré.",
+    waiting: "Attente qu'aucun tour ne tourne",
+    restarting: (app: string, exists: boolean) =>
+      exists ? `Redémarrage de ${app} par pm2` : `${app} n'est pas dans pm2 : démarrage depuis le fichier d'écosystème`,
+    pm2Failed: (detail: string) => `pm2 a échoué : ${detail}`,
+    verifying: (port: number) => `Vérification du processus qui écoute sur le port ${port}`,
+    orphan: (pid: number, command: string) => `Processus orphelin de MyHQ sur le port (pid ${pid}) : ${command}`,
+    orphanKilled: (pid: number) => `Orphelin arrêté (pid ${pid}), relance de l'application`,
+    foreign: (pid: number, command: string) =>
+      `Le port est tenu par le pid ${pid}, qui n'est pas le « next start » de ce dépôt : je n'y touche pas. Ligne de commande : ${command || "inconnue"}`,
+    noHolder: (port: number) => `Personne n'écoute sur le port ${port} : voir pm2 logs.`,
+    cannotFindHolder: "Impossible de trouver le processus qui écoute sur le port (netstat, ss ou lsof manquent).",
+    done: (pid: number, status: string, http: string) => `Déployé. pid ${pid}, état ${status}, réponse HTTP ${http}`,
+    noAnswer: "aucune réponse",
+  },
   errors: {
     generic: "Une erreur est survenue.",
     network: "Le serveur est injoignable.",
