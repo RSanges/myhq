@@ -418,6 +418,32 @@ his phone, not a description of it.
   (« clip-01.mp4 à 0:12 »). The remark joins the others (no `position`, so it
   comes after the remarks on the text) and a revision sends it to the agent
   in the numbered list, as any remark.
+- **A remark on a point of an image or of a video's frame**: « Annoter un
+  point » under an image (and in its enlarged view), then a click or a tap on
+  the image, pins the point and opens the remark box with the quote
+  « cover.png, point à 62 % de la largeur et 18 % de la hauteur ». The point is
+  stored as shares of the image's own width and height from its left and top
+  edges (`{ fileId, kind: "image", x, y }`, kept to the thousandth): the click
+  is measured against the box where the picture is drawn, so the same spot
+  gives the same point in the preview, on a phone and in the enlarged view.
+  The same button under a video pauses it and takes the next click on the
+  paused frame (the player's controls are under a transparent layer until
+  then): the point carries the time (`{ fileId, kind: "video", x, y, t }`, `t`
+  in seconds, to the millisecond) and the quote says both (« clip-01.mp4 à
+  0:12, point à 40 % ; 70 % »). A video is drawn whole in its player
+  (`object-fit: contain`), so the bands beside or above the frame are left out
+  of the measure and a click on them pins nothing (`containBox` and
+  `pointInPicture` in `src/ui/attachments-model.ts`). « Annoter à cet instant »
+  stays for a remark on the moment with no point. The pins of the remarks are
+  drawn over the picture, numbered as in « Remarques (n) », in the preview and
+  in the enlarged view; on a video a pin shows while the playback is within
+  half a second of its time (the player reports its time about four times a
+  second), or when its remark is open. A click on a pin opens its remark (and
+  brings the video back to its time, paused); in the list of remarks, « Voir
+  le point » does the same for any remark on a point (an image, a video, a 3D
+  part): its file comes into view and its remark opens. The revision task
+  gives the agent the point under the remark, in percent from the left and top
+  edges, with the time for a video (see `api.md`).
 - **The 3D viewer** (`src/ui/model-viewer.tsx`, `src/ui/model-load.ts`) draws a
   3MF, an STL or a GLB with three.js, the second runtime dependency of the UI
   after PixiJS, pinned to an exact version. `attachments.tsx` loads it with
@@ -444,10 +470,13 @@ his phone, not a description of it.
   towards the camera. The remark box opens with the quote « piece.3mf, point
   (12,4 ; -3,0 ; 8,5) mm, face +Z » (coordinates to the tenth of a millimetre;
   « face ±X/Y/Z » within 5 degrees of an axis, else « normale (0,71 ; 0,00 ;
-  0,71) »). The remark is stored with its `point` (`{ fileId, x, y, z,
-  normal }`, see `api.md`) in the same `approvals.annotations` JSON column:
-  the field is optional, so no migration was needed and the remarks stored
-  before read as they did. It comes after the remarks on the text, and the
+  0,71) »). The remark is stored with its `point` (`{ fileId, kind: "model",
+  x, y, z, normal }`, see `api.md`) in the same `approvals.annotations` JSON
+  column: the field is optional, so no migration was needed and the remarks
+  stored before read as they did. `kind` came with the points on images and
+  videos; a 3D point stored before has none and still reads as a 3D point (the
+  zod schema is a union of the three kinds, the 3D one with an optional
+  `kind`). It comes after the remarks on the text, and the
   revision task gives the agent its exact point under it (see `api.md`). The
   pins of the remarks on that file are drawn over the part, numbered as in
   « Remarques (n) », dimmed when the part hides them; a click on a pin opens

@@ -268,6 +268,11 @@ export const strings = {
     /** Under a remark on a 3D part, for the agent: the point in the part's frame and the normal of the face hit. */
     pointLine: (x: string, y: string, z: string, normal: string) =>
       `Point dans le repère de la pièce (mm) : x=${x} y=${y} z=${z} ; normale sortante de la face : (${normal})`,
+    /** Under a remark on a point of an image, for the agent: from the left and top edges, in percent of the image. */
+    imagePointLine: (x: string, y: string) => `Point sur l'image : ${x} % depuis la gauche, ${y} % depuis le haut`,
+    /** Under a remark on a point of a video, for the agent: the time (as shown, then in seconds) and the point of the frame. */
+    videoPointLine: (time: string, seconds: string, x: string, y: string) =>
+      `Point sur l'image de la vidéo à ${time} (${seconds} s) : ${x} % depuis la gauche, ${y} % depuis le haut`,
     annotate: "Annoter",
     listTitle: (count: number) => `Remarques (${count})`,
     listHint: "Sélectionnez un passage du texte pour l'annoter.",
@@ -278,6 +283,8 @@ export const strings = {
     close: "Fermer",
     edit: "Modifier",
     jump: "Aller au passage",
+    /** In the list of remarks, for a remark on a point of a file: shows the file, the remark, and the moment of a video. */
+    jumpPoint: "Voir le point",
     quoteLabel: "Passage cité",
     attached: (count: number) => (count === 1 ? "1 remarque jointe" : `${count} remarques jointes`),
     markTitle: (comment: string) => `Remarque : ${comment}`,
@@ -1122,6 +1129,10 @@ export const strings = {
     annotateAtLabel: (name: string, time: string) => `Annoter ${name} à ${time}`,
     /** The quote of a remark on a point of a 3D part: « piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z ». */
     atPoint: (name: string, coordinates: string, face: string) => `${name}, point (${coordinates}) mm, ${face}`,
+    /** The quote of a remark on a point of an image: « cover.png, point à 62 % de la largeur et 18 % de la hauteur ». */
+    atImagePoint: (name: string, x: string, y: string) => `${name}, point à ${x} % de la largeur et ${y} % de la hauteur`,
+    /** The quote of a remark on a point of a video's frame: « clip-01.mp4 à 0:12, point à 40 % ; 70 % ». */
+    atVideoPoint: (name: string, time: string, x: string, y: string) => `${name} à ${time}, point à ${x} % ; ${y} %`,
     face: (axis: string) => `face ${axis}`,
     tiltedFace: (normal: string) => `normale (${normal})`,
     dimensions: (sizes: string) => `${sizes} mm`,
@@ -1134,6 +1145,8 @@ export const strings = {
     resetView: "Vue initiale",
     annotatePoint: "Annoter un point",
     pickHint: "Cliquez ou touchez la pièce à l'endroit à annoter.",
+    pickImageHint: "Cliquez ou touchez l'image à l'endroit à annoter.",
+    pickVideoHint: "Vidéo en pause : cliquez ou touchez l'image à l'endroit à annoter.",
     cancelPick: "Annuler",
     pin: (number: number, comment: string) => `Remarque ${number} : ${comment}`,
     newPin: "Nouvelle remarque",

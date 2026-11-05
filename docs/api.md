@@ -168,8 +168,9 @@ general comment. `annotations` are the remarks on passages of the body that came
 with a `revise` or `rejected` decision, in document order, each
 `{ "quote": "...", "comment": "...", "position": 552 }` (`position` is optional:
 the offset of the quote in the rendered text of the body, which tells apart two
-passages that read the same); a remark on a point of a 3D part has a `point`
-instead (see `PATCH /api/approvals/[id]`); empty for every other item. They are part of the
+passages that read the same); a remark on a point of a joined file (a 3D
+part, an image, a video's frame) has a `point` instead (see `PATCH
+/api/approvals/[id]`); empty for every other item. They are part of the
 history in `GET /api/state`.
 
 `decisionHistory` lists the decisions the item had before its last one, oldest
@@ -652,22 +653,43 @@ triggered: check `actionDone` before asking for one.
 `annotations` (optional, at most 30) attach remarks to passages of the body:
 each has a `quote` (1 to 2000 characters, the passage as rendered), a `comment`
 (1 to 2000 characters) and an optional `position` (integer, 0 or more). A
-remark on a point of a 3D part joined to the item has, instead of a
-`position`, a `point`:
+remark on a point of a file joined to the item (a 3D part, an image, a video's
+frame) has, instead of a `position`, a `point`, whose `kind` says which:
 
 ```json
 {
   "quote": "piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z",
   "comment": "Paroi trop fine ici.",
-  "point": { "fileId": 4, "x": 12.4, "y": -3, "z": 8.5, "normal": [0, 0, 1] }
+  "point": { "fileId": 4, "kind": "model", "x": 12.4, "y": -3, "z": 8.5, "normal": [0, 0, 1] }
+}
+{
+  "quote": "cover.png, point à 62 % de la largeur et 18 % de la hauteur",
+  "comment": "Logo trop près du bord.",
+  "point": { "fileId": 5, "kind": "image", "x": 0.62, "y": 0.18 }
+}
+{
+  "quote": "clip-01.mp4 à 0:12, point à 40 % ; 70 %",
+  "comment": "Le texte passe sous le visage.",
+  "point": { "fileId": 6, "kind": "video", "x": 0.4, "y": 0.7, "t": 12.4 }
 }
 ```
 
-`fileId` is the id of the file in `files` (a positive integer); `x`, `y`, `z`
-the point in millimetres in the part's own frame (Z up; the desk rounds them to
-the tenth; each between -1000000 and 1000000); `normal` the outward unit normal
-of the face hit (three numbers between -1 and 1, rounded to the hundredth by
-the desk). Any other key is `INVALID_INPUT`. They go
+`fileId` is the id of the file in `files` (a positive integer).
+
+- `kind: "model"`, a 3D part: `x`, `y`, `z` the point in millimetres in the
+  part's own frame (Z up; the desk rounds them to the tenth; each between
+  -1000000 and 1000000); `normal` the outward unit normal of the face hit
+  (three numbers between -1 and 1, rounded to the hundredth by the desk).
+  `kind` may be left out: the 3D points stored before images and videos had
+  theirs have none, and read as they did.
+- `kind: "image"`, an image: `x` from the left edge and `y` from the top edge,
+  as shares of the image's own width and height (0 to 1, the desk keeps the
+  thousandth), so the same spot gives the same point at any size it was shown.
+- `kind: "video"`, a video's frame: `x` and `y` as on an image, and `t` the
+  time in seconds (0 or more, the desk keeps the millisecond).
+
+Any other key, or a key of another kind (a `t` on an image, an image point
+without `y`), is `INVALID_INPUT`. They go
 with `revise` and `rejected` only (`approved` with annotations is
 `INVALID_INPUT`). A `revise` with at least one annotation needs no `note`; a
 `rejected` always needs its reason. They are stored with the decision, and the
@@ -682,12 +704,19 @@ note:
 Remarque générale : <note>
 ```
 
-A remark with a `point` is followed by a line with the exact point, numbers
-with a dot (one decimal for the coordinates, two for the normal):
+A remark with a `point` is followed by a line with the exact point. On a 3D
+part, numbers with a dot (one decimal for the coordinates, two for the
+normal); on an image, whole percentages from the left and top edges; on a
+video, the same with the time, as shown and in seconds (two decimals, to
+extract the frame):
 
 ```
 2. À propos de « piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z » : Paroi trop fine ici.
    Point dans le repère de la pièce (mm) : x=12.4 y=-3.0 z=8.5 ; normale sortante de la face : (0.00, 0.00, 1.00)
+3. À propos de « cover.png, point à 62 % de la largeur et 18 % de la hauteur » : Logo trop près du bord.
+   Point sur l'image : 62 % depuis la gauche, 18 % depuis le haut
+4. À propos de « clip-01.mp4 à 0:12, point à 40 % ; 70 % » : Le texte passe sous le visage.
+   Point sur l'image de la vidéo à 0:12 (12.40 s) : 40 % depuis la gauche, 70 % depuis le haut
 ```
 
 Without annotations the text is the note alone, as before. The desk's controls

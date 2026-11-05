@@ -92,16 +92,20 @@ export function CommentBox({
 /**
  * The body of an item, with the remarks on its passages. Selecting text offers
  * « Annoter »; the remarks are listed beside (or under) the body and their
- * passages are highlighted. Without `onChange` the remarks are read-only.
+ * passages are highlighted. Without `onChange` the remarks are read-only. A
+ * remark on a point of a joined file (`point`) offers « Voir le point », which
+ * `onPoint` shows on its file.
  */
 export function AnnotatedBody({
   source,
   annotations,
   onChange,
+  onPoint,
 }: {
   source: string;
   annotations: readonly Annotation[];
   onChange?: (next: Annotation[]) => void;
+  onPoint?: (index: number) => void;
 }) {
   const readOnly = onChange === undefined;
   const text = useMemo(() => plainText(parseMarkdown(source)), [source]);
@@ -289,9 +293,15 @@ export function AnnotatedBody({
                   </p>
                   <p className="whitespace-pre-wrap break-words">{annotation.comment}</p>
                   <div className="flex flex-wrap gap-x-3 text-xs">
-                    <button type="button" className={linkButton} onClick={() => jump(index)} disabled={!spans[index]}>
-                      {strings.annotations.jump}
-                    </button>
+                    {annotation.point && onPoint ? (
+                      <button type="button" className={linkButton} onClick={() => onPoint(index)}>
+                        {strings.annotations.jumpPoint}
+                      </button>
+                    ) : (
+                      <button type="button" className={linkButton} onClick={() => jump(index)} disabled={!spans[index]}>
+                        {strings.annotations.jump}
+                      </button>
+                    )}
                     {!readOnly && (
                       <button type="button" className={linkButton} onClick={() => setEditing({ kind: "edit", index })}>
                         {strings.annotations.edit}

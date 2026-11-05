@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { AnnotatedBody } from "./annotated-body";
 import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
-import { Attachments } from "./attachments";
+import { Attachments, type PointFocus } from "./attachments";
 import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
 import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
@@ -162,7 +162,8 @@ function DeskItem({
 /**
  * The files joined to the item, then the body, with its remarks: editable while
  * the item is pending (`onAnnotations`), read-only after. A remark made on a
- * video or a sound at a given time joins the remarks of the body.
+ * video or a sound at a given time, or on a point of a file, joins the remarks
+ * of the body; « Voir le point » in their list shows that point on its file.
  */
 function ApprovalContent({
   approval,
@@ -175,15 +176,21 @@ function ApprovalContent({
   annotations: readonly Annotation[];
   onAnnotations?: (next: Annotation[]) => void;
 }) {
+  const [focus, setFocus] = useState<PointFocus | null>(null);
+  const showPoint = (index: number) => {
+    const point = annotations[index]?.point;
+    if (!point) return;
+    setFocus((current) => ({ index, fileId: point.fileId, t: point.kind === "video" ? point.t : null, seq: (current?.seq ?? 0) + 1 }));
+  };
   return (
     <>
       {approval.files && approval.files.length > 0 && (
-        <Attachments files={approval.files} annotations={annotations} onAnnotations={onAnnotations} />
+        <Attachments files={approval.files} annotations={annotations} onAnnotations={onAnnotations} focus={focus} />
       )}
       {approval.body.trim() === "" ? (
         <p className="text-sm text-muted">{strings.desk.emptyBody}</p>
       ) : (
-        <AnnotatedBody source={approval.body} annotations={annotations} onChange={onAnnotations} />
+        <AnnotatedBody source={approval.body} annotations={annotations} onChange={onAnnotations} onPoint={showPoint} />
       )}
       {showControls && <HandoverControls approval={approval} prominent={false} />}
     </>

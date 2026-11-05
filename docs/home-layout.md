@@ -412,7 +412,11 @@ Accepted: mp4, webm, mov, png, jpg, jpeg, webp, gif, wav, mp3, ogg, flac, m4a,
 3mf, stl, glb, pdf, each up to `HQ_ATTACHMENT_MAX_MB` (200 MB by default). An
 image with the same name as a 3D part or a PDF is shown as its preview. MyHQ
 keeps its own copy (`data/attachments/`), so the agent may go on working on
-its file. See `architecture.md`, "Files joined to an item".
+its file. See `architecture.md`, "Files joined to an item". The owner can pin
+a remark on a point of an image, of a video's frame or of a part: the revision
+then gives the point on a line under the remark (in percent from the left and
+top edges of an image, with the time for a video, see `api.md`), which the role
+can tell the agent how to read.
 
 An approved `agent_proposal` (`architecture.md`, "Proposing a missing agent")
 is the other way MyHQ writes in a room: it adds `roles/<id>.md` (the role

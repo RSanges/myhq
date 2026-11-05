@@ -112,7 +112,7 @@ test("citation: a point hit on the placed part is given in the part's frame, wit
   // An inverted face seen from above: its normal is turned towards the camera.
   const { point, normal } = pointInPart(part, hit, new Vector3(0, 0, -1), new Vector3(0, 0, -1));
   const stored = roundPoint(7, point, normal);
-  assert.deepEqual(stored, { fileId: 7, x: 12.4, y: -3, z: 8.5, normal: [0, 0, 1] });
+  assert.deepEqual(stored, { fileId: 7, kind: "model", x: 12.4, y: -3, z: 8.5, normal: [0, 0, 1] });
   assert.equal(pointQuote("piece.3mf", stored), "piece.3mf, point (12,4 ; -3,0 ; 8,5) mm, face +Z");
 
   // A GLB: the point comes back in millimetres, Z up, not in the file's metres.
@@ -120,6 +120,7 @@ test("citation: a point hit on the placed part is given in the part's frame, wit
   const corner = converted.localToWorld(new Vector3(0, 0, 20));
   assert.deepEqual(roundPoint(1, pointInPart(converted, corner, new Vector3(-1, 0, 0)).point, new Vector3(-1, 0, 0)), {
     fileId: 1,
+    kind: "model",
     x: 0,
     y: 0,
     z: 20,
@@ -133,7 +134,7 @@ test("citation: rounded to the tenth, never -0,0; the normal is unit, and named 
   assert.equal(formatMm(-12.36), "-12,4");
   assert.equal(formatMm(1234.5), "1234,5");
   const point = roundPoint(3, { x: -0.04, y: 99.96, z: 1e-9 }, { x: 0, y: 0, z: -5 });
-  assert.deepEqual(point, { fileId: 3, x: 0, y: 100, z: 0, normal: [0, 0, -1] });
+  assert.deepEqual(point, { fileId: 3, kind: "model", x: 0, y: 100, z: 0, normal: [0, 0, -1] });
   assert.equal(faceLabel([0, 0, -1]), "face -Z");
   assert.equal(faceLabel([1, 0, 0]), "face +X");
   assert.equal(faceLabel([0, -0.999, 0.04]), "face -Y", "within 5 degrees of an axis");
@@ -162,7 +163,7 @@ test("a remark on a point is stored with its point and reaches the agent with it
 
   decideApproval(db, approvalId, { decision: "revise", annotations });
   const stored = JSON.parse((db.prepare("SELECT annotations FROM approvals WHERE id = ?").get(approvalId) as Pick<ApprovalRow, "annotations">).annotations);
-  assert.deepEqual(stored[1].point, { fileId, x: 12.4, y: -3, z: 8.5, normal: [0, 0, 1] });
+  assert.deepEqual(stored[1].point, { fileId, kind: "model", x: 12.4, y: -3, z: 8.5, normal: [0, 0, 1] });
 
   const expected = [
     "1. À propos de « Le support » : Nom à revoir.",

@@ -35,14 +35,14 @@ import {
   type Object3D,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { AnnotationPoint } from "@/server/annotations";
+import type { ModelPoint } from "@/server/annotations";
 import { dimensionsText, formatMm, MODEL_FRAME_CLASS, roundPoint, type ModelFormat } from "./attachments-model";
 import { loadModel, pointInPart } from "./model-load";
 import { strings } from "./strings";
 import { buttonClass } from "./ui";
 
 /** A pin over the part: a remark of the item (numbered as in the list of remarks) or the one being written. */
-export type Pin = { key: string; number: number; point: AnnotationPoint; label: string; active: boolean; draft: boolean };
+export type Pin = { key: string; number: number; point: ModelPoint; label: string; active: boolean; draft: boolean };
 
 type View = "front" | "top" | "side" | "iso";
 
@@ -99,7 +99,7 @@ export default function ModelViewer({
   poster: string | null;
   pins: readonly Pin[];
   picking: boolean;
-  onPick: (point: AnnotationPoint) => void;
+  onPick: (point: ModelPoint) => void;
   onPin: (key: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
