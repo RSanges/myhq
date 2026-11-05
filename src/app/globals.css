@@ -1936,6 +1936,7 @@ body {
 }
 
 .room-agents {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
@@ -1944,10 +1945,46 @@ body {
   list-style: none;
 }
 
+/* A chip with, when it opens a group (at work, waiting, asleep), the name of the group beside it. */
+.room-agents-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.room-agents-item[data-group-start]:not(:first-child) {
+  margin-left: 0.6rem;
+  padding-left: 0.8rem;
+  border-left: 1px solid var(--line);
+}
+
+.room-agents-label {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 @media (max-width: 39.99rem) {
   .room-agents {
     flex-direction: column;
     width: 100%;
+  }
+
+  /* On a phone the name of a group is a small title over its first chip. */
+  .room-agents-item[data-group-start] {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+  }
+
+  .room-agents-item[data-group-start]:not(:first-child) {
+    margin-top: 0.35rem;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
   }
 }
 

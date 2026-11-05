@@ -508,6 +508,12 @@ export const strings = {
     roomsLabel: "Salles",
     noAgents: "Aucun agent dans cette salle. Ajoutez-en une depuis le bureau.",
     listTitle: "Les agents",
+    /** The names of the groups of the strip: the agents at work first, then the ones that wait, then the ones asleep. */
+    groups: {
+      working: "Au travail",
+      waiting: "En attente",
+      resting: "Au repos",
+    },
     openCard: (name: string) => `Ouvrir la fiche de ${name}`,
     status: {
       asleep: "dort",

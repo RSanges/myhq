@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { placeAgents, type AgentGroup } from "./agent-groups";
 import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { parseHash } from "./deep-link";
@@ -24,6 +25,7 @@ import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote } from "./ui";
 import { useDesk } from "./use-desk";
 import { useHq } from "./use-hq";
+import { useFlip } from "./use-flip";
 import { useMediaQuery } from "./use-media-query";
 
 const t = strings.room;
@@ -182,6 +184,17 @@ export function RoomPage() {
     () => new Map(snapshot?.view.agents.map((agent) => [agent.key, agent]) ?? []),
     [snapshot],
   );
+  // The strip under the floor: the agents at work first, then the ones that wait, then the ones asleep (the order of the home inside each).
+  const strip = useMemo(
+    () =>
+      placeAgents(
+        [...roomAgents.map((agent) => ({ key: agent.key, agent })), ...(receptionHere ? [{ key: RECEPTION_KEY, agent: null }] : [])],
+        (entry) => statusOf.get(entry.key)?.status ?? null,
+      ),
+    [roomAgents, receptionHere, statusOf],
+  );
+  const stripRef = useRef<HTMLUListElement>(null);
+  useFlip(stripRef, strip.map(({ item }) => item.key).join("|"), !reduced);
   const pending = snapshot?.view.pending ?? 0;
   const pendingByRoom = snapshot?.view.pendingByRoom ?? {};
   const showCanvas = room !== null && roomAgents.length > 0 && (wide || narrowOpen);
@@ -377,26 +390,31 @@ export function RoomPage() {
           <h2 id="room-agents" className="sr-only">
             {t.listTitle}
           </h2>
-          <ul className="room-agents">
-            {roomAgents.map((agent) => (
-              <AgentRow
-                key={agent.key}
-                name={agent.name}
-                color={agent.color}
-                status={statusOf.get(agent.key)?.status ?? null}
-                selected={agent.key === selectedKey}
-                onOpen={() => setSelectedKey(agent.key)}
-              />
-            ))}
-            {receptionHere && (
-              <AgentRow
-                key={RECEPTION_KEY}
-                name={t.reception.name}
-                status={statusOf.get(RECEPTION_KEY)?.status ?? null}
-                receptionist
-                selected={selectedKey === RECEPTION_KEY}
-                onOpen={() => setSelectedKey(RECEPTION_KEY)}
-              />
+          <ul className="room-agents" ref={stripRef}>
+            {strip.map(({ item, label }) =>
+              item.agent ? (
+                <AgentRow
+                  key={item.key}
+                  id={item.key}
+                  name={item.agent.name}
+                  color={item.agent.color}
+                  status={statusOf.get(item.key)?.status ?? null}
+                  label={label}
+                  selected={item.key === selectedKey}
+                  onOpen={() => setSelectedKey(item.key)}
+                />
+              ) : (
+                <AgentRow
+                  key={RECEPTION_KEY}
+                  id={RECEPTION_KEY}
+                  name={t.reception.name}
+                  status={statusOf.get(RECEPTION_KEY)?.status ?? null}
+                  label={label}
+                  receptionist
+                  selected={selectedKey === RECEPTION_KEY}
+                  onOpen={() => setSelectedKey(RECEPTION_KEY)}
+                />
+              ),
             )}
           </ul>
           {wide && !single && <p className="room-strip-tray">{t.trayCount(pending)}</p>}
@@ -445,24 +463,35 @@ export function RoomPage() {
 
 /** One agent of the list under the floor: a button with its name and what it is doing, that opens its sheet. */
 function AgentRow({
+  id,
   name,
   color = null,
   status,
+  label,
   selected,
   onOpen,
   receptionist = false,
 }: {
+  /** Key of the agent, to follow the chip when the strip is reordered. */
+  id: string;
   name: string;
   /** Colour of the agent's room; the receptionist has none. */
   color?: string | null;
   status: AgentStatus | null;
+  /** The group this chip opens in the strip, named above it; null inside a group. */
+  label: AgentGroup | null;
   selected: boolean;
   onOpen: () => void;
   receptionist?: boolean;
 }) {
   const tint = chipStyle(color);
   return (
-    <li>
+    <li className="room-agents-item" data-flip={id} data-group-start={label ? "" : undefined}>
+      {label && (
+        <span className="room-agents-label" aria-hidden="true">
+          {t.groups[label]}
+        </span>
+      )}
       <button
         type="button"
         className="room-agent"
