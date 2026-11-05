@@ -5,7 +5,7 @@ import { selectionMessage, textWithoutChoices, type Choice } from "../assistant/
 import { formatClock } from "./format";
 import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
-import { chipStyle } from "./room-color";
+import { RecipientPicker } from "./recipient-picker";
 import type { ChatMessage, ChatSignal } from "./schemas";
 import { strings } from "./strings";
 import { useChat } from "./use-chat";
@@ -218,7 +218,6 @@ export function ChatPanel({
   const logRef = useRef<HTMLDivElement>(null);
 
   const agent = agents.find((each) => each.key === target) ?? null;
-  const inRooms = new Set(agents.map((each) => each.room)).size > 1;
   const name = t.assistantName;
 
   const { turn, inflight, outgoing, messages } = chat;
@@ -339,38 +338,15 @@ export function ChatPanel({
           void submit();
         }}
       >
-        <div className="chat-chips" role="radiogroup" aria-label={t.recipientsLabel}>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={agent === null}
-            className="chat-chip"
-            onClick={() => setTarget(CHAT_TARGET)}
-          >
-            {t.chatChip(name)}
-          </button>
-          {agents.map((each) => {
-            const tint = chipStyle(each.color);
-            return (
-              <button
-                key={each.key}
-                type="button"
-                role="radio"
-                aria-checked={agent?.key === each.key}
-                className="chat-chip"
-                data-state={each.state}
-                data-tint={tint ? "" : undefined}
-                style={tint ?? undefined}
-                title={t.agentChip({ name: each.name, room: inRooms ? each.room : null, state: strings.team.state[each.state] })}
-                onClick={() => setTarget(each.key)}
-              >
-                <span className="chat-dot" aria-hidden />
-                {each.name}
-                <span className="sr-only">{`, ${strings.team.state[each.state]}`}</span>
-              </button>
-            );
-          })}
-        </div>
+        <RecipientPicker
+          panelOpen={open}
+          agents={agents}
+          selected={agent}
+          onSelect={(each) => {
+            setTarget(each ? each.key : CHAT_TARGET);
+            textRef.current?.focus();
+          }}
+        />
         <textarea
           ref={textRef}
           className="chat-input"

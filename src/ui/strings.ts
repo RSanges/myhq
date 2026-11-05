@@ -825,6 +825,8 @@ export const strings = {
     newLink: "/new",
     newTitle: "Effacer la conversation et repartir de zéro",
     recipientsLabel: "Destinataire",
+    recipientCurrent: (name: string) => `Destinataire : ${name}`,
+    recipientToggle: "Changer de destinataire",
     chatChip: (name: string) => name,
     agentChip: (p: { name: string; room: string | null; state: string }) =>
       `${p.name}${p.room ? ` (${p.room})` : ""}, ${p.state}`,

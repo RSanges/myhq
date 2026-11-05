@@ -2598,7 +2598,8 @@ body {
   border-color: var(--muted);
 }
 
-.chat-chip[aria-checked="true"] {
+.chat-chip[aria-checked="true"],
+.chat-chip[data-current] {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: 0 0 0 1px var(--accent);
@@ -2615,13 +2616,89 @@ body {
   background: color-mix(in srgb, var(--room-color) 22%, var(--card));
 }
 
-.chat-chip[data-tint][aria-checked="true"] {
+.chat-chip[data-tint][aria-checked="true"],
+.chat-chip[data-tint][data-current] {
   background: color-mix(in srgb, var(--room-color) 30%, var(--card));
   box-shadow: 0 0 0 1px var(--room-color);
 }
 
 .chat-chip[data-tint] .chat-dot {
   border-color: var(--room-color);
+}
+
+/* The recipient picker: the folded line (the current recipient and an arrow), and the list it unfolds above it. */
+.chat-recipient-wrap {
+  position: relative;
+}
+
+.chat-recipient {
+  max-width: 100%;
+}
+
+.chat-recipient-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-chevron {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: rotate 0.15s;
+}
+
+.chat-recipient[aria-expanded="true"] .chat-chevron {
+  rotate: 180deg;
+}
+
+.chat-recipients {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-height: min(20rem, 55dvh);
+  padding: 0.65rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--card);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.18);
+}
+
+.chat-recipients[hidden] {
+  display: none;
+}
+
+.chat-room-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The colour of the room, as a small bar before its name. */
+.chat-room-title[data-tint]::before {
+  content: "";
+  width: 0.2rem;
+  height: 0.8rem;
+  border-radius: 999px;
+  background: var(--room-color);
 }
 
 /* The state of an agent: a ring when idle, a full dot at work, red after a failure (it is also said in text). */
