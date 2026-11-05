@@ -45,6 +45,18 @@ test("the signboards of the floor set: as high as the layout rules assume, a fac
   }
 });
 
+test("the sign font: the zero is a plain ring (a slash made it read as a crossed O on the counters), and 0, O and 8 stay apart", () => {
+  const zero = font.glyphs["0"]!;
+  const o = font.glyphs["O"]!;
+  const eight = font.glyphs["8"]!;
+  // Hollow: inside its outline, a zero has no ink at all.
+  zero.slice(1, -1).forEach((row, y) => assert.equal(row.slice(1, -1), ".".repeat(row.length - 2), `the zero is empty inside, row ${y + 1}`));
+  // The zero is narrower than the O, and the 8 has the waist the zero lacks.
+  assert.ok(zero[0]!.length < o[0]!.length, "a zero narrower than the O");
+  assert.ok(eight[3]!.slice(1, -1).includes("#"), "the 8 is pinched in its middle");
+  assert.equal(new Set([zero, o, eight].map((glyph) => glyph.join("/"))).size, 3, "0, O and 8 are three different glyphs");
+});
+
 test("a board as long as its name and logo need, in whole segments, never longer than its wall", () => {
   const short = planSign(sign, font, "art", 0, 10 * CELL);
   const long = planSign(sign, font, "planygo", 0, 10 * CELL);
