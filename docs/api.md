@@ -1220,5 +1220,22 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its nine tools write to the same
+for each run (see `architecture.md`). Its ten tools write to the same
 database, and their effects reach the interface through `/api/events`.
+
+`hq_items` is the one that reads an item's state for an agent, as the
+counterpart of the `Approval` objects above (the API is the owner's view, the
+tool the agent's, limited to its reach):
+
+- `hq_items { id }` returns `{ id, type, title, status, room, agent, forRoom,
+  submittedAt, decidedAt, note, remarks: [{ quote, comment, point? }], files:
+  [name] }`. `status` is `pending`, `approved`, `rejected`, `revise`, `unseen`
+  or `seen`. No body.
+- `hq_items { status?, type? }` returns `{ items: [{ id, type, title, status,
+  room, agent, forRoom, submittedAt, decidedAt }], truncated }`: the items
+  created or decided in the last 30 days, newest first, at most 50, among the
+  items of the agent's room, those delivered for it (`forRoom`) and, for an
+  agent of a shared room, those of the rooms that ordered from it.
+- It is read-only and never marks a decision seen (unlike `hq_read_decisions`).
+  An item out of reach is an error (`outside what you may read`), an unknown id
+  is another (`No item #N exists`).

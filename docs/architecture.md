@@ -100,7 +100,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Nine tools, all validated with zod:
+room) and writes directly to SQLite. Ten tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -111,6 +111,7 @@ room) and writes directly to SQLite. Nine tools, all validated with zod:
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
 | `hq_memory_write(key, value)` | Write a value of the agent's role memory. |
 | `hq_pending()` | List the items waiting for the user's decision, in every room, oldest first: id, room, agent, `forRoom`, type, title, `submittedAt`, never the body. Read-only, for agents that write a brief or a recap. |
+| `hq_items(id?, status?, type?)` | Read the state of items at any time (read-only, it marks nothing seen). With `id`: type, title, `status`, `decidedAt` and `note` of the decision, `remarks` (the annotations, with their points), producing `room` and `agent`, `forRoom`, attached file `files` (names). Without `id`: the recent items (30 days, by last activity, newest first, at most 50, `truncated` when more) that the agent may read, filtered by `status` and `type`. See "Reading the state of an item". |
 | `hq_rooms()` | List the shared rooms and their agents (id and name): the studios an agent may order from. Read-only. |
 | `hq_suggest_agent(need)` | For an order nobody in the office can do: the need goes to the receptionist, which proposes a new agent to the user (see "Proposing a missing agent"). At most one per need text in 24 hours. |
 
@@ -152,6 +153,37 @@ sources through tsx and logs a warning once per process (`no frozen HQ MCP
 server`): seeing it in the service's logs means the build was not run. The
 assistant's chat never starts this server (its per-turn config holds only the
 chat's own servers), and `npm run mcp` still runs the sources by hand.
+
+### Reading the state of an item
+
+`hq_read_decisions` gives a decision once, then marks it seen: a later run that
+needs to know where an item stands (« is the revised script approved? ») had no
+way to look it up, forgot, and told another agent that nothing was approved
+while the item had been for hours (a social agent held a whole chain this way).
+`hq_items` is the read-only answer: it can be called any number of times, and
+it never marks anything seen nor touches `seen_by_agent_at`.
+
+- **By id** (`hq_items { id }`): `id`, `type`, `title`, `status` (`pending`,
+  `approved`, `rejected`, `revise`, `unseen`, `seen`), `room` and `agent` (the
+  producer), `forRoom`, `submittedAt`, `decidedAt`, `note` (the decision's
+  general note), `remarks` (the annotations: `quote`, `comment` and, for a
+  remark on a file, its `point`) and `files` (the names of the attached files).
+  Never the body.
+- **List** (`hq_items {}`, optional `status` and `type`): the items active in
+  the last 30 days (created or decided), newest first, at most 50 (`truncated`
+  says when there were more). Each entry: the same fields without `note`,
+  `remarks` and `files`. `status` and `type` do not combine with `id`.
+- **Who may read what.** An agent reads the items of its room (which includes
+  the ones it produced), and those delivered for its room (`for_room`) by a
+  shared room. An agent of a shared room also reads the items of the rooms that
+  ordered from its room, traced by the tasks of its room that came from a
+  message of another room (`tasks.from_room`): a studio sees what its
+  requester approved. A room that is not shared never gains access to a studio
+  by being answered by it. Anything else is a tool error that says the item is
+  out of reach (which says nothing about its status), distinct from « No item
+  #N exists ».
+- **Prompts.** Every run prompt ends its tool presentation with: before saying
+  that an item is not approved, or does not exist, check it with `hq_items`.
 
 ### Routines
 

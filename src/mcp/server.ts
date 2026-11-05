@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "../server/db";
 import {
+  hqItems,
   hqMemoryRead,
   hqMemoryWrite,
   hqMessage,
@@ -107,6 +108,15 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_pending,
     },
     async () => respond(() => hqPending(db)),
+  );
+  server.registerTool(
+    "hq_items",
+    {
+      description:
+        "Read the state of items, whenever you need it (it never marks anything seen, unlike hq_read_decisions which gives a decision once). With `id`: the item's type, title, status (pending, approved, rejected, revise, seen), decision date and note, remarks (with their points), producing room and agent, forRoom and attached file names. Without `id`: the items of the last 30 days, newest first (at most 50), of your room, those you produced, those delivered for your room, and, for an agent of a shared room, those of the rooms that ordered from it; filter with `status` and `type`. Before saying that an item is not approved or does not exist, check it here. An item out of your reach is refused, which does not tell you its status. Read-only.",
+      inputSchema: inputs.hq_items,
+    },
+    async (args) => respond(() => hqItems(db, ctx, args)),
   );
   server.registerTool(
     "hq_rooms",

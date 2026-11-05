@@ -11,7 +11,7 @@ import {
   storeAttachments,
   type ResolvedAttachment,
 } from "../server/attachments";
-import { now, type ApprovalRow, type Db } from "../server/db";
+import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
@@ -66,7 +66,7 @@ export function readContext(env: Env): HqContext {
   };
 }
 
-/** Input shapes of the nine tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the ten tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -120,6 +120,19 @@ export const inputs = {
     value: z.string().max(100_000).describe("Value to store (text or JSON)."),
   },
   hq_pending: {},
+  hq_items: {
+    id: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Number of the item to read (the approvalId of hq_submit, the number in a command). Without it: the list of recent items."),
+    status: z
+      .enum(APPROVAL_STATUSES)
+      .optional()
+      .describe("List only: keep the items in this status (pending, approved, rejected, revise, unseen, seen)."),
+    type: z.string().min(1).max(63).optional().describe("List only: keep the items of this type."),
+  },
   hq_rooms: {},
   hq_suggest_agent: {
     need: needSchema.describe(
@@ -518,6 +531,107 @@ export function hqPending(db: Db) {
       title: row.title,
       submittedAt: row.created_at,
     })),
+  };
+}
+
+/** How far back the list of hq_items looks, and how many items it gives at most. */
+export const ITEMS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+export const ITEMS_LIST_MAX = 50;
+
+/**
+ * The rooms whose items an agent may read with hq_items: its own, and, for an
+ * agent of a shared room, the rooms that ordered from it (a message that
+ * became a task of its room carries `from_room`). An item belongs to a room
+ * when it was produced there (`room`) or delivered for it (`for_room`).
+ */
+function readableRooms(db: Db, ctx: HqContext): string[] {
+  const rooms = [ctx.room];
+  if (roomInfo(db, ctx.room)?.shared !== 1) return rooms;
+  const orderers = db
+    .prepare("SELECT DISTINCT from_room FROM tasks WHERE room = ? AND source = 'message' AND from_room IS NOT NULL ORDER BY from_room")
+    .all(ctx.room) as { from_room: string }[];
+  for (const { from_room } of orderers) if (!rooms.includes(from_room)) rooms.push(from_room);
+  return rooms;
+}
+
+const marks = (values: readonly unknown[]) => values.map(() => "?").join(", ");
+
+/**
+ * Reads the state of items, never marks anything seen (unlike
+ * hq_read_decisions, which gives a decision once). With `id`: the item, its
+ * decision and remarks. Without: the recent items (30 days, newest first, at
+ * most ITEMS_LIST_MAX) of the rooms the agent may read, optionally filtered by
+ * status and type. An item outside those rooms is refused, with an error that
+ * says it is out of reach, not that it does not exist.
+ */
+export function hqItems(db: Db, ctx: HqContext, args: Args<"hq_items">) {
+  const parsed = z.object(inputs.hq_items).parse(args);
+  const rooms = readableRooms(db, ctx);
+  const scope = `(room IN (${marks(rooms)}) OR for_room IN (${marks(rooms)}))`;
+  if (parsed.id !== undefined) {
+    if (parsed.status !== undefined || parsed.type !== undefined) {
+      throw new ToolError("hq_items: status and type filter the list; do not combine them with id.");
+    }
+    const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(parsed.id) as ApprovalRow | undefined;
+    if (!row) throw new ToolError(`No item #${parsed.id} exists.`);
+    if (!rooms.includes(row.room) && !(row.for_room !== null && rooms.includes(row.for_room))) {
+      throw new ToolError(
+        `Item #${parsed.id} is outside what you may read: only the items of your room, those you produced, those delivered for your room and, for a shared room, those of the rooms that ordered from it. This does not tell you whether it is approved.`,
+      );
+    }
+    const files = db.prepare("SELECT name FROM approval_files WHERE approval_id = ? ORDER BY id").all(row.id) as { name: string }[];
+    return {
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      status: row.status,
+      room: row.room,
+      agent: row.agent_id,
+      forRoom: row.for_room,
+      submittedAt: row.created_at,
+      decidedAt: row.decided_at,
+      note: row.decision_note,
+      remarks: parseAnnotations(row.annotations).map((a) => ({
+        quote: a.quote,
+        comment: a.comment,
+        ...(a.point ? { point: a.point } : {}),
+      })),
+      files: files.map((file) => file.name),
+    };
+  }
+  const since = new Date(Date.now() - ITEMS_WINDOW_MS).toISOString();
+  const where = [scope, "MAX(created_at, COALESCE(decided_at, created_at)) >= ?"];
+  const params: unknown[] = [...rooms, ...rooms, since];
+  if (parsed.status !== undefined) {
+    where.push("status = ?");
+    params.push(parsed.status);
+  }
+  if (parsed.type !== undefined) {
+    where.push("type = ?");
+    params.push(parsed.type);
+  }
+  const rows = db
+    .prepare(
+      `SELECT id, room, agent_id, type, title, status, for_room, decided_at, created_at FROM approvals
+       WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+    )
+    .all(...params, ITEMS_LIST_MAX + 1) as Pick<
+    ApprovalRow,
+    "id" | "room" | "agent_id" | "type" | "title" | "status" | "for_room" | "decided_at" | "created_at"
+  >[];
+  return {
+    items: rows.slice(0, ITEMS_LIST_MAX).map((row) => ({
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      status: row.status,
+      room: row.room,
+      agent: row.agent_id,
+      forRoom: row.for_room,
+      submittedAt: row.created_at,
+      decidedAt: row.decided_at,
+    })),
+    truncated: rows.length > ITEMS_LIST_MAX,
   };
 }
 

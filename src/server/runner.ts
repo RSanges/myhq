@@ -274,6 +274,7 @@ export function buildPrompt(params: {
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_task_update for your task, hq_submit for anything to approve. Never publish anything yourself.",
+    "A decision comes to you once (hq_read_decisions). Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory.",
   ];
   if (params.room.shared) {
     lines.push(

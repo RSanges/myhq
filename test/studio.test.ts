@@ -236,6 +236,9 @@ test("the run prompt tells a room about the shared rooms, and a shared room how 
   const toStudio = buildPrompt({ room: studio, agent: studio.agents[0]!, runId: 2, task: "T", mailbox: [] });
   assert.match(toStudio, /Your room is shared: .*hq_submit and forRoom/);
   assert.doesNotMatch(buildPrompt({ room: demo, agent: demo.agents[0]!, runId: 3, task: "T", mailbox: [] }), /Shared rooms/);
+  // Every prompt tells the agent to check an item with hq_items before denying it.
+  assert.match(toDemo, /Before you say that an item is not approved, or does not exist, check it with hq_items/);
+  assert.match(toStudio, /check it with hq_items/);
 });
 
 test("hq_submit forRoom: a shared room delivers to the room that ordered; refused for a room that is not shared or unknown", () => {
