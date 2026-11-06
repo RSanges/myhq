@@ -604,6 +604,61 @@ CREATE TABLE IF NOT EXISTS run_deadlines (
 );
 `,
   },
+  {
+    version: 18,
+    sql: `
+-- The portier and the approvals MyHQ executes itself (docs/architecture.md,
+-- "The portier" and "Executing an approved item"). Idempotent, as the
+-- migrations after 14.
+-- One row per message task whose wake MyHQ decided on: what its sender
+-- expects (the expects of hq_message: reply, action, none; null when not said)
+-- and the portier's verdict that covers it (portier_verdicts.id).
+CREATE TABLE IF NOT EXISTS message_wake (
+  task_id INTEGER PRIMARY KEY,
+  expects TEXT,
+  verdict_id INTEGER
+);
+-- Every call of the portier: the messages it read (task_ids, JSON), wake or
+-- skip with its reason, what it cost, and the error of a call that failed
+-- open (verdict wake).
+CREATE TABLE IF NOT EXISTS portier_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  task_ids TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  model TEXT NOT NULL,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS portier_verdicts_created ON portier_verdicts (created_at);
+-- The messages an item asks MyHQ to deliver when it is approved (hq_submit
+-- onApprove, JSON array of { room, agent, text }), and when they were.
+CREATE TABLE IF NOT EXISTS approval_relays (
+  approval_id INTEGER PRIMARY KEY,
+  messages TEXT NOT NULL,
+  delivered_at TEXT
+);
+-- The approval command of an agent (onApproval "command") run for an item:
+-- ok = 1 and its note when it executed the item, else the error that sent
+-- the item back to the agent as a task.
+CREATE TABLE IF NOT EXISTS approval_commands (
+  approval_id INTEGER PRIMARY KEY,
+  ok INTEGER,
+  note TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {
