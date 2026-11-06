@@ -107,7 +107,7 @@ test("builds the claude command line", () => {
     maxBudgetUsd: 2,
   } as RunInput;
   const args = buildClaudeArgs(input);
-  assert.deepEqual(args.slice(0, 15), [
+  assert.deepEqual(args.slice(0, 16), [
     "-p",
     "Do it.",
     "--output-format",
@@ -122,9 +122,10 @@ test("builds the claude command line", () => {
     "--strict-mcp-config",
     "--setting-sources",
     "project,local",
+    "--exclude-dynamic-system-prompt-sections",
     "--tools",
   ]);
-  assert.deepEqual(args.slice(15, 20), ["WebSearch", "--allowedTools", "WebSearch", "mcp__hq__*", "--disallowedTools"]);
+  assert.deepEqual(args.slice(16, 21), ["WebSearch", "--allowedTools", "WebSearch", "mcp__hq__*", "--disallowedTools"]);
   assert.deepEqual(args.slice(-2), ["--max-budget-usd", "2"]);
   assert.ok(!args.includes("--max-turns"));
 });

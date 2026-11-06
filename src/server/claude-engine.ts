@@ -224,6 +224,9 @@ export function buildClaudeArgs(input: RunInput): string[] {
     // do not run inside agents.
     "--setting-sources",
     "project,local",
+    // The per-machine sections (working directory, environment, git status) go to the first
+    // user message: the system prompt of an agent stays the same from run to run, and cached.
+    "--exclude-dynamic-system-prompt-sections",
   ];
   for (const dir of input.addDirs ?? []) args.push("--add-dir", dir);
   const tools = input.tools ?? builtInTools(input.allowedTools);
