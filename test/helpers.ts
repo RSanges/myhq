@@ -77,6 +77,7 @@ export function chatConfig(overrides: Partial<ChatConfig> = {}): ChatConfig {
     historyTurns: 12,
     historyMaxChars: 8_000,
     resume: "cli",
+    freshAfterMinutes: 60,
     preamble: null,
     ...overrides,
   };
