@@ -93,9 +93,10 @@ export const agentSchema = z.strictObject({
   /**
    * "task": approving one of its items gives the agent a task to execute it, and wakes it
    * (the default: left out, an approval gives it no task). "queue": the task is created
-   * but the agent is not woken, it finds it at its next run.
+   * but the agent is not woken, it finds it at its next run. "command": MyHQ runs `approvalCommand`
+   * itself, without a model turn (see approvals.ts), and falls back to "task" when it fails.
    */
-  onApproval: z.enum(["task", "queue"]).optional(),
+  onApproval: z.enum(["task", "queue", "command"]).optional(),
   /** A message from another agent (hq_message) wakes it at once ("run", the default); "queue": it waits for the next run. */
   onMessage: z.enum(["run", "queue"]).optional(),
   /** A revise decision wakes the agent at once ("run", the default); "queue": the revision waits for the next run. */
@@ -114,6 +115,18 @@ export const agentSchema = z.strictObject({
    * of every room. MyHQ wakes it when something new is stuck (docs/architecture.md, "The supervisor").
    */
   supervisor: z.boolean().optional(),
+
+  // --- Wakes and approvals without a model turn (docs/home-layout.md, "Waking an agent") ---
+  /**
+   * false: a message to this agent never goes through the portier, it wakes the agent as before
+   * (the default, left out, is true: the portier decides whether a message is worth a wake).
+   */
+  portier: z.boolean().optional(),
+  /**
+   * With `onApproval: "command"`: the command MyHQ runs when one of the agent's items is approved,
+   * program then arguments, relative to the home (its cwd). It reads the item as JSON on stdin.
+   */
+  approvalCommand: z.array(z.string().min(1).max(4_000)).min(1).max(64).optional(),
 });
 
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
@@ -169,8 +182,11 @@ export type Agent = {
   isoSprite: string | null;
   /** It roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`); false for most agents. */
   roam?: boolean;
-  /** "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; null: no task (see wakeAgents). */
-  onApproval: "task" | "queue" | null;
+  /**
+   * "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; "command":
+   * MyHQ runs `approvalCommand` (see approvals.ts); null: no task (see wakeAgents).
+   */
+  onApproval: "task" | "queue" | "command" | null;
   /** A message addressed to the agent wakes it, unless "queue" (null is the default: wake, see wakeAgents). */
   onMessage: "run" | "queue" | null;
   /** A revise decision wakes the agent, unless "queue" (null is the default: wake, see wakeAgents). */
@@ -181,6 +197,10 @@ export type Agent = {
   resources: string[];
   /** The supervisor of the Standard (see supervisor.ts); false for most agents. */
   supervisor?: boolean;
+  /** false: its messages skip the portier (see portier.ts); left out, true. */
+  portier?: boolean;
+  /** The command of `onApproval: "command"`, relative to the home; null otherwise. */
+  approvalCommand?: string[] | null;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -278,6 +298,10 @@ export function loadRoom(home: string, roomDir: string): Room {
       throw new Error(`${file}: isoSprite of "${agent.id}" must stay inside the home`);
     }
 
+    if (agent.onApproval === "command" && !agent.approvalCommand) {
+      throw new Error(`${file}: "${agent.id}" has onApproval "command": approvalCommand is required`);
+    }
+
     let skills: string[];
     try {
       skills = resolveSkillDirs(roomDir, agent.id, agent.skills ?? []);
@@ -314,6 +338,8 @@ export function loadRoom(home: string, roomDir: string): Room {
       notifyRuns: agent.notifyRuns ?? null,
       resources: agent.resources ?? [],
       supervisor: agent.supervisor ?? false,
+      portier: agent.portier ?? true,
+      approvalCommand: agent.approvalCommand ?? null,
     };
   });
 

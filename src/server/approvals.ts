@@ -8,8 +8,10 @@ import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
 import { AGENT_PROPOSAL, applyAgentProposal } from "./agent-proposal";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
-import { loadHome } from "./rooms";
-import { wakeAgents, type RunnerDeps } from "./runner";
+import { startApprovalCommand } from "./approval-command";
+import { loadHome, type Agent } from "./rooms";
+import { agentEnv, wakeAgents, type RunnerDeps } from "./runner";
+import { deliverRelays, hasRelays } from "./supervisor";
 
 export const decisionSchema = z
   .strictObject({
@@ -48,16 +50,13 @@ export function revisionTaskText(
 ${decisionText(note, annotations)}`;
 }
 
-/**
- * What the agent of an item asks for when one of its items is approved: nothing
- * (null), a task it is woken for (`task`), or a task that waits for its next
- * run (`queue`).
- */
-function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" | null {
-  const agent = loadHome(config.home)
-    .rooms.find((room) => room.name === row.room)
-    ?.agents.find((a) => a.id === row.agent_id);
-  return agent?.onApproval ?? null;
+/** The agent of an item in the home, null when the home no longer has it. */
+function agentOf(config: HqConfig, row: ApprovalRow): Agent | null {
+  return (
+    loadHome(config.home)
+      .rooms.find((room) => room.name === row.room)
+      ?.agents.find((a) => a.id === row.agent_id) ?? null
+  );
 }
 
 /**
@@ -80,9 +79,13 @@ function approvalTaskFor(config: HqConfig, row: ApprovalRow): "task" | "queue" |
  * agent-proposal.ts): when that fails, the item stays pending and the error
  * is thrown. Approving an item of an agent with `onApproval: "task"` gives that
  * agent a task to execute it, and wakes it (`wakeAgents`; with `"queue"` the
- * task waits for its next run): the agent acts, through its own tools, never
- * MyHQ. No other type is acted on: the item keeps its payload, and publishing
- * or pushing stays the user's.
+ * task waits for its next run): the agent acts, through its own tools. With
+ * `onApproval: "command"`, MyHQ runs the agent's `approvalCommand` instead,
+ * without a model turn, and falls back to the task when it fails (see
+ * approval-command.ts). An item submitted with `onApprove` has its messages
+ * delivered by MyHQ on approval (`deliverRelays`, expects `action`), and its
+ * agent gets no task for it (a command still runs). No other type is acted
+ * on: the item keeps its payload, and publishing or pushing stays the user's.
  */
 export function decideApproval(
   db: Db,
@@ -93,6 +96,8 @@ export function decideApproval(
 ): ApprovalDto {
   let taskFor: HqConfig | null = null;
   let queueTaskFor: HqConfig | null = null;
+  let relayFor: HqConfig | null = null;
+  let command: { config: HqConfig; agent: Agent; row: ApprovalRow } | null = null;
   let wakeFor: HqConfig | null = decision.decision === "revise" ? (config ?? null) : null;
   if (decision.decision === "approved") {
     const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
@@ -104,8 +109,14 @@ export function decideApproval(
     }
     if (row?.status === "pending") {
       const cfg = config ?? getConfig();
-      const wanted = approvalTaskFor(cfg, row);
-      if (wanted === "task") taskFor = wakeFor = cfg;
+      const agent = agentOf(cfg, row);
+      const wanted = agent?.onApproval ?? null;
+      // MyHQ delivers the item's messages itself: the agent is not woken to relay them.
+      if (hasRelays(db, id)) relayFor = wakeFor = cfg;
+      if (wanted === "command" && agent) command = { config: cfg, agent, row };
+      else if (relayFor) {
+        // No task: the relay is the execution.
+      } else if (wanted === "task") taskFor = wakeFor = cfg;
       else if (wanted === "queue") queueTaskFor = cfg;
     }
   }
@@ -163,9 +174,28 @@ export function decideApproval(
            VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?)`,
         ).run(row.room, row.agent_id, id, strings.tasks.executeApproved(id, row.title), at, at);
       }
+      if (decision.decision === "approved" && relayFor) deliverRelays(db, row);
       return toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
     })
     .immediate();
+  if (command) {
+    const { config: cfg, agent, row } = command;
+    startApprovalCommand({
+      config: cfg,
+      db,
+      row,
+      agent,
+      note: decision.note || null,
+      env: agentEnv(process.env, {}),
+      wake: () => {
+        try {
+          wakeAgents(cfg, db, deps);
+        } catch (error) {
+          console.error(`[approvals] wake after the command of #${id} failed`, error);
+        }
+      },
+    });
+  }
   if (wakeFor) {
     // The decision stands whatever happens next: a busy agent or the daily
     // cap leave the task waiting for the agent's next run.

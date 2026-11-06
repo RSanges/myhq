@@ -83,7 +83,7 @@ export function firstSupervisor(home: Home): { room: string; agent: Agent } | nu
 const nameIn = (home: Home, room: string, agentId: string): string =>
   home.rooms.find((each) => each.name === room)?.agents.find((each) => each.id === agentId)?.name ?? agentId;
 
-/** The task of the supervisor's check of a long run. */
+/** The task of the supervisor's check of a long run, with MyHQ's summary of the run when it could make one (`runDigest`). */
 export function checkTask(p: {
   run: RunRow;
   agentName: string;
@@ -92,13 +92,63 @@ export function checkTask(p: {
   waitMinutes: number;
   sliceMinutes: number;
   hardMinutes: number;
+  digest?: string | null;
 }): string {
   const text = p.run.task.replace(/\s+/g, " ").trim();
   const task = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+  const decide = `decide as your role says: hq_run_extend { runId: ${p.run.id}, minutes } when it progresses, hq_run_stop { runId: ${p.run.id}, reason } when it is clearly stuck.`;
   return [
     `Long run to check: run #${p.run.id} of ${p.run.room}/${p.run.agent_id} (${p.agentName}) has been running for ${p.minutes} minutes, past the timeout of ${p.timeoutMinutes} minutes. Its task: ${task}`,
-    `Read hq_run_status { runId: ${p.run.id} }, then decide as your role says: hq_run_extend { runId: ${p.run.id}, minutes } when it progresses, hq_run_stop { runId: ${p.run.id}, reason } when it is clearly stuck.`,
+    p.digest
+      ? `MyHQ's summary of the run is below: it holds what hq_run_status gives, so do not call it unless you need more. Then ${decide}`
+      : `Read hq_run_status { runId: ${p.run.id} }, then ${decide}`,
     `Without a decision within ${p.waitMinutes} minutes, MyHQ lets it go on by slices of ${p.sliceMinutes} minutes, up to the hard limit of ${p.hardMinutes} minutes after its start.`,
+    ...(p.digest ? ["", p.digest] : []),
+  ].join("\n");
+}
+
+/** The tool events and the length of the last text given in a run's summary. */
+const DIGEST_TOOL_EVENTS = 20;
+const DIGEST_TEXT_MAX = 600;
+const DIGEST_EVENT_MAX = 200;
+
+/** `HH:MM:SS` (UTC) of an ISO date. */
+const clock = (at: string) => at.slice(11, 19);
+
+/**
+ * A compact summary of a run in progress, for the supervisor's check task
+ * (`checkTask`), so that it decides without calling hq_run_status: its
+ * duration, its tokens and estimated cost against its budget, MyHQ's hints on
+ * its activity, its 20 latest tool events and its latest text.
+ */
+export function runDigest(db: Db, home: Home, runsDir: string, runId: number, at: number = Date.now()): string {
+  const status = runStatus(db, home, runsDir, runId, at);
+  const t = status.cost.tokens;
+  const cost =
+    status.cost.usd === null
+      ? "cost unknown"
+      : `${status.cost.estimated ? "estimated cost" : "cost"} ${status.cost.usd} $${status.cost.budgetUsd ? ` of a ${status.cost.budgetUsd} $ budget (${Math.round((status.cost.shareOfBudget ?? 0) * 100)}%)` : ""}`;
+  const h = status.hints;
+  const repeat = [
+    h.trailingIdenticalCalls > 1 ? `the last ${h.trailingIdenticalCalls} tool calls are identical` : null,
+    h.mostRepeatedCall ? `most repeated call: ${h.mostRepeatedCall.tool} ${h.mostRepeatedCall.input} (${h.mostRepeatedCall.count} of the last ${h.mostRepeatedCall.outOf})` : null,
+  ].filter(Boolean);
+  const tools = (
+    db
+      .prepare("SELECT * FROM events WHERE run_id = ? AND type IN ('tool_call', 'tool_result') ORDER BY id DESC LIMIT ?")
+      .all(runId, DIGEST_TOOL_EVENTS) as EventRow[]
+  ).reverse();
+  const lastText = db.prepare("SELECT * FROM events WHERE run_id = ? AND type = 'text' ORDER BY id DESC LIMIT 1").get(runId) as EventRow | undefined;
+  const text = lastText ? cut(str(parseData(lastText).text), DIGEST_TEXT_MAX) : "";
+  return [
+    `Summary of run #${runId} (${status.run.model ?? "model unknown"}), made by MyHQ at ${clock(new Date(at).toISOString())} UTC:`,
+    `- Duration: ${status.run.minutes} min; last event ${h.minutesSinceLastEvent} min ago; ${h.eventsLast10Minutes} events and ${h.toolCallsLast10Minutes} tool calls in the last 10 minutes.`,
+    `- Tokens: ${t.inputTokens} input, ${t.outputTokens} output, ${t.cacheCreationInputTokens} cache write, ${t.cacheReadInputTokens} cache read; ${cost}.`,
+    ...(status.deadlines ? [`- Extensions so far: ${status.deadlines.extensions}; checks: ${status.deadlines.checks}.`] : []),
+    ...(repeat.length > 0 ? [`- Repetition: ${repeat.join("; ")}.`] : []),
+    tools.length > 0 ? `- Last ${tools.length} tool events (UTC):` : "- No tool event yet.",
+    ...tools.map((event) => `  ${clock(event.created_at)} ${event.type === "tool_call" ? "call" : "result"} ${cut(eventDetail(event), DIGEST_EVENT_MAX)}`),
+    text ? `- Last text: ${text}` : "- No text yet.",
   ].join("\n");
 }
 
@@ -143,6 +193,13 @@ export function atDeadline(p: {
 
   const started = Date.parse(run.started_at);
   if (row.check_asked_at === null) {
+    let digest: string | null = null;
+    try {
+      digest = runDigest(db, home, config.runsDir, run.id, at);
+    } catch (error) {
+      // Without it the supervisor reads hq_run_status, as before.
+      console.error(`[long-runs] the summary of run #${run.id} could not be made`, error);
+    }
     const task = checkTask({
       run,
       agentName: nameIn(home, run.room, run.agent_id),
@@ -151,6 +208,7 @@ export function atDeadline(p: {
       waitMinutes: minutesOf(p.waitMs),
       sliceMinutes: minutesOf(config.runTimeoutMs),
       hardMinutes: minutesOf(hard - started),
+      digest,
     });
     let check: RunRow | null = null;
     try {

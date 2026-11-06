@@ -6,6 +6,7 @@ import { errorText, fetchSettings, saveSettingsGroup } from "./api";
 import { FLOOR_LAYOUTS, type FloorLayoutMode } from "./floor-mode";
 import { Notifications } from "./settings-notifications";
 import { Field, FieldError, GroupCard } from "./settings-parts";
+import { PortierVerdicts } from "./settings-portier";
 import { RoomsAndAgents } from "./settings-rooms";
 import { strings } from "./strings";
 import { SiteNav } from "./site-nav";
@@ -243,6 +244,7 @@ export function SettingsPage() {
           <LimitsGroup settings={settings} onSaved={setSettings} />
           <Notifications settings={settings} onSaved={setSettings} />
           <RoomsAndAgents settings={settings} onSaved={setSettings} />
+          <PortierVerdicts settings={settings} />
           <section className="space-y-1 rounded-lg border border-dashed border-line p-4 text-sm sm:p-5">
             <h2 className="font-semibold">{t.secrets.title}</h2>
             <p className="text-muted">{t.secrets.body}</p>

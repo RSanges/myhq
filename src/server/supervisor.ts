@@ -1,8 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
 import { strings } from "../ui/strings";
-import { listBlocked, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
+import { attachmentPath } from "./attachments";
+import { listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
 import { liveConfig, type HqConfig } from "./config";
-import { now, type Db, type RunRow } from "./db";
+import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
+import { recordExpects, type MessageExpects } from "./portier";
+import { startRelaunchRequests } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import { loadHome, type Home } from "./rooms";
 import { runsToday, startRun, WAITS, type RunnerDeps } from "./runner";
@@ -41,12 +46,30 @@ export function isSupervisor(db: Db, room: string, agentId: string): boolean {
   return db.prepare("SELECT 1 FROM supervisors WHERE room = ? AND agent_id = ?").get(room, agentId) !== undefined;
 }
 
-/** The task ids a supervisor relaunch already covers, with the request that did. */
-function relaunchedTasks(db: Db): Map<number, { id: number; handled: boolean; runId: number | null }> {
+/**
+ * MyHQ itself, when it relaunches an entry of the Standard by its rules or writes a note there (`entryRule`).
+ * A function: blocked.ts, which holds the names, may not be loaded yet when this module is (they import each other).
+ */
+export const myhqActor = (): SupervisorActor => ({ room: MYHQ_NOTE_ROOM, agentId: MYHQ_NOTE_AGENT, runId: null });
+
+/** The task ids a relaunch (a supervisor's, or MyHQ's own by its rules) already covers, with the request that did. */
+function relaunchedTasks(db: Db): Map<number, { id: number; handled: boolean; runId: number | null; byMyhq: boolean }> {
   const rows = db
-    .prepare("SELECT s.id, s.handled_at, s.run_id, j.value AS task_id FROM supervisor_relaunches s, json_each(s.task_ids) j ORDER BY s.id")
-    .all() as { id: number; handled_at: string | null; run_id: number | null; task_id: number }[];
-  return new Map(rows.map((row) => [row.task_id, { id: row.id, handled: row.handled_at !== null, runId: row.run_id }]));
+    .prepare(
+      "SELECT s.id, s.handled_at, s.run_id, s.by_room, s.by_agent, j.value AS task_id FROM supervisor_relaunches s, json_each(s.task_ids) j ORDER BY s.id",
+    )
+    .all() as { id: number; handled_at: string | null; run_id: number | null; by_room: string; by_agent: string; task_id: number }[];
+  return new Map(
+    rows.map((row) => [
+      row.task_id,
+      {
+        id: row.id,
+        handled: row.handled_at !== null,
+        runId: row.run_id,
+        byMyhq: row.by_room === MYHQ_NOTE_ROOM && row.by_agent === MYHQ_NOTE_AGENT,
+      },
+    ]),
+  );
 }
 
 /** An entry of the Standard as a supervisor reads it (hq_blocked). */
@@ -121,10 +144,12 @@ export function relaunchGuard(db: Db, config: HqConfig, home: Home, room: string
 /**
  * Writes a message from an agent to another (`messages` and a `message` task of
  * the recipient, which wakes it per its `onMessage`, under the anti ping-pong
- * window): hq_message, and the message given with a relaunch. To call within
- * a transaction.
+ * window and the portier): hq_message, the message given with a relaunch, and
+ * the messages of an approved item (`deliverRelays`). `expects` is what the
+ * sender expects (hq_message `expects`, see portier.ts). To call within a
+ * transaction.
  */
-export function writeMessage(db: Db, from: SupervisorActor, to: SupervisorRef, text: string): number {
+export function writeMessage(db: Db, from: SupervisorActor, to: SupervisorRef, text: string, expects?: MessageExpects): number {
   const elsewhere = to.room !== from.room;
   const body = elsewhere
     ? `Message from ${from.agentId} of room "${from.room}" (answer with hq_message to "${from.agentId}", room "${from.room}"): ${text}`
@@ -134,11 +159,71 @@ export function writeMessage(db: Db, from: SupervisorActor, to: SupervisorRef, t
     .prepare("INSERT INTO messages (room, from_agent, to_agent, to_room, text, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(from.room, from.agentId, to.agentId, elsewhere ? to.room : null, text, from.runId, at);
   const messageId = Number(message.lastInsertRowid);
-  db.prepare(
+  const task = db.prepare(
     `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, from_room, from_agent, created_at, updated_at)
      VALUES (?, ?, 'message', ?, ?, 'pending', ?, ?, ?, ?)`,
-  ).run(to.room, to.agentId, messageId, body, from.room, from.agentId, at, at);
+  ).run(to.room, to.agentId, messageId, body, from.room, from.agentId, at, at).lastInsertRowid;
+  if (expects) recordExpects(db, Number(task), expects);
   return messageId;
+}
+
+// --- The messages of an approved item (hq_submit `onApprove`) ---------------------------
+
+/** One message an item asks MyHQ to deliver once it is approved. */
+export type RelayMessage = { room: string; agent: string; text: string };
+
+/** Records the messages of an item (hq_submit `onApprove`). To call within the transaction that stores it. */
+export function recordRelays(db: Db, approvalId: number, messages: readonly RelayMessage[]): void {
+  if (messages.length === 0) return;
+  db.prepare("INSERT OR REPLACE INTO approval_relays (approval_id, messages) VALUES (?, ?)").run(approvalId, JSON.stringify(messages));
+}
+
+/** Whether an item has messages MyHQ still has to deliver on its approval. */
+export function hasRelays(db: Db, approvalId: number): boolean {
+  return db.prepare("SELECT 1 FROM approval_relays WHERE approval_id = ? AND delivered_at IS NULL").get(approvalId) !== undefined;
+}
+
+/** The text MyHQ appends to a relayed message: the approved item, its body and its files. */
+export function relayAppendix(db: Db, row: ApprovalRow): string {
+  const files = db.prepare("SELECT id, name FROM approval_files WHERE approval_id = ? ORDER BY id").all(row.id) as { id: number; name: string }[];
+  const dataDir = path.dirname(path.resolve(db.name));
+  const lines = files.map((file) => {
+    const copy = attachmentPath(dataDir, row.id, file.id, file.name);
+    return `- ${file.name}${fs.existsSync(copy) ? ` (${copy})` : ""}`;
+  });
+  return [
+    "",
+    "",
+    `--- Approved item #${row.id} (${row.type}): ${row.title}`,
+    "",
+    row.body.trim(),
+    ...(lines.length > 0 ? ["", "Files (read-only copies kept by MyHQ):", ...lines] : []),
+  ].join("\n");
+}
+
+/**
+ * Delivers the messages of an item just approved, in the name of the agent
+ * that submitted it, each with the item's title, body and files appended and
+ * `expects: "action"` (the recipient is woken, the portier is skipped). An
+ * item's messages are delivered once. To call within the transaction of the
+ * decision. Returns the message ids.
+ */
+export function deliverRelays(db: Db, row: ApprovalRow): number[] {
+  const stored = db.prepare("SELECT messages FROM approval_relays WHERE approval_id = ? AND delivered_at IS NULL").get(row.id) as
+    | { messages: string }
+    | undefined;
+  if (!stored) return [];
+  let messages: RelayMessage[] = [];
+  try {
+    messages = JSON.parse(stored.messages) as RelayMessage[];
+  } catch {
+    messages = [];
+  }
+  const appendix = relayAppendix(db, row);
+  const from: SupervisorActor = { room: row.room, agentId: row.agent_id, runId: row.run_id };
+  const ids = messages.map((message) => writeMessage(db, from, { room: message.room, agentId: message.agent }, `${message.text}${appendix}`, "action"));
+  db.prepare("UPDATE approval_relays SET delivered_at = ? WHERE approval_id = ?").run(now(), row.id);
+  return ids;
 }
 
 export type RelaunchRequestResult =
@@ -250,20 +335,117 @@ export function reviewTask(open: readonly BlockedEntry[]): string {
 
 /**
  * The second failure of an entry goes to the owner: an open entry with a task
- * that a supervisor already relaunched (the request was handled, so the
- * relaunch was tried) is handed to the owner with a note of MyHQ's, in the
- * supervisor's name. Returns the entries handed off.
+ * that a supervisor, or MyHQ by its rules, already relaunched (the request was
+ * handled, so the relaunch was tried) is handed to the owner with a note of
+ * MyHQ's, in the supervisor's name (in MyHQ's own for its own relaunch).
+ * Returns the entries handed off.
  */
 function handOffRelaunched(db: Db, supervisor: SupervisorRef, supervisorName: string, entries: readonly BlockedEntry[]): BlockedEntry[] {
   const relaunched = relaunchedTasks(db);
   const handed: BlockedEntry[] = [];
   for (const entry of entries) {
     if (entry.handedOff) continue;
-    if (!entry.taskIds.some((id) => relaunched.get(id)?.handled)) continue;
-    noteBlocked(db, { ...supervisor, runId: null }, entryTarget(entry), strings.deskModules.standard.secondFailure(supervisorName), true);
+    const earlier = entry.taskIds.map((id) => relaunched.get(id)).find((each) => each?.handled);
+    if (!earlier) continue;
+    if (earlier.byMyhq) noteBlocked(db, myhqActor(), entryTarget(entry), strings.deskModules.standard.secondFailureMyhq, true);
+    else noteBlocked(db, { ...supervisor, runId: null }, entryTarget(entry), strings.deskModules.standard.secondFailure(supervisorName), true);
     handed.push(entry);
   }
   return handed;
+}
+
+// --- The rules of the Standard ---------------------------------------------------------
+
+/** What MyHQ does with an open entry before it wakes the supervisor. */
+export type EntryRule =
+  /** A passing technical failure never relaunched: MyHQ relaunches it once (`why`: a key of `strings...transient`). */
+  | { kind: "relaunch"; why: string }
+  /** It will start again on its own (the cap, a resource, the anti ping-pong window, a stop of MyHQ): nothing to do. */
+  | { kind: "wait" }
+  /** A block in free text, or a state no rule covers: the supervisor reads it. */
+  | { kind: "supervisor" };
+
+/** The passing technical failures, as the summary of a run or the note of a blocked task says them. */
+const TRANSIENT: readonly { why: string; pattern: RegExp }[] = [
+  { why: "mcp", pattern: /mcp server not connected|mcp_not_connected|serveur mcp[^.]{0,40}(non connecté|pas connecté|failed)|mcp[^.]{0,40}not connected/i },
+  { why: "database", pattern: /sqlite_busy|sqlite_locked|database is locked|base de données[^.]{0,20}occupée/i },
+  { why: "gpu", pattern: /resource_busy|\bgpu\b[^.]{0,30}(busy|occupé|pris|in use)|ressource[^.]{0,40}occupée/i },
+  { why: "cap", pattern: /daily_cap_reached|daily cap|plafond du jour/i },
+  { why: "interrupted", pattern: /\binterrupted\b|interrompu/i },
+];
+
+/**
+ * The rule MyHQ applies to an entry (`entry.cause`, `entry.detail`): an
+ * interrupted run, a busy agent whose task nothing takes, two interruptions in
+ * a row, or a failed run or a blocked task whose words name a passing failure
+ * (an MCP server not connected, the GPU busy, an interruption, SQLITE_BUSY,
+ * the daily cap) is relaunched once; the cap, a resource, the anti ping-pong
+ * window and a stop of MyHQ resolve themselves; everything else is the
+ * supervisor's.
+ */
+export function entryRule(entry: Pick<BlockedEntry, "cause" | "detail">): EntryRule {
+  switch (entry.cause) {
+    case "cancelled":
+    case "interruptedTwice":
+      return { kind: "relaunch", why: "interrupted" };
+    case "busy":
+      return { kind: "relaunch", why: "busy" };
+    case "cap":
+    case "resource":
+    case "pingPong":
+    case "stopping":
+      return { kind: "wait" };
+    case "failed":
+    case "blocked": {
+      const found = TRANSIENT.find((each) => each.pattern.test(entry.detail ?? ""));
+      return found ? { kind: "relaunch", why: found.why } : { kind: "supervisor" };
+    }
+    default:
+      return { kind: "supervisor" };
+  }
+}
+
+/** Guards of a relaunch that pass on their own: MyHQ tries again at a later tick. */
+const PASSING_GUARDS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"]);
+
+/**
+ * Applies the rules of the Standard to the open entries: relaunches once, in
+ * MyHQ's name, what failed for a passing reason (with a note on the entry),
+ * leaves alone what starts again on its own, and returns what is left for the
+ * supervisor. A relaunch held back by a guard that passes (busy, resource,
+ * cap) changes nothing and is tried again at the next tick. The runs are
+ * started at once (`startRelaunchRequests`).
+ */
+export function settleByRule(config: HqConfig, db: Db, home: Home, open: readonly BlockedEntry[], deps: RunnerDeps = {}): BlockedEntry[] {
+  const relaunched = relaunchedTasks(db);
+  const left: BlockedEntry[] = [];
+  let started = false;
+  for (const entry of open) {
+    const rule = entryRule(entry);
+    if (rule.kind === "wait") continue;
+    if (rule.kind === "supervisor") {
+      left.push(entry);
+      continue;
+    }
+    // Relaunched once already, and not handled yet: its run starts, or handOffRelaunched hands it to the owner.
+    if (entry.taskIds.some((id) => relaunched.has(id))) continue;
+    try {
+      const result = requestRelaunch(db, config, home, myhqActor(), entryTarget(entry));
+      if (result.relaunched) {
+        // On its tasks, now pending again: a run entry no longer has any blocked or given back.
+        const text = strings.deskModules.standard.autoRelaunched(strings.deskModules.standard.transient[rule.why] ?? rule.why);
+        for (const id of result.tasks) noteBlocked(db, myhqActor(), { kind: "task", id }, text, false);
+        started = true;
+      } else if (!PASSING_GUARDS.has(result.waiting.code)) {
+        left.push(entry);
+      }
+    } catch (error) {
+      if (!(error instanceof HqError)) throw error;
+      left.push(entry);
+    }
+  }
+  if (started) startRelaunchRequests(config, db, deps);
+  return left;
 }
 
 /**
@@ -272,8 +454,10 @@ function handOffRelaunched(db: Db, supervisor: SupervisorRef, supervisorName: st
  * that lists the new entries; otherwise, while open entries remain, at most
  * every STANDARD_REVIEW_MS since its last such run, with a task that lists
  * them all. An open entry is one not handed to the owner and not the
- * supervisor's own; before anything, an entry that a supervisor relaunch did
- * not unblock is handed to the owner (`handOffRelaunched`). A busy
+ * supervisor's own; before anything, an entry that a relaunch did not
+ * unblock is handed to the owner (`handOffRelaunched`), then MyHQ settles
+ * what follows a rule (`settleByRule`): the supervisor is woken only for the
+ * entries left, the blocks in free text. A busy
  * supervisor, a busy resource or the cap: nothing is recorded, the next tick
  * tries again. Called at each tick of the scheduler's timer. Never throws for
  * those waits; returns the run started, or null.
@@ -287,7 +471,13 @@ export function watchStandard(config: HqConfig, db: Db, deps: RunnerDeps = {}, a
   const own = (entry: BlockedEntry) => entry.room === supervisor.room && entry.agentId === supervisor.agentId;
   const entries = listBlocked(db, home, config, at).filter((entry) => !own(entry));
   const handed = new Set(handOffRelaunched(db, supervisor, name, entries));
-  const open = entries.filter((entry) => !entry.handedOff && !handed.has(entry));
+  const open = settleByRule(
+    config,
+    db,
+    home,
+    entries.filter((entry) => !entry.handedOff && !handed.has(entry)),
+    deps,
+  );
   if (open.length === 0) return null;
 
   const announced = db.prepare("SELECT 1 FROM standard_announced WHERE task_id = ?");

@@ -19,8 +19,11 @@ import { ensureWorktree, worktreeBranch } from "./worktree";
  */
 export const AGENT_PROPOSAL = "agent_proposal";
 
-/** The agent as stored: the fields of room.json without `role` (MyHQ writes it), never armed. */
-export const proposedAgentSchema = agentSchema.omit({ role: true, armed: true }).extend({ armed: z.literal(false) });
+/**
+ * The agent as stored: the fields of room.json without `role` (MyHQ writes it), never armed, and never an
+ * `approvalCommand` (what MyHQ runs on an approval is the owner's to write in room.json).
+ */
+export const proposedAgentSchema = agentSchema.omit({ role: true, armed: true, approvalCommand: true }).extend({ armed: z.literal(false) });
 
 /** What is stored once MyHQ has normalized it, and applied on approval. */
 export const agentProposalSchema = z.strictObject({

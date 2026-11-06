@@ -5,7 +5,8 @@ import { FLOOR_LAYOUTS } from "../ui/floor-mode";
 import { liveConfig, type Env, type HqConfig } from "./config";
 import type { Db } from "./db";
 import { HqError } from "./errors";
-import { approvalTypeSchema, DEFAULT_LANGUAGE, languageTagSchema, readFloorLayout } from "./home-settings";
+import { approvalTypeSchema, DEFAULT_LANGUAGE, DEFAULT_PORTIER, languageTagSchema, readFloorLayout, readPortierSetting } from "./home-settings";
+import { recentVerdicts } from "./portier";
 import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, type Home, type Room } from "./rooms";
 import {
   maxRunsSettingSchema,
@@ -343,6 +344,10 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
   const home = loadHome(live.home);
   const known = knownApprovalTypes(db, home).filter((type) => !selected.includes(type));
 
+  const portier = readPortierSetting(live.home, config.portier ?? DEFAULT_PORTIER);
+  if (portier.error && !raw.error) errors.push(portier.error);
+  const verdicts = recentVerdicts(db);
+
   return {
     layout: floor.layout,
     language: { value: language, options: languages },
@@ -383,6 +388,13 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
     })),
     invalidRooms: home.invalid.map((invalid) => ({ name: path.basename(invalid.dir), error: invalid.error })),
     defaultMaxBudgetUsd: live.defaultMaxBudgetUsd,
+    portier: {
+      enabled: portier.setting.enabled,
+      model: portier.setting.model,
+      source: portier.fromFile ? "file" : "default",
+      week: verdicts.week,
+      verdicts: verdicts.verdicts,
+    },
     errors,
   };
 }

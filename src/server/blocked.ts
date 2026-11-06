@@ -5,6 +5,7 @@ import { liveConfig, type HqConfig } from "./config";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
+import { waitsForNextRun } from "./portier";
 import { RELAUNCH_REASON } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import type { Agent, Home } from "./rooms";
@@ -59,7 +60,20 @@ export type BlockedEntry = {
   note: BlockedNote | null;
   /** A supervisor handed it to the owner: the owner is the one to act, and it is listed first. */
   handedOff: boolean;
+  /**
+   * What MyHQ knows of why, as a code: the rules of the Standard read it (supervisor.ts, `entryRule`).
+   * A run: `failed`, `cancelled`, `stopped`, `hardLimit`. A task: `blocked` (an agent's note), `blockedNoNote`,
+   * `myhqNote`. A pending task: the key of its reason (`busy`, `cap`, `resource`, `pingPong`, `stopping`,
+   * `givenBack`, `interruptedTwice`, `noWake`, `notWoken`, `unknownAgent`).
+   */
+  cause: string;
+  /** The words of whoever wrote why, as written: the summary of a failed run, the note of a blocked task. */
+  detail: string | null;
 };
+
+/** The author of MyHQ's own notes on the Standard (supervisor.ts), shown as « MyHQ ». */
+export const MYHQ_NOTE_ROOM = RECEPTION_ROOM;
+export const MYHQ_NOTE_AGENT = "myhq";
 
 export type BlockedNote = {
   /** For the owner, in French: what the supervisor did, or what it expects from the owner. */
@@ -110,20 +124,25 @@ function runText(db: Db, run: RunRow, taskIds: readonly number[]): string {
   return given.length > 0 ? `${run.task}\n\n${given.join("\n")}` : run.task;
 }
 
+type Why = { reason: string; cause: string };
+
 /** Why a pending task is stuck, or null when it is not (a wake-up will take it, or it waits by design). */
-function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null): string | null {
+function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null): Why | null {
   const r = strings.deskModules.standard.reasons;
-  if (!agent && task.room !== RECEPTION_ROOM) return r.unknownAgent;
+  const why = (cause: keyof typeof r, reason: string): Why => ({ reason, cause });
+  if (!agent && task.room !== RECEPTION_ROOM) return why("unknownAgent", r.unknownAgent);
   const wakes = WAKE_SOURCES.has(task.source);
   // Waiting for the agent's next run is what `"queue"` asks for: not a block.
   if (wakes && agent && !wakesAgent(agent, task.source as WakeCandidate["source"])) return null;
+  // So is a message its sender sent for the next run (`expects: "none"`), or that the portier let wait.
+  if (task.source === "message" && waitsForNextRun(db, task.id)) return null;
   const running = db
     .prepare("SELECT id, started_at FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
     .get(task.room, task.agent_id) as { id: number; started_at: string } | undefined;
   if (running) {
     // The end of the run wakes the agent again for a task newer than it.
     if (wakes && task.created_at > running.started_at) return null;
-    return r.busy(running.id);
+    return why("busy", r.busy(running.id));
   }
   const later = db
     .prepare(
@@ -137,12 +156,12 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
   const cancelled = later.cancelled ?? 0;
   if (wakes && taken === 0 && cancelled <= 1) {
     // `wakeAgents` would take it: what holds it back is what holds back a run.
-    if (isStopping()) return r.stopping;
+    if (isStopping()) return why("stopping", r.stopping);
     const today = runsToday(db);
     const cap = liveConfig(config).maxRunsPerDay;
-    if (today >= cap) return r.cap(today, cap);
+    if (today >= cap) return why("cap", r.cap(today, cap));
     const holder = resourceHolder(db, agent?.resources ?? []);
-    if (holder) return r.resource(holder.resource, holder.runId, `${holder.room} / ${holder.agentId}`);
+    if (holder) return why("resource", r.resource(holder.resource, holder.runId, `${holder.room} / ${holder.agentId}`));
     if (task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
       const candidate: WakeCandidate = {
@@ -154,17 +173,17 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
       };
       if (pairWokeRecently(db, candidate, since)) {
         const sender = home.rooms.find((room) => room.name === task.from_room)?.agents.find((each) => each.id === task.from_agent);
-        return r.pingPong(sender?.name ?? task.from_agent ?? "", Math.round(config.messageWakeIntervalMs / 60_000));
+        return why("pingPong", r.pingPong(sender?.name ?? task.from_agent ?? "", Math.round(config.messageWakeIntervalMs / 60_000)));
       }
     }
-    return r.notWoken;
+    return why("notWoken", r.notWoken);
   }
-  if (!wakes) return r.noWake;
-  if (taken === 0 && cancelled > 1) return r.interruptedTwice;
+  if (!wakes) return why("noWake", r.noWake);
+  if (taken === 0 && cancelled > 1) return why("interruptedTwice", r.interruptedTwice);
   const last = db
     .prepare("SELECT id, status FROM runs WHERE room = ? AND agent_id = ? AND started_at >= ? ORDER BY id DESC LIMIT 1")
     .get(task.room, task.agent_id, task.created_at) as { id: number; status: string } | undefined;
-  return last?.status === "failed" ? r.givenBack(last.id) : r.noWake;
+  return last?.status === "failed" ? why("givenBack", r.givenBack(last.id)) : why("noWake", r.noWake);
 }
 
 /** Everything stuck at the agents, newest first. */
@@ -187,20 +206,27 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     )
     .all(new Date(at.getTime() - FAILED_RUN_WINDOW_MS).toISOString()) as RunRow[];
   // A run a supervisor stopped, or that reached its hard limit, says so (long-runs.ts).
-  const failedReason = (run: RunRow): string => {
+  const failedReason = (run: RunRow): Why => {
     const deadlines = readDeadlines(db, run.id);
     if (deadlines?.stop_requested_at) {
-      return r.runStopped(run.id, nameOf(deadlines.stop_room ?? "", deadlines.stop_agent ?? ""), oneLine(deadlines.stop_reason));
+      return {
+        cause: "stopped",
+        reason: r.runStopped(run.id, nameOf(deadlines.stop_room ?? "", deadlines.stop_agent ?? ""), oneLine(deadlines.stop_reason)),
+      };
     }
     if (deadlines && run.ended_at && run.ended_at >= deadlines.hard_deadline_at) {
-      return r.runHardLimit(run.id, Math.round((Date.parse(deadlines.hard_deadline_at) - Date.parse(run.started_at)) / 60_000));
+      return {
+        cause: "hardLimit",
+        reason: r.runHardLimit(run.id, Math.round((Date.parse(deadlines.hard_deadline_at) - Date.parse(run.started_at)) / 60_000)),
+      };
     }
-    return r.runFailed(run.id, oneLine(run.summary));
+    return { cause: "failed", reason: r.runFailed(run.id, oneLine(run.summary)) };
   };
   for (const run of runs) {
     const taskIds = runTaskIds(db, run);
     if (taskIds.length === 0) continue;
     for (const id of taskIds) listed.add(id);
+    const failed = run.status === "cancelled" ? { cause: "cancelled", reason: r.runCancelled(run.id) } : failedReason(run);
     entries.push({
       entry: "run",
       id: run.id,
@@ -209,11 +235,13 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       agentName: nameOf(run.room, run.agent_id),
       state: run.status === "cancelled" ? "cancelled" : "failed",
       since: run.ended_at ?? run.started_at,
-      reason: run.status === "cancelled" ? r.runCancelled(run.id) : failedReason(run),
+      reason: failed.reason,
       text: runText(db, run, taskIds),
       taskIds,
       note: null,
       handedOff: false,
+      cause: failed.cause,
+      detail: run.summary,
     });
   }
 
@@ -243,6 +271,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       taskIds: [task.id],
       note: null,
       handedOff: false,
+      cause: myhqNote ? "myhqNote" : note ? "blocked" : "blockedNoNote",
+      detail: task.note,
     });
   }
 
@@ -252,8 +282,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     .all(new Date(at.getTime() - STUCK_PENDING_MS).toISOString()) as TaskRow[];
   for (const task of pending) {
     if (listed.has(task.id)) continue;
-    const reason = pendingReason(db, config, home, task, agentOf(task.room, task.agent_id));
-    if (reason === null) continue;
+    const why = pendingReason(db, config, home, task, agentOf(task.room, task.agent_id));
+    if (why === null) continue;
     entries.push({
       entry: "pending",
       id: task.id,
@@ -262,11 +292,13 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       agentName: nameOf(task.room, task.agent_id),
       state: "pending",
       since: task.created_at,
-      reason,
+      reason: why.reason,
       text: task.text,
       taskIds: [task.id],
       note: null,
       handedOff: false,
+      cause: why.cause,
+      detail: null,
     });
   }
 
@@ -280,7 +312,14 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       | { room: string; agent_id: string; text: string; handed_off: number; created_at: string }
       | undefined;
     if (!row) continue;
-    entry.note = { text: row.text, room: row.room, agentId: row.agent_id, agentName: nameOf(row.room, row.agent_id), at: row.created_at };
+    const byMyhq = row.room === MYHQ_NOTE_ROOM && row.agent_id === MYHQ_NOTE_AGENT;
+    entry.note = {
+      text: row.text,
+      room: row.room,
+      agentId: row.agent_id,
+      agentName: byMyhq ? "MyHQ" : nameOf(row.room, row.agent_id),
+      at: row.created_at,
+    };
     entry.handedOff = row.handed_off === 1;
   }
   return entries.sort(
