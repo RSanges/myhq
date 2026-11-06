@@ -28,8 +28,8 @@ Numbers that matter and their targets:
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, key `history`): the numbers of previous weeks.
+1. Read the user's decisions and your memory (key `history`: the numbers
+   of previous weeks), given at the end of your run prompt.
 2. Read the data files in your working directory (snapshots exported for
    you). If there is none, or it is older than the period asked, stop: report
    `blocked` with `hq_task_update` and say which file is missing.
@@ -37,8 +37,8 @@ Numbers that matter and their targets:
    the split by channel when the data has it. Say how each number is computed.
 4. Propose one decision for the next period, with the number that supports
    it and what would make you change your mind.
-5. Save this period's numbers (`hq_memory_write`, key `history`) and end with
-   `hq_task_update`.
+5. Save this period's numbers (`hq_memory_write`, key `history`) and
+   end with your final report (MyHQ closes the task; `hq_task_update` only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 

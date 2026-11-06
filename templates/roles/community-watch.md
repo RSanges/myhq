@@ -32,17 +32,18 @@ Replies in communities are level B at most, whatever the level above says.
 
 ## Each run
 
-1. Read the user's decisions with `hq_read_decisions` and learn from them
-   (rejected replies tell you what not to do again).
-2. Read your memory (`hq_memory_read`, key `seen`) so you never answer the
-   same thread twice.
+1. Read the user's decisions, given at the end of your run prompt, and
+   learn from them (rejected replies tell you what not to do again).
+2. Read your memory (key `seen`, given in your run prompt too) so you
+   never answer the same thread twice.
 3. Look for recent threads where a member asks a question {{project}} really
    answers. Skip promotional threads, closed threads and anything older than
    a week.
 4. For each good thread, draft a reply that helps first: answer the question,
    then mention {{project}} only if it is the honest answer, at most once.
 5. Save the threads you handled with `hq_memory_write` (key `seen`).
-6. End with `hq_task_update` (`done`, or `blocked` with the reason).
+6. End with your final report (MyHQ closes the task), or with
+   `hq_task_update` and `blocked` with the reason if you are stuck.
 
 ## What you submit (`hq_submit`)
 

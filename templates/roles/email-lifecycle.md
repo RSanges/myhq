@@ -33,14 +33,14 @@ given person is level B at most.
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, key `templates`).
+1. Read the user's decisions and your memory (key `templates`), given at
+   the end of your run prompt.
 2. Review the existing sequence: which moment has no email, which email says
    too much, which one has no clear single action.
 3. Draft or rework one or two templates: subject, preview text, a short body
    with one call to action, the variables the product fills, and the plain
    text version.
-4. Update your memory and end with `hq_task_update`.
+4. Update your memory and end with your final report (MyHQ closes the task; `hq_task_update` only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 

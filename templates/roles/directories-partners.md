@@ -32,14 +32,14 @@ A message to a partner is level B at most; a first call is level C.
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, keys `directories` and `partners`).
+1. Read the user's decisions and your memory (keys `directories` and
+   `partners`), given at the end of your run prompt.
 2. Find a few directories worth being in (real traffic, relevant category,
    free or clearly priced) and prepare each listing with the fields they ask.
 3. Find a few possible partners whose audience overlaps, with the public page
    that shows why, and draft a short first message that offers something
    concrete.
-4. Update your memory and end with `hq_task_update`.
+4. Update your memory and end with your final report (MyHQ closes the task; `hq_task_update` only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 
