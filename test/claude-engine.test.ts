@@ -5,6 +5,7 @@ import { test } from "node:test";
 import os from "node:os";
 import {
   buildClaudeArgs,
+  runEnv,
   builtInTools,
   expandMcpServers,
   expandPlaceholders,
@@ -128,6 +129,17 @@ test("builds the claude command line", () => {
   assert.deepEqual(args.slice(16, 21), ["WebSearch", "--allowedTools", "WebSearch", "mcp__hq__*", "--disallowedTools"]);
   assert.deepEqual(args.slice(-2), ["--max-budget-usd", "2"]);
   assert.ok(!args.includes("--max-turns"));
+  assert.ok(!args.includes("--effort"), "no effort: the CLI's default");
+});
+
+test("an agent's effort is passed as --effort", () => {
+  const args = buildClaudeArgs({ allowedTools: ["mcp__hq__*"], maxBudgetUsd: 1, effort: "low" } as RunInput);
+  assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), ["--effort", "low"]);
+});
+
+test("an agent's cache duration becomes CLAUDE_CODE_PROMPT_CACHE_TTL", () => {
+  assert.deepEqual(runEnv({ cacheTtl: "5m" }), { CLAUDE_CODE_PROMPT_CACHE_TTL: "5m" });
+  assert.deepEqual(runEnv({}), {});
 });
 
 test("only whitelisted built-in tools are available", () => {

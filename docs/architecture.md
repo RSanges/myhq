@@ -13,7 +13,14 @@ A run is one `claude -p` process started by the app for one agent. The command
 is built from the room and role definition in the home directory:
 
 - `--append-system-prompt-file`: the role prompt (`roles/<agent>.md`).
-- `--model`: the model of the agent (`opus`, `sonnet` or `haiku`).
+- `--model`: the model of the agent (`opus`, `sonnet` or `haiku`), or the one
+  its `modelFor` gives for the motive of the run, or its prepare command's.
+- `--effort`: the agent's `effort`, when it has one (or its prepare
+  command's for this run).
+- `--exclude-dynamic-system-prompt-sections`: the CLI's per-machine sections
+  (working directory, environment, git status) go to the first user message
+  instead of the system prompt, so the system prompt of an agent stays the
+  same from run to run and is read from the cache.
 - `--allowedTools`: the agent's whitelist of tools. A write rule loses its
   path on the way (`Write(models/**)` is passed as `Write`): the paths are
   enforced by MyHQ's write guard (see "The write guard" below), not by the
@@ -53,7 +60,9 @@ the start event too: when a server listed there is not `connected`, the run
 is stopped at once, before its first event is read, and fails with the end
 reason `mcp_not_connected`; it is started again once, a few seconds later,
 with the same task and the tasks it had claimed. Only a second failure (or a
-retry that cannot start) is alerted, like any other failed run. The prompt of
+retry that cannot start) is alerted, like any other failed run. An
+agent with a `prepare` command gets it run first, which may skip the turn or
+add context (`home-layout.md`, "Run options"). The prompt of
 every run ends with today's date, the weekday spelled out in the home's
 `language` and the time zone of `HQ_TIMEZONE`, so that no agent works the
 weekday out by itself. The Claude Code binary is not
@@ -923,7 +932,8 @@ run that ended (`NOT_RUNNING`). Migration 17 adds the table `run_deadlines`.
 ### Why a run started
 
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
-`/run` or a routine): the `reason` of `POST /api/runs` from a script of the
+`/run` or a routine; for `modelFor` and `prepare`, the motive of such a run
+is `routine` or `manual`): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
 own `approval`, `message`, `revise`, `chat`, `agent_need`, `relaunch` (the
 Standard, or the supervisor's `hq_relaunch`), `standard` (the supervisor

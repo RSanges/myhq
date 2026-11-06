@@ -1,5 +1,5 @@
 import type { Env } from "./config";
-import type { Model } from "./rooms";
+import type { CacheTtl, Effort, Model } from "./rooms";
 
 export type EngineName = "claude" | "local";
 
@@ -24,6 +24,10 @@ export type RunInput = {
   agentId: string;
   prompt: string;
   model: Model;
+  /** `--effort` of the run; left out, the CLI's default. */
+  effort?: Effort;
+  /** Prompt cache duration of the run; left out, the CLI's default. */
+  cacheTtl?: CacheTtl;
   rolePath: string;
   allowedTools: string[];
   /** Denied on top of the global deny list (the agent's `disallowedTools`). */
