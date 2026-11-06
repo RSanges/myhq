@@ -109,8 +109,8 @@ room) and writes directly to SQLite. Sixteen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
-| `hq_message(to, text, room?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). |
-| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). |
+| `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
+| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -422,8 +422,42 @@ items: approving one creates the task « Exécute l'item approuvé n° <id> :
 The agent finds the task in its prompt and acts through its own tools, for
 example an MCP server of the home that reads `data/hq.db` (through the
 `${HQ_DB_PATH}` placeholder), checks that the item is approved and sends it.
-MyHQ never acts on the item itself. When the run fails, the item stays
-`approved` and the task goes back to the mailbox for the agent's next run.
+When the run fails, the item stays `approved` and the task goes back to the
+mailbox for the agent's next run.
+
+**Without a model turn.** A turn just to call `mail_send` or `cal_apply` on an
+item the owner approved costs 15 to 20 s and a few cents for no judgement. With
+`onApproval: "command"`, the agent names a command of its home
+(`approvalCommand`, program then arguments, relative to the home), and MyHQ runs
+it the moment the item is approved (`src/server/approval-command.ts`, started by
+`decideApproval` after its transaction, in the background):
+
+- the command reads `{ "item": { id, room, agent, kind, title, body, payload,
+  note } }` on stdin (`note`: the owner's note of the approval), runs in the
+  home with the agents' safe environment plus `MYHQ_HOME`, without a shell, for
+  120 s at most;
+- exit 0 with `{ "ok": true, "note"?: string }` on stdout executes the item: its
+  `approval` task is written `done` with the note, so `actionDone` holds, and
+  the DTO's `actionNote` (shown on the approved item of the desk, « Exécuté par
+  MyHQ : ... ») carries the note. No run, no wake-up;
+- anything else falls back to `"task"`: the task is written pending with the
+  error under its text and `wakeAgents` wakes the agent (`wakesAgent` treats
+  `"command"` like `"task"` for an approval task, which only exists then).
+
+Each command run is one row of `approval_commands` (`ok`, `note`, `error`, its
+start and end).
+
+**Orders on approval.** An item that must go on to another agent (Social's
+approved script, to the studio that produces it) says so at submission:
+`hq_submit` `onApprove: [{ to: "room/agent", text }]`, its recipients checked
+then as `hq_message` checks them, stored in `approval_relays`. On approval,
+within the decision's transaction, `deliverRelays` writes each message in the
+submitter's name with the item's title, body and files (the paths of MyHQ's
+copies) appended and `expects: "action"`, so the recipient is woken without the
+portier, and has it in hand: no turn is lost asking for « the text of #39 ».
+The submitter gets no approval task for it (its `onApproval` `"task"` or
+`"queue"` is not applied; a `"command"` still runs). The messages are delivered
+once (`delivered_at`); an informational item records none.
 
 #### Files joined to an item
 
@@ -541,9 +575,67 @@ his phone, not a description of it.
 ### Messages between agents
 
 A message addressed to an agent creates a task for it, handled at once (a run
-woken as below) unless the recipient has `onMessage: "queue"`, in which case it
-waits for its next run. There is no real-time dialogue between models:
-mailboxes, readable and cheap.
+woken as below) unless the recipient has `onMessage: "queue"`, or the portier
+lets it wait (below), in which case it waits for its next run. There is no
+real-time dialogue between models: mailboxes, readable and cheap.
+
+### The portier
+
+Two agents that answer each other wake each other: on the day of the first
+video, Social and Motion exchanged 21 « received » in 30 minutes, at about
+0.45 $ for each wake of Motion on Opus. The anti ping-pong window spaces those
+wakes out; the portier removes the ones that serve nothing. The idea is the one
+of Claude Code's own subagents: a small model reads a short note instead of a
+large model reading its whole context again.
+
+`wakeAgents` asks `messageGate` (`src/server/portier.ts`) before it wakes an
+agent for a pending `message` task, after the anti ping-pong window:
+
+1. **The sender's word.** `hq_message` `expects` is stored per task in
+   `message_wake`. `"none"` never wakes (the message waits for the next run),
+   `"reply"` and `"action"` wake at once. Without it, a question mark in the
+   message wakes at once.
+2. **Off.** The portier off for the home (`myhq.json` `portier.enabled: false`,
+   read at each wake-up) or for the agent (`room.json` `portier: false`): the
+   message wakes, as before.
+3. **The verdict.** A verdict already stored for the task decides: `wake` wakes,
+   `skip` leaves the message in the mailbox.
+4. **The call.** Otherwise the message waits while the portier reads it: one
+   `claude -p` call (`--output-format json --model <portier.model> --system-prompt
+   <short> --tools "" --strict-mcp-config --setting-sources project,local
+   --effort low --max-budget-usd 0.05`, no `--mcp-config`, in a scratch folder
+   of the system's temporary directory so that no `CLAUDE.md` of the home is
+   read, with the agents' safe environment) for every pending message of the
+   agent it has not read yet (10 at most). The prompt gives the recipient's
+   name, the first paragraph of its role, the messages (2000 characters each at
+   most, with their sender) and the rules: skip an acknowledgement, a thanks, a
+   status that asks nothing; wake a request, an order, a question, a deliverable
+   the agent waits for, a decision, an error; when in doubt, wake. The answer is
+   one JSON line, `{"verdict":"wake"|"skip","reason":"..."}` (a leading `wake`
+   or `skip` is read too). The verdict is stored in `portier_verdicts` (the
+   tasks it covers, the reason, the model, the cost and tokens the CLI reports,
+   the duration, the error), linked to each task in `message_wake`, and a `wake`
+   calls `wakeAgents` again, which now starts the run.
+
+A call in progress is remembered in the process (per database and task), so the
+many `wakeAgents` calls of a run's tool results never start a second one. **It
+fails open**: a call that cannot start, fails, takes more than 60 s, or answers
+something unreadable is stored as a `wake` with its error, and the agent is
+woken. An app that stops during a call loses nothing: without a stored verdict,
+the next wake-up asks again.
+
+A message that waits by design (`expects: "none"`, or a `skip` verdict) is taken
+by the agent's next run, whatever starts it, and the Standard does not list it
+as stuck (`waitsForNextRun`). `/reglages` shows the setting, the count and cost
+of the last 7 days and the 20 latest verdicts (`recentVerdicts`).
+
+A verdict costs a fraction of a cent: one call measured on Haiku 5.5 (an
+acknowledgement, judged skip) read about 1300 tokens, wrote 133 and cost
+0.00033 $ in 3.7 s, against about 0.45 $ for a wake of an agent on Opus. The
+cost of each verdict is recorded with it.
+
+Migration 18 adds `message_wake`, `portier_verdicts`, `approval_relays` and
+`approval_commands`, idempotent as every migration after 14.
 
 ### Shared rooms
 
@@ -630,6 +722,8 @@ each run. Consequences:
   again after the restart. A task whose resumed run is interrupted again (two
   interruptions since it was created) waits for the agent's next run, so an
   app that crashes during a run does not resume it in a loop.
+- A message from an agent goes through the portier (see "The portier"): it may
+  wait for the recipient's next run instead of waking it.
 - A message from an agent wakes its recipient at most once per window per pair
   of agents (`HQ_MESSAGE_WAKE_MINUTES`, 10 by default, 0 to wake at each
   message): when a run of the recipient started for a message (reason
@@ -841,9 +935,35 @@ into the `supervisors` table, which the HQ MCP server reads.
   the entry (text, supervisor, run, `handed_off`). The Standard shows the
   latest one of an entry; `handOff: true` hands it to the owner. A note never
   changes a task.
+- **Rules first.** Much of the supervisor's method is a written rule, and MyHQ
+  applies it itself before it wakes the supervisor (`settleByRule`, from
+  `entryRule`). Each entry carries the code of why it is stuck (`cause`) and
+  the words of whoever wrote it (`detail`: a run's summary, a blocked task's
+  note):
+  - **a passing technical failure never relaunched is relaunched once**, in
+    MyHQ's name: an interrupted run (`cancelled`, or two interruptions in a
+    row), a task held by a busy agent whose run will not take it, and a failed
+    run or a blocked task whose words name an MCP server not connected, the GPU
+    (a resource) busy, an interruption, `SQLITE_BUSY` or a locked database, or
+    the daily cap (relaunched once the cap is lifted). It goes through
+    `requestRelaunch`, the supervisor's own path (once per task, the guards of a
+    run); MyHQ starts the run at once (`startRelaunchRequests`) and writes a
+    note on the entry (« MyHQ l'a relancée une fois tout seul : ... », shown as
+    a note of « MyHQ »). A guard that passes on its own (the agent busy, a
+    resource, the cap) changes nothing and the next tick tries again; another
+    one (an agent no longer in the home) leaves the entry to the supervisor;
+  - **an entry already relaunched that is stuck again goes to the owner** with
+    a note (`handOffRelaunched`: in the supervisor's name for its relaunch, in
+    MyHQ's for MyHQ's own);
+  - **what starts again on its own is left alone**: a pending task held by the
+    daily cap, a resource, the anti ping-pong window or a stop of MyHQ;
+  - **everything else goes to the supervisor**: the blocks in free text (an
+    agent's note, a run that failed for another reason, a timeout, a stop, the
+    hard limit) and the states no rule covers.
 - **Wake-ups.** At each tick of the scheduler's timer (every 15 s, scheduler
   on or off, by the process that owns the home), `watchStandard` looks at the
-  open entries: not the supervisor's own, not handed to the owner. When one
+  open entries: not the supervisor's own, not handed to the owner, not settled
+  by a rule. When one
   has a task never given to the supervisor (`standard_announced`), the
   supervisor is woken at once (reason `standard`) with a task that lists the
   new entries (20 at most, `hq_blocked` gives the rest). Otherwise, while open
@@ -879,6 +999,14 @@ as well.
   duration, its task, and what to call, and the deadline moves 5 minutes later
   while it decides. A check is a run like another one: agent lock, shared
   resources, daily cap.
+- **The summary in the task.** MyHQ puts in that task a compact summary of the
+  run (`runDigest`): its duration, its tokens and estimated cost against its
+  budget, the extensions and checks so far, the hints below (minutes since the
+  last event, activity of the last 10 minutes, identical calls repeated), its
+  20 latest tool events (call or result, with their time) and its latest text.
+  It holds what `hq_run_status` gives, so the supervisor decides without
+  calling it (one model call less per check). When the summary cannot be made,
+  the task asks it to read `hq_run_status`, as before.
 - **`hq_run_status { runId }`** gives the run (agent, room, task, status,
   start, minutes), its deadlines (`deadlineAt`, `hardDeadlineAt`,
   `extensions`, `checks`, `slices`, `stopRequested`), its cost against its

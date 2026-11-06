@@ -106,7 +106,9 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].isoSprite` | no | Isometric character sheet of the floor (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing or is not a sheet of the right size, the agent is drawn as one of the neutral people shipped with MyHQ, always the same one for the same agent. |
 | `agents[].floor` | no | How the agent lives on the single floor (`floor.layout: "room-per-project"`): `{ "behaviour": "desk" }` (the default) sits at a desk of its room; `{ "behaviour": "roam" }` has no desk (see "Agents who roam the floor" below). |
 | `agents[].sprite` | no | The old top-down sheet of the floor (4 by 4 square cells), relative to the home, inside it. Still accepted and served by `GET /api/sprites/<room>/<agent>`, but **no longer drawn**: the floor is isometric and only draws `isoSprite`. |
-| `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval (no task: an approved item is usually the user's to post). |
+| `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved). `"command"`: MyHQ runs the agent's `approvalCommand` itself the moment the item is approved, without a model turn, and falls back to `"task"` when the command fails (see "Executing an approved item without a model turn" below). Default: nothing happens on approval (no task: an approved item is usually the user's to post). An item submitted with `onApprove` (`hq_submit`) has its messages delivered by MyHQ instead, and its agent gets no task for it. |
+| `agents[].approvalCommand` | with `onApproval: "command"` | The command MyHQ runs for an approved item of this agent: the program then its arguments, for example `["node", "tools/mail/send-approved.mjs"]`. It runs in the home (its cwd), a program given as a path is relative to the home, and there is no shell (a `.cmd` or `.ps1` is not run, give its interpreter). Never accepted in an agent proposal of the receptionist: what runs on an approval is the owner's to write. |
+| `agents[].portier` | no | `false`: a message to this agent never goes through the portier and wakes it at once, as before it existed (for an agent whose every message matters). Default `true` (see "The portier" below). |
 | `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram) starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
@@ -144,6 +146,74 @@ each message): two agents that answer each other ("received", "still
 waiting") no longer wake each other at each message, the next messages wait
 in the mailbox for the recipient's next run (`architecture.md`, "Wake-ups").
 Set `"queue"` on an agent that converses rather than answers.
+
+#### The portier
+
+A message from another agent (reason `message`) is read by **the portier**
+before it wakes its recipient: a small model (Haiku unless `myhq.json` says
+otherwise) reads the recipient's name, the first paragraph of its role and the
+message, and answers whether the message is worth a wake now or can wait in the
+mailbox for the recipient's next run. An acknowledgement, a thanks or a status
+that asks nothing no longer costs a turn of the recipient; it is read by that
+next run, whatever starts it (a routine, another message, a revision, the chat).
+
+- The sender decides instead of the portier with `hq_message` `expects`:
+  `"reply"` or `"action"` wake at once, `"none"` never wakes (the message
+  waits for the next run). Without `expects`, a message whose text holds a
+  question mark wakes at once. The messages MyHQ delivers for an approved item
+  (`hq_submit` `onApprove`) are `"action"`.
+- The portier is one `claude -p` call per batch of messages (every message of
+  the agent it has not read yet): no tool, no MCP server, `--effort low`, a
+  short system prompt, and a cap of 0.05 $. It costs a fraction of a cent.
+  While it reads, the message waits; a wake verdict wakes the agent the moment
+  it is stored.
+- **It fails open.** A call that fails, times out (60 s) or answers something
+  unreadable wakes the agent, with the error stored.
+- A message the portier let wait (or that its sender sent with `"none"`) waits
+  by design: the Standard does not list it as stuck.
+- Every verdict is stored with its cost, and `/reglages` shows the latest ones.
+- Turn it off for the home with `"portier": { "enabled": false }` in
+  `myhq.json`, or for one agent with `"portier": false` in its `room.json`.
+  The anti ping-pong window still applies before it.
+
+#### Executing an approved item without a model turn
+
+An agent whose items are executed by a script of the home (a mail sent, an
+event put in the calendar) does not need a model turn for it. With
+`"onApproval": "command"` and an `approvalCommand`, MyHQ runs the command the
+moment the item is approved:
+
+- **stdin**: one JSON object,
+  `{ "item": { "id", "room", "agent", "kind", "title", "body", "payload", "note" } }`
+  (`kind` is the item's type, `payload` its parsed payload, `note` the owner's
+  note of the approval or `null`).
+- **Environment**: the agents' own (none of the app's `HQ_*` or `MYHQ_*`
+  variables, no secret added), plus `MYHQ_HOME`, the absolute path of the home.
+- **Success**: exit code 0 and, on stdout, `{ "ok": true, "note"?: string }`.
+  The item is executed: its task is written done with the note (« Exécuté par
+  MyHQ (commande d'approbation). » without one), and the desk shows the note
+  on the approved item. Nobody is woken.
+- **Anything else** (another exit code, no such JSON, 120 s without an answer,
+  a program that cannot start): MyHQ falls back to `"task"`. The agent gets the
+  task « Exécute l'item approuvé n° <id> : <title> » with the error under it,
+  and is woken (reason `approval`), so the item is still executed.
+
+```json
+{
+  "id": "mail",
+  "name": "Mail",
+  "role": "roles/mail.md",
+  "model": "sonnet",
+  "allowedTools": ["mcp__hq__*"],
+  "onApproval": "command",
+  "approvalCommand": ["node", "tools/mail/send-approved.mjs"]
+}
+```
+
+An agent that hands an approved item to another agent (a script to a studio)
+says so when it submits it, with `hq_submit` `onApprove`: MyHQ delivers the
+messages itself on approval, in the submitter's name, each with the item's
+title, body and files appended, and does not wake the submitter to relay them.
 
 An agent that sends approved mails could be declared like this (the
 `courrier` server and its tools belong to the home):
@@ -781,6 +851,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item in full with its link, without « Vu » buttons (cut in several messages only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
 
 | `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone (the Standard). |
+| `portier` | no | `{ "enabled": true, "model": "haiku" }` (the default): the portier reads a message from another agent before MyHQ wakes its recipient for it, and lets an acknowledgement wait for the recipient's next run (see "The portier" above). `enabled: false` wakes the recipient at each message, as before; `model` is the alias given to `claude -p --model`. Read at each wake-up, apart from the rest of the file: an invalid block keeps the default, with the reason on `/reglages`. |
 
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
@@ -834,6 +905,13 @@ short arrays are written one item per line.
 
 Secrets are neither shown nor editable on the page, which only says that they
 live in `.env.local`.
+
+Below the groups, a read-only « Portier » section says whether the portier is
+on and on which model (`portier` of `myhq.json`, edited by hand), what it did
+over the last 7 days (verdicts, wakes avoided, total cost), and its latest 20
+verdicts: wake or wait, for which agent, from whom, the first words of the
+message, the reason, the cost, and a mark on a call that failed (the agent was
+woken by prudence).
 
 ### The desk objects (`desk`)
 
