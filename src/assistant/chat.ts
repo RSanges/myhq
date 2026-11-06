@@ -4,7 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { builtInTools, CLAUDE_ENV, DENIED_TOOLS, expandMcpServers, usageFrom } from "../server/claude-engine";
 import type { Env } from "../server/config";
-import type { Usage } from "../server/engine";
+import { ZERO_USAGE, type Usage } from "../server/engine";
 import { agentEnv } from "../server/runner";
 import { cliToolRules, installWriteGuard, writeGuardConfig, writeGuardEnv } from "../server/write-guard";
 import type { ChatConfig } from "./home-config";
@@ -79,7 +79,33 @@ const resultSchema = z.looseObject({
       cache_read_input_tokens: z.number().optional(),
     })
     .optional(),
+  /** Per model, the tokens of the whole session (with --continue, every turn of the conversation). */
+  modelUsage: z
+    .record(
+      z.string(),
+      z.looseObject({
+        inputTokens: z.number().optional(),
+        outputTokens: z.number().optional(),
+        cacheReadInputTokens: z.number().optional(),
+        cacheCreationInputTokens: z.number().optional(),
+      }),
+    )
+    .optional(),
 });
+
+/** The session's tokens of a result (`modelUsage` summed over the models), nothing when it has none. */
+function sessionUsageFrom(modelUsage: z.infer<typeof resultSchema>["modelUsage"]): { sessionUsage?: Usage } {
+  const models = Object.values(modelUsage ?? {});
+  if (models.length === 0) return {};
+  const sum = { ...ZERO_USAGE };
+  for (const m of models) {
+    sum.inputTokens += m.inputTokens ?? 0;
+    sum.outputTokens += m.outputTokens ?? 0;
+    sum.cacheCreationInputTokens += m.cacheCreationInputTokens ?? 0;
+    sum.cacheReadInputTokens += m.cacheReadInputTokens ?? 0;
+  }
+  return { sessionUsage: sum };
+}
 
 const initSchema = z.looseObject({ type: z.literal("system"), subtype: z.literal("init"), model: z.string().optional() });
 
@@ -95,6 +121,14 @@ export type ChatTurnInfo = {
   /** Model reported by the CLI, when it said. */
   model?: string | null;
   usage?: Usage;
+  /**
+   * The tokens of the whole session as the CLI reports them: with `--continue`
+   * they cover every turn of the conversation, and so does the `costUsd` that
+   * comes with them (see chat-cost.ts).
+   */
+  sessionUsage?: Usage;
+  /** Whether the turn resumed the CLI's conversation (false after the retry without `--continue`). */
+  continued?: boolean;
   /** Names of the tools the turn called, in order (`Read`, `mcp__mail__mail_search`...). */
   tools?: string[];
 };
@@ -138,7 +172,13 @@ export function parseChatOutput(code: number | null, stdout: string, stderr: str
   }
   if (result) {
     const r = result;
-    const info = { model, usage: usageFrom(r.usage), tools, costUsd: r.total_cost_usd ?? 0 };
+    const info = {
+      model,
+      usage: usageFrom(r.usage),
+      ...sessionUsageFrom(r.modelUsage),
+      tools,
+      costUsd: r.total_cost_usd ?? 0,
+    };
     if (r.subtype === "error_max_budget_usd") return { ok: false, reason: "budget", detail: r.subtype, ...info };
     if (r.is_error === true || r.subtype !== "success") {
       return { ok: false, reason: "error", detail: r.result ?? r.errors?.join("; ") ?? r.subtype, ...info };
@@ -298,9 +338,9 @@ export async function askChat(params: {
   try {
     const first = await attempt(params.continue, params.text);
     if (params.continue && !first.ok && first.reason === "no_conversation") {
-      return await attempt(false, params.freshText ?? params.text);
+      return { ...(await attempt(false, params.freshText ?? params.text)), continued: false };
     }
-    return first;
+    return { ...first, continued: params.continue };
   } finally {
     // The file holds expanded secrets: it only lives for the turn.
     if (mcpConfigPath) fs.rmSync(mcpConfigPath, { force: true });

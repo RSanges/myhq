@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { MODELS, mcpServersSchema, type McpServerConfig } from "../server/rooms";
 import { CHAT_ACTIONS, type ChatActionName } from "./actions";
+import { DEFAULT_FRESH_AFTER_MINUTES } from "./chat-resume";
 import { PREAMBLE_FIELDS, type PreambleConfig } from "./preamble";
 
 const relativePath = z.string().trim().min(1);
@@ -59,6 +60,12 @@ const chatSchema = z.strictObject({
   historyMaxChars: z.number().int().min(200).max(100_000).default(8_000),
   /** "cli": resume with --continue while the engine is Claude; "history": always a fresh turn with MyHQ's transcript. */
   resume: z.enum(["cli", "history"]).default("cli"),
+  /**
+   * Pause (minutes since the previous turn) after which a "cli" chat starts a
+   * new conversation with MyHQ's transcript instead of resuming the CLI's: the
+   * CLI's cache lasts an hour, so resuming later rewrites the whole conversation.
+   */
+  freshAfterMinutes: z.number().positive().max(10_080).default(DEFAULT_FRESH_AFTER_MINUTES),
   preamble: preambleSchema.optional(),
 });
 
@@ -100,6 +107,8 @@ export type ChatConfig = {
   historyTurns: number;
   historyMaxChars: number;
   resume: "cli" | "history";
+  /** Pause in minutes after which a "cli" chat starts a new conversation (see `chat.freshAfterMinutes`). */
+  freshAfterMinutes: number;
   /** The facts given before each message, or null (none). */
   preamble: PreambleConfig | null;
 };
@@ -166,6 +175,7 @@ export function loadAssistantConfig(home: string): AssistantConfig {
           historyTurns: data.chat.historyTurns,
           historyMaxChars: data.chat.historyMaxChars,
           resume: data.chat.resume,
+          freshAfterMinutes: data.chat.freshAfterMinutes,
           preamble: data.chat.preamble
             ? {
                 fields: data.chat.preamble.fields,

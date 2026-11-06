@@ -1492,7 +1492,16 @@ turn stays trusted).
 The assistant's chat is not a run: it does not count towards the daily cap and
 is not in the `runs` table. Each turn, answered or failed, is recorded in
 `chat_turns` instead: engine, model, status and failure reason, the four token
-counts, the cost, the number of tool calls and their names. `GET /api/usage`
+counts, the cost, the number of tool calls and their names. The cost is the
+turn's own: with `--continue` the CLI reports the whole resumed conversation
+(`total_cost_usd` and `modelUsage` add up the session, `usage` is the turn's),
+so MyHQ keeps the last total reported in `data/assistant/chat/cost-ledger.json`
+and records the difference (`src/assistant/chat-cost.ts`; an estimate from the
+turn's share of the session's tokens when that file is lost). A turn that comes
+more than `chat.freshAfterMinutes` (60) after the previous one does not use
+`--continue`: the CLI's cache is gone, and a new conversation with the last
+exchanges of `chat_messages` is far cheaper than writing the old one again
+(`src/assistant/chat-resume.ts`). `GET /api/usage`
 gives its totals for today and the week next to each agent's (`agents`,
 `chat`), the desk's meter lists the week per agent and for the conversation,
 and `/status` adds a line for the conversation. This is the measure that says

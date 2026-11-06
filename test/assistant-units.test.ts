@@ -216,6 +216,7 @@ test("validates assistant.json and resolves its paths from the home", () => {
     historyTurns: 12,
     historyMaxChars: 8_000,
     resume: "cli",
+    freshAfterMinutes: 60,
     preamble: null,
   });
   assert.equal(config.dropDir, path.resolve(home, "../vault/inbox"));
@@ -255,6 +256,7 @@ const chat: ChatConfig = {
   historyTurns: 12,
   historyMaxChars: 8_000,
   resume: "cli",
+  freshAfterMinutes: 60,
   preamble: null,
 };
 
@@ -327,7 +329,7 @@ test("retries without --continue when there is no conversation to continue", asy
       : { ok: true, text: "Fresh answer", costUsd: 0.01 };
   };
   const outcome = await askChat({ chat, text: "hello", continue: true, bin: "claude", env: {}, maxBudgetUsd: 0.5, run });
-  assert.deepEqual(outcome, { ok: true, text: "Fresh answer", costUsd: 0.01 });
+  assert.deepEqual(outcome, { ok: true, text: "Fresh answer", costUsd: 0.01, continued: false });
   assert.equal(seen.length, 2);
   assert.ok(seen[0]!.includes("--continue"));
   assert.ok(!seen[1]!.includes("--continue"));

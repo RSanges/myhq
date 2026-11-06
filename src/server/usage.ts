@@ -149,3 +149,11 @@ export function recordChatTurn(db: Db, turn: ChatTurnRecord): void {
     turn.endedAt,
   );
 }
+
+/** When the last chat turn ended (ISO date), or null when the chat never ran. */
+export function lastChatTurnEnd(db: Db): string | null {
+  const row = db.prepare("SELECT ended_at FROM chat_turns ORDER BY id DESC LIMIT 1").get() as
+    | { ended_at: string }
+    | undefined;
+  return row?.ended_at ?? null;
+}

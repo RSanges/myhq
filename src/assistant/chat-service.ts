@@ -19,11 +19,13 @@ import type { ApprovalDto } from "../server/feed";
 import { proposeAgent } from "../server/agent-need";
 import { findAgent, startRun as defaultStartRun, type RunnerDeps, type StartRunRequest } from "../server/runner";
 import { loadHome } from "../server/rooms";
-import { recordChatTurn } from "../server/usage";
+import { lastChatTurnEnd, recordChatTurn } from "../server/usage";
 import { strings } from "../ui/strings";
 import { confirmationAnswer, describeAction, isUntrustedTool, takeChatActions, type ChatAction } from "./actions";
 import { extractChoices, type Choice } from "./choices";
 import { askChat, chatEnv, composeChatInput, type ChatOutcome, type ChatRunner } from "./chat";
+import { chatTurnCost, readCostLedger, writeCostLedger } from "./chat-cost";
+import { shouldResumeCli } from "./chat-resume";
 import { EMPTY_ASSISTANT_CONFIG, loadAssistantConfig, type ChatConfig } from "./home-config";
 import { PendingQuestions } from "./pending";
 import { Preamble } from "./preamble";
@@ -261,8 +263,19 @@ export class ChatService {
     if (!chat) return done(failure(t.chat.notConfigured));
     const startedAt = new Date().toISOString();
     // MyHQ keeps the conversation: a fresh turn gets the transcript, a turn
-    // that resumes the CLI's conversation only what the bot sent since.
-    const resume = chat.resume === "cli" && this.continueChat;
+    // that resumes the CLI's conversation only what the bot sent since. After
+    // a pause the CLI's cache is gone and resuming would write the whole
+    // conversation again: the turn starts a new one instead.
+    const resume = shouldResumeCli({
+      mode: chat.resume,
+      conversationAlive: this.continueChat,
+      lastTurnEndedAt: lastChatTurnEnd(this.deps.db),
+      nowMs: Date.now(),
+      freshAfterMinutes: chat.freshAfterMinutes,
+    });
+    if (!resume && chat.resume === "cli" && this.continueChat) {
+      this.log(`chat starts a new conversation (pause of more than ${chat.freshAfterMinutes} min)`);
+    }
     const transcript = (since: "all" | "lastExchange") =>
       chatTranscript(this.deps.db, { turns: chat.historyTurns, maxChars: chat.historyMaxChars, since });
     // The facts of this instant come last, right before the user's words.
@@ -285,10 +298,10 @@ export class ChatService {
       writeGuardScript: writeGuardScript(this.deps.config.repoRoot),
       run: this.deps.runChat,
     });
-    this.meter(outcome, chat.model, startedAt);
+    const costUsd = this.meter(outcome, chat.model, startedAt);
     if (outcome.ok) {
       this.continueChat = true;
-      this.log(`chat answered (${outcome.costUsd.toFixed(4)} USD)`);
+      this.log(`chat answered (${costUsd.toFixed(4)} USD)`);
       // Actions asked for in this turn: executed now, or held for a yes when
       // the turn read untrusted content (a mail, a web page), whose text could
       // have asked for them. The core's own lines close the reply.
@@ -531,8 +544,32 @@ export class ChatService {
     }
   }
 
-  /** Records the turn for the meter (`chat_turns`). Never throws. */
-  private meter(outcome: ChatOutcome, model: string, startedAt: string): void {
+  /**
+   * Records the turn for the meter (`chat_turns`) and returns its cost: the
+   * cost of the turn alone, not the total of the resumed conversation the CLI
+   * reports (chat-cost.ts). Never throws.
+   */
+  private meter(outcome: ChatOutcome, model: string, startedAt: string): number {
+    let costUsd = outcome.costUsd ?? 0;
+    try {
+      if (outcome.costUsd !== undefined && outcome.costUsd > 0) {
+        const ledger = path.join(this.deps.config.dataDir, "assistant", "chat", "cost-ledger.json");
+        const turn = chatTurnCost({
+          reportedUsd: outcome.costUsd,
+          usage: outcome.usage ?? ZERO_USAGE,
+          sessionUsage: outcome.sessionUsage ?? null,
+          continued: outcome.continued ?? false,
+          previousReportedUsd: readCostLedger(ledger),
+        });
+        costUsd = turn.costUsd;
+        if (turn.method !== "reported") {
+          this.log(`chat turn cost ${costUsd.toFixed(4)} USD (${turn.method}, the CLI reported ${outcome.costUsd.toFixed(4)})`);
+        }
+        writeCostLedger(ledger, outcome.costUsd);
+      }
+    } catch (error) {
+      this.log(`chat cost not corrected: ${describe(error)}`);
+    }
     try {
       recordChatTurn(this.deps.db, {
         engine: "claude",
@@ -540,7 +577,7 @@ export class ChatService {
         status: outcome.ok ? "done" : "failed",
         reason: outcome.ok ? null : outcome.reason,
         usage: outcome.usage ?? ZERO_USAGE,
-        costUsd: outcome.costUsd ?? 0,
+        costUsd,
         tools: outcome.tools ?? [],
         startedAt,
         endedAt: new Date().toISOString(),
@@ -548,6 +585,7 @@ export class ChatService {
     } catch (error) {
       this.log(`chat turn not metered: ${describe(error)}`);
     }
+    return costUsd;
   }
 
   /** The home's post-reply command: its output goes to the log only. */
