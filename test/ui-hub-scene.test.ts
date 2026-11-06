@@ -10,6 +10,7 @@ const object = (overrides: Partial<DeskObject> & Pick<DeskObject, "id" | "object
   source: "approvals",
   status: "ok",
   error: null,
+  actions: [],
   count: 0,
   items: [],
   slots: null,

@@ -6,8 +6,9 @@ import { useEffect, useMemo } from "react";
 import { ChatPanel } from "./chat-panel";
 import { Desk, WatchDesk } from "./desk";
 import { markDeskSeen } from "./api";
-import { AgendaView, ItemsView, JournalView, PostitsView, StandardView } from "./desk-module-views";
+import { AgendaView, ItemsView, JournalView, StandardView } from "./desk-module-views";
 import { formatClock } from "./format";
+import { PostitsView } from "./postits-view";
 import { selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
 import { RECEPTION_ROOM } from "./reception";
 import type { Approval, DeskObject } from "./schemas";
@@ -207,7 +208,7 @@ function ModuleBody({
   if (sources.includes("blocked")) return <StandardView object={object} onChange={reload} />;
   if (object.object === "newspaper") return <JournalView object={object} agents={agents} onChange={reload} />;
   if (object.object === "calendar") return <AgendaView object={object} />;
-  if (object.object === "postits") return <PostitsView object={object} />;
+  if (object.object === "postits") return <PostitsView object={object} onChange={reload} />;
   return <ItemsView object={object} />;
 }
 

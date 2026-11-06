@@ -14,19 +14,29 @@ export function fillTemplate(template: string, file: string, platform: NodeJS.Pl
   return template.split("{file}").join(quoteForShell(file, platform));
 }
 
-/** Runs a command line of the home's configuration through the system shell. */
-export function runShell(command: string, options: { cwd: string; env: Env; timeoutMs: number }): Promise<ShellResult> {
+/**
+ * Runs a command line of the home's configuration through the system shell.
+ * `input`, when given, is written to the command's standard input (closed at
+ * once otherwise): the safe way to hand it a value, never put in the line itself.
+ */
+export function runShell(
+  command: string,
+  options: { cwd: string; env: Env; timeoutMs: number; input?: string },
+): Promise<ShellResult> {
   return new Promise((resolve) => {
     const child = spawn(command, {
       cwd: options.cwd,
       env: options.env as NodeJS.ProcessEnv,
       shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    // A command may exit without reading its input: not an error of ours. No input: closed at once.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(options.input);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => (stdout += chunk));

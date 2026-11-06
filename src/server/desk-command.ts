@@ -67,7 +67,31 @@ export type CommandSpec = {
   cacheMs: number;
 };
 
-type Run = (command: string, options: { cwd: string; env: Env; timeoutMs: number }) => Promise<ShellResult>;
+/** What an action command (`actions` of a command source) prints on stdout. */
+export const actionOutputSchema = z
+  .object({
+    ok: z.boolean(),
+    /** One line about what happened, in the language of the home. Required when `ok` is false: the owner is shown it. */
+    message: z.string().trim().min(1).max(300).optional(),
+  })
+  .refine((output) => output.ok || output.message !== undefined, "message is required when ok is false");
+export type ActionOutput = z.infer<typeof actionOutputSchema>;
+
+export const DESK_ACTION_ERRORS = ["ACTION_TIMEOUT", "ACTION_FAILED", "ACTION_INVALID_OUTPUT"] as const;
+export type DeskActionErrorCode = (typeof DESK_ACTION_ERRORS)[number];
+
+export type ActionResult =
+  | { ok: true; message: string | null }
+  | { ok: false; code: DeskActionErrorCode; message: string };
+
+export type ActionSpec = {
+  command: string;
+  /** Absolute working directory (inside the home). */
+  cwd: string;
+  timeoutMs: number;
+};
+
+type Run = (command: string, options: { cwd: string; env: Env; timeoutMs: number; input?: string }) => Promise<ShellResult>;
 
 /** Reads the stdout of a command: JSON (a leading BOM is allowed) that matches `commandOutputSchema`. */
 export function parseCommandOutput(stdout: string): { ok: true; output: CommandOutput } | { ok: false; message: string } {
@@ -89,6 +113,20 @@ export function parseCommandOutput(stdout: string): { ok: true; output: CommandO
   return { ok: true, output: parsed.data };
 }
 
+/** Reads the stdout of an action command: JSON (a leading BOM is allowed) `{ ok, message? }`. */
+export function parseActionOutput(stdout: string): { ok: true; output: ActionOutput } | { ok: false; message: string } {
+  const text = stdout.charCodeAt(0) === 0xfeff ? stdout.slice(1) : stdout;
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, message: `stdout is not JSON: ${(error as Error).message}` };
+  }
+  const parsed = actionOutputSchema.safeParse(json);
+  if (!parsed.success) return { ok: false, message: "stdout does not match { ok: boolean, message?: string } (a message when ok is false)" };
+  return { ok: true, output: parsed.data };
+}
+
 /**
  * Runs the home commands of the desk, one cache entry per command and
  * working directory. Two callers asking at once share the same run. A
@@ -98,6 +136,10 @@ export function parseCommandOutput(stdout: string): { ok: true; output: CommandO
 export class DeskCommands {
   private readonly cache = new Map<string, CommandResult>();
   private readonly inflight = new Map<string, Promise<CommandResult>>();
+  /** Bumped by `invalidate`: a run that started before it does not fill the cache. */
+  private readonly generations = new Map<string, number>();
+  /** The actions run one at a time: two of them never write the same file together. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly deps: {
@@ -124,30 +166,82 @@ export class DeskCommands {
     const key = keyOf(spec);
     const running = this.inflight.get(key);
     if (running) return running;
-    const promise = this.execute(spec).finally(() => this.inflight.delete(key));
+    const promise: Promise<CommandResult> = this.execute(spec).finally(() => {
+      if (this.inflight.get(key) === promise) this.inflight.delete(key);
+    });
     this.inflight.set(key, promise);
     return promise;
   }
 
-  private async execute(spec: CommandSpec): Promise<CommandResult> {
+  /** Forgets what a command printed: the next `get` runs it again (after an action changed its data). */
+  invalidate(spec: CommandSpec): void {
+    const key = keyOf(spec);
+    this.cache.delete(key);
+    this.inflight.delete(key);
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * Runs an action command of the home with `input` as JSON on its standard
+   * input (never in the command line), then invalidates the data command of
+   * the object, whatever the outcome (a failed action may have written). The
+   * command prints `{ ok, message? }`; it may exit with an error code as long
+   * as it says why in that JSON. Actions are queued, one at a time.
+   */
+  act(spec: ActionSpec, input: unknown, data: CommandSpec): Promise<ActionResult> {
+    const result = this.queue.then(() => this.runAction(spec, input, data));
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async runAction(spec: ActionSpec, input: unknown, data: CommandSpec): Promise<ActionResult> {
+    const shell = await this.shell(spec.command, spec.cwd, spec.timeoutMs, JSON.stringify(input));
+    this.invalidate(data);
+    const said = parseActionOutput(shell.stdout);
+    let result: ActionResult;
+    if (shell.timedOut) {
+      result = { ok: false, code: "ACTION_TIMEOUT", message: `timed out after ${spec.timeoutMs} ms` };
+    } else if (said.ok && !said.output.ok) {
+      // The command refused and said why, in its own words (whatever its exit code).
+      result = { ok: false, code: "ACTION_FAILED", message: said.output.message ?? "" };
+    } else if (shell.code !== 0) {
+      result = { ok: false, code: "ACTION_INVALID_OUTPUT", message: `exited with code ${shell.code ?? "none"}` };
+    } else if (!said.ok) {
+      result = { ok: false, code: "ACTION_INVALID_OUTPUT", message: said.message };
+    } else {
+      result = { ok: true, message: said.output.message ?? null };
+    }
+    if (!result.ok) {
+      const stderr = shell.stderr.trim().slice(-300);
+      this.deps.log?.(`[desk] action "${spec.command}" ${result.code}: ${result.message}${stderr ? `: ${stderr}` : ""}`);
+    }
+    return result;
+  }
+
+  /** One run of a command line through the shell: never throws, never waits past the timeout. */
+  private async shell(command: string, cwd: string, timeoutMs: number, input?: string): Promise<ShellResult> {
     const run = this.deps.run ?? runShell;
     // The shell is killed at the timeout, but a program it started may keep
     // the output open (Windows): the desk does not wait for it.
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<ShellResult>((resolve) => {
-      timer = setTimeout(() => resolve({ code: null, stdout: "", stderr: "", timedOut: true }), spec.timeoutMs + 200);
+      timer = setTimeout(() => resolve({ code: null, stdout: "", stderr: "", timedOut: true }), timeoutMs + 200);
     });
-    let shell: ShellResult;
     try {
-      shell = await Promise.race([
-        run(spec.command, { cwd: spec.cwd, env: extensionEnv(this.deps.env), timeoutMs: spec.timeoutMs }),
+      return await Promise.race([
+        run(command, { cwd, env: extensionEnv(this.deps.env), timeoutMs, ...(input === undefined ? {} : { input }) }),
         late,
       ]);
     } catch (error) {
-      shell = { code: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false };
+      return { code: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private async execute(spec: CommandSpec): Promise<CommandResult> {
+    const generation = this.generations.get(keyOf(spec)) ?? 0;
+    const shell = await this.shell(spec.command, spec.cwd, spec.timeoutMs);
     const at = this.now();
     let result: CommandResult;
     if (shell.timedOut) {
@@ -165,7 +259,8 @@ export class DeskCommands {
       const stderr = shell.stderr.trim().slice(-300);
       this.deps.log?.(`[desk] command "${spec.command}" ${result.message}${stderr ? `: ${stderr}` : ""}`);
     }
-    this.cache.set(keyOf(spec), result);
+    // An action may have changed the data while this run was reading it: do not keep a stale answer.
+    if ((this.generations.get(keyOf(spec)) ?? 0) === generation) this.cache.set(keyOf(spec), result);
     return result;
   }
 }

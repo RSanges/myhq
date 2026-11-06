@@ -8,12 +8,13 @@ import { isInside, type Env, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import {
   DeskCommands,
+  type ActionSpec,
   type CommandResult,
   type CommandSpec,
   type DeskCommandErrorCode,
   type DeskTone,
 } from "./desk-command";
-import { errorResponse, HqError } from "./errors";
+import { errorResponse, HqError, readJson } from "./errors";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { loadHome, type Home } from "./rooms";
 import { dayKey, dayRange } from "./time";
@@ -39,6 +40,19 @@ export const coreSourceSchema = z.union([
 ]);
 export type CoreSource = z.infer<typeof coreSourceSchema>;
 
+/** The actions a command source can offer on its page: add an item (a text), mark one done (its id). */
+export const DESK_ACTIONS = ["add", "done"] as const;
+export type DeskAction = (typeof DESK_ACTIONS)[number];
+
+/** A command of the home that performs an action: it gets the values as JSON on its standard input. */
+export const actionCommandSchema = z.strictObject({
+  command: z.string().trim().min(1).max(2000),
+  /** Working directory, relative to the home (the home by default), never outside it. */
+  cwd: z.string().trim().min(1).optional(),
+  timeoutSeconds: z.number().int().min(1).max(60).default(10),
+});
+export type ActionCommand = z.infer<typeof actionCommandSchema>;
+
 /** A command of the home, whose stdout is the data of the object. */
 export const commandSourceSchema = z.strictObject({
   command: z.string().trim().min(1).max(2000),
@@ -46,6 +60,8 @@ export const commandSourceSchema = z.strictObject({
   cwd: z.string().trim().min(1).optional(),
   timeoutSeconds: z.number().int().min(1).max(60).default(10),
   cacheSeconds: z.number().int().min(0).max(3600).default(60),
+  /** What the owner can do from the object's page; each action is a command of the home. */
+  actions: z.strictObject({ add: actionCommandSchema.optional(), done: actionCommandSchema.optional() }).optional(),
 });
 export type CommandSource = z.infer<typeof commandSourceSchema>;
 
@@ -181,6 +197,8 @@ export type DeskObjectDto = {
   source: string;
   status: "ok" | "error";
   error: { code: DeskCommandErrorCode; message: string } | null;
+  /** The actions the page can offer (`POST /api/desk/<id>/actions/<action>`): those a command source declares, none otherwise. */
+  actions: DeskAction[];
   count: number;
   items: DeskItemDto[];
   /** Free stretches given by a command (a calendar), null otherwise. */
@@ -460,10 +478,19 @@ export function commandSpec(home: string, source: CommandSource): CommandSpec | 
   return { command: source.command, cwd, timeoutMs: source.timeoutSeconds * 1000, cacheMs: source.cacheSeconds * 1000 };
 }
 
+/** The command of an action of a source, with its working directory resolved inside the home. */
+export function actionSpec(home: string, source: CommandSource, name: DeskAction): ActionSpec | { error: string } {
+  const action = source.actions?.[name];
+  if (!action) return { error: `the object has no "${name}" action` };
+  const cwd = path.resolve(home, action.cwd ?? ".");
+  if (!isInside(home, cwd)) return { error: `cwd "${action.cwd}" is outside the home` };
+  return { command: action.command, cwd, timeoutMs: action.timeoutSeconds * 1000 };
+}
+
 function fromCommand(result: CommandResult): Omit<DeskObjectDto, "id" | "object" | "label" | "source"> {
   const updatedAt = new Date(result.at).toISOString();
   if (!result.ok) {
-    return { status: "error", error: { code: result.code, message: result.message }, count: 0, items: [], slots: null, note: null, spines: null, updatedAt };
+    return { status: "error", error: { code: result.code, message: result.message }, actions: [], count: 0, items: [], slots: null, note: null, spines: null, updatedAt };
   }
   const seen = new Set<string>();
   const items = result.output.items.map((item, index): DeskItemDto => {
@@ -486,6 +513,7 @@ function fromCommand(result: CommandResult): Omit<DeskObjectDto, "id" | "object"
   return {
     status: "ok",
     error: null,
+    actions: [],
     count: result.output.count,
     items,
     slots: result.output.slots?.map((slot) => ({ start: slot.start, end: slot.end, label: slot.label ?? null })) ?? null,
@@ -513,7 +541,10 @@ async function resolveObject(object: DeskObjectConfig, deps: DeskDeps & { home: 
       const result: CommandResult = { ok: false, code: "COMMAND_FAILED", message: spec.error, at: deps.at.getTime() };
       return { ...head, ...fromCommand(result) };
     }
-    return { ...head, ...fromCommand(await deps.commands.get(spec)) };
+    const data = fromCommand(await deps.commands.get(spec));
+    // The page offers an action only when the command is there to answer it.
+    const actions = DESK_ACTIONS.filter((name) => source.actions?.[name] && !("error" in actionSpec(deps.config.home, source, name)));
+    return { ...head, ...data, actions: data.status === "ok" ? actions : [] };
   }
   const list = Array.isArray(source) ? source : [source];
   const seenAt = deskSeenAt(deps.db, object.id);
@@ -524,6 +555,7 @@ async function resolveObject(object: DeskObjectConfig, deps: DeskDeps & { home: 
     ...head,
     status: "ok",
     error: null,
+    actions: [],
     count: reads.reduce((sum, read) => sum + read.count, 0),
     items,
     slots: null,
@@ -597,7 +629,7 @@ export function deskCommands(home: string, env: Env = process.env): DeskCommands
 export const DESK_POLL_MS = 3_000;
 
 type DeskListener = (counts: DeskCountsDto) => void;
-type DeskHub = { listeners: Set<DeskListener>; stop: () => void };
+type DeskHub = { listeners: Set<DeskListener>; stop: () => void; poke: () => void };
 
 const signature = (counts: DeskCountsDto): string => JSON.stringify(counts.objects);
 
@@ -607,11 +639,26 @@ const signature = (counts: DeskCountsDto): string => JSON.stringify(counts.objec
  * is not announced. Returns the function that stops.
  */
 export function watchDesk(read: () => Promise<DeskCountsDto>, onChange: DeskListener, pollMs = DESK_POLL_MS): () => void {
+  return startWatch(read, onChange, pollMs).stop;
+}
+
+/** `watchDesk` with a way to read at once (after an action) instead of waiting for the next poll. */
+function startWatch(
+  read: () => Promise<DeskCountsDto>,
+  onChange: DeskListener,
+  pollMs: number,
+): { stop: () => void; poke: () => void } {
   let last: string | null = null;
   let stopped = false;
   let busy = false;
+  let again = false;
   const tick = async () => {
-    if (busy || stopped) return;
+    if (stopped) return;
+    if (busy) {
+      // A reading is under way and may predate the change that asked for this one.
+      again = true;
+      return;
+    }
     busy = true;
     try {
       const counts = await read();
@@ -622,14 +669,21 @@ export function watchDesk(read: () => Promise<DeskCountsDto>, onChange: DeskList
       console.error(`[desk] counts not read: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       busy = false;
+      if (again) {
+        again = false;
+        void tick();
+      }
     }
   };
   void tick();
   const timer = setInterval(() => void tick(), pollMs);
   timer.unref?.();
-  return () => {
-    stopped = true;
-    clearInterval(timer);
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    poke: () => void tick(),
   };
 }
 
@@ -643,22 +697,20 @@ export function subscribeDesk(deps: DeskDeps, listener: DeskListener, pollMs = D
   let hub = hubs.get(key);
   if (!hub) {
     const listeners = new Set<DeskListener>();
-    hub = {
-      listeners,
-      stop: watchDesk(
-        () => deskCounts({ ...deps, at: new Date() }),
-        (counts) => {
-          for (const each of [...listeners]) {
-            try {
-              each(counts);
-            } catch {
-              // A closed stream must not stop the others.
-            }
+    const watch = startWatch(
+      () => deskCounts({ ...deps, at: new Date() }),
+      (counts) => {
+        for (const each of [...listeners]) {
+          try {
+            each(counts);
+          } catch {
+            // A closed stream must not stop the others.
           }
-        },
-        pollMs,
-      ),
-    };
+        }
+      },
+      pollMs,
+    );
+    hub = { listeners, stop: watch.stop, poke: watch.poke };
     hubs.set(key, hub);
   }
   const current = hub;
@@ -691,6 +743,58 @@ export function deskSeenResponse(objectId: string): Response {
       throw new HqError("DESK_OBJECT_NOT_FOUND", 404, `The desk has no object "${objectId}".`);
     }
     return Response.json({ id: objectId, seenAt: markDeskSeen(db, objectId) });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+// --- Actions -------------------------------------------------------------------------
+
+/** What the owner sends to an action; unknown fields are refused. */
+const NO_CONTROL = /^[^\u0000-\u001f\u007f]*$/;
+export const actionInputSchemas = {
+  /** A new item, one line of text. */
+  add: z.strictObject({ text: z.string().trim().min(1).max(300).regex(NO_CONTROL, "one line, no control character") }),
+  /** The id of an item of the object, as GET /api/desk gives it. */
+  done: z.strictObject({ id: z.string().trim().min(1).max(200).regex(NO_CONTROL, "no control character") }),
+} satisfies Record<DeskAction, z.ZodType>;
+
+/** Reads the counts of the home's open streams now, instead of at the next poll (after an action). */
+export function pokeDesk(home: string): void {
+  globalForDesk.__myhqDeskHubs?.get(home)?.poke();
+}
+
+/**
+ * POST /api/desk/<id>/actions/<action>: runs the action command of a command
+ * source with the validated body as JSON on its standard input, then drops
+ * the object's cached data and lets the open streams know at once.
+ */
+export async function deskActionResponse(objectId: string, actionName: string, request: Request): Promise<Response> {
+  try {
+    const { config } = app();
+    const { desk } = readDeskConfig(config.home);
+    const object = desk.objects.find((each) => each.id === objectId);
+    if (!object) throw new HqError("DESK_OBJECT_NOT_FOUND", 404, `The desk has no object "${objectId}".`);
+    const name = DESK_ACTIONS.find((each) => each === actionName);
+    const source = object.source;
+    const isCommand = typeof source === "object" && !Array.isArray(source);
+    if (!name || !isCommand || !source.actions?.[name]) {
+      throw new HqError("DESK_ACTION_NOT_FOUND", 404, `The object "${objectId}" has no "${actionName}" action.`);
+    }
+    const input = actionInputSchemas[name].parse(await readJson(request));
+    const action = actionSpec(config.home, source, name);
+    const data = commandSpec(config.home, source);
+    if ("error" in action || "error" in data) {
+      throw new HqError("ACTION_FAILED", 422, "error" in action ? action.error : (data as { error: string }).error);
+    }
+    const result = await deskCommands(config.home).act(action, input, data);
+    // The data changed (or may have): the streams read the counts again right now.
+    pokeDesk(config.home);
+    if (!result.ok) {
+      const status = result.code === "ACTION_FAILED" ? 422 : result.code === "ACTION_TIMEOUT" ? 504 : 502;
+      throw new HqError(result.code, status, result.message);
+    }
+    return Response.json(result.message ? { ok: true, message: result.message } : { ok: true });
   } catch (error) {
     return errorResponse(error);
   }

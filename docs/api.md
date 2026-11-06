@@ -44,7 +44,11 @@ Every error has the same shape and an HTTP status:
 | `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a task id that does not exist. |
 | `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a run id that does not exist. |
 | `NOT_BLOCKED` | 409 | `POST /api/blocked/relaunch` or `/close` on a task that is neither `blocked` nor `pending`, or on a run that is not failed or interrupted, or has no task left blocked or given back. Nothing is changed. |
-| `DESK_OBJECT_NOT_FOUND` | 404 | `POST /api/desk/<id>/seen` with an id that is not an object of the desk. |
+| `DESK_OBJECT_NOT_FOUND` | 404 | `POST /api/desk/<id>/seen` or `/actions/<action>` with an id that is not an object of the desk. |
+| `DESK_ACTION_NOT_FOUND` | 404 | `POST /api/desk/<id>/actions/<action>` for an action the object does not declare (a core source declares none; a command source declares `add` and `done` in its `actions`). |
+| `ACTION_FAILED` | 422 | An action command refused (`{ "ok": false, "message" }`). The `message` is the command's own, in the language of the home, and meant to be shown. |
+| `ACTION_TIMEOUT` | 504 | An action command ran past its `timeoutSeconds`. |
+| `ACTION_INVALID_OUTPUT` | 502 | An action command exited with an error code, or printed something that is not `{ "ok", "message"? }`. Its stderr is in the server's log only. |
 | `SETTINGS_GROUP_NOT_FOUND` | 404 | `PUT /api/settings/<group>` with a group that is not `layout`, `limits`, `notifications` or `rooms`. |
 | `INTERNAL` | 500 | Unexpected error. |
 
@@ -483,7 +487,8 @@ source.addEventListener("approval", (e) => upsertApproval(JSON.parse(e.data)));
 
 The `desk` message is not a stored change either (no `id`, never replayed).
 The counts are read every three seconds while a stream is open, and only a
-change is sent (the first reading is not). Consumers fetch `GET /api/desk`
+change is sent (the first reading is not). An action of an object
+(`POST /api/desk/<id>/actions/<action>`) makes the read happen at once. Consumers fetch `GET /api/desk`
 again, and do so as well when the stream opens.
 
 ### `GET /api/desk`
@@ -503,6 +508,7 @@ A failing command never fails the route: its object has `status: "error"`.
       "source": "approvals",
       "status": "ok",
       "error": null,
+      "actions": [],
       "count": 1,
       "items": [
         {
@@ -530,6 +536,7 @@ A failing command never fails the route: its object has `status: "error"`.
       "source": "command",
       "status": "error",
       "error": { "code": "COMMAND_TIMEOUT", "message": "timed out after 10000 ms" },
+      "actions": [],
       "count": 0,
       "items": [],
       "slots": null,
@@ -563,6 +570,10 @@ A failing command never fails the route: its object has `status: "error"`.
 - `error.code`: `COMMAND_TIMEOUT`, `COMMAND_FAILED` (exit code, or a `cwd`
   outside the home) or `COMMAND_INVALID_OUTPUT` (not JSON, or not the
   contract). The command's stderr is in the server's log, never here.
+- `actions`: what the page can ask of the object, `add` and/or `done`
+  (`POST /api/desk/<id>/actions/<action>`): those a command source declares in
+  its `actions` while its data is readable, `[]` for a core source or a failing
+  command.
 - `configError`: why the `desk` block was not used (the default desk is then
   returned), `null` otherwise.
 
@@ -605,6 +616,29 @@ other sources are not affected). No body. Idempotent: it moves the mark to now.
 Response `200`: `{ "id": "journal", "seenAt": "2026-11-04T09:00:00.000Z" }`.
 
 Errors: `INVALID_INPUT` (not an object id), `DESK_OBJECT_NOT_FOUND` (404).
+
+### `POST /api/desk/[id]/actions/[action]`
+
+An action of a desk object whose source is a command of the home (see
+`home-layout.md`, "Actions"): `add` a new item, or mark one `done`. The server
+checks the body, then runs the action's command of the home with the values as
+one JSON document on its **standard input** (never in the command line), waits
+for it up to its `timeoutSeconds`, reads `{ "ok": true, "message"?: string }`
+on its stdout, drops the cached data of the object and sends the `desk` event
+at once. Actions run one at a time.
+
+| Action | Body | Meaning |
+|---|---|---|
+| `add` | `{ "text": string }` | A new item: 1 to 300 characters after trimming, on one line (no control character). |
+| `done` | `{ "id": string }` | The item with that `id`, as `GET /api/desk` gave it (1 to 200 characters). |
+
+Unknown fields are refused. Response `200`: `{ "ok": true }`, with the command's
+`"message"` when it gave one.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT` (400), `DESK_OBJECT_NOT_FOUND`,
+`DESK_ACTION_NOT_FOUND` (404), `ACTION_FAILED` (422), `ACTION_INVALID_OUTPUT` (502),
+`ACTION_TIMEOUT` (504). The data of the object is dropped from the cache whatever
+the outcome, since a command that failed may have written.
 
 ### `POST /api/blocked/relaunch`
 

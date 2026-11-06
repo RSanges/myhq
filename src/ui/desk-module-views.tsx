@@ -13,7 +13,7 @@ import { Badge, buttonClass, ErrorNote } from "./ui";
 
 // The interfaces of the desk objects whose data comes from GET /api/desk
 // rather than from the state of the desk: the newspaper, the calendar, the
-// post-its, the Standard (what is stuck at the agents), and a plain list for
+// Standard (what is stuck at the agents), and a plain list for
 // anything else.
 
 const t = strings.deskModules;
@@ -249,53 +249,6 @@ export function AgendaView({ object }: { object: DeskObject }) {
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-// --- The post-its ----------------------------------------------------------------------
-
-const TILTS = ["-rotate-1", "rotate-1", "rotate-0", "-rotate-[0.6deg]", "rotate-[0.8deg]"];
-
-function dueLine(item: DeskItem, today: string): string | null {
-  if (!item.at) return null;
-  const key = localDayKey(item.at);
-  if (!key) return null;
-  if (key < today || item.tone === "alert") return t.postits.overdue(formatLongDay(key));
-  if (key === today) return t.postits.today;
-  return t.postits.due(formatLongDay(key));
-}
-
-/** The post-its: one note per item of the list, the late ones marked. */
-export function PostitsView({ object }: { object: DeskObject }) {
-  const today = localDayKey(new Date()) ?? "";
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted">{t.postits.hint}</p>
-      <CommandNote object={object} />
-      {object.items.length === 0 ? (
-        <Empty text={t.postits.empty} />
-      ) : (
-        <ul className="grid grid-cols-1 gap-4 min-[24rem]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {object.items.map((item, index) => {
-            const due = dueLine(item, today);
-            const late = item.tone === "alert";
-            return (
-              <li
-                key={item.id}
-                className={`flex min-h-36 flex-col gap-2 rounded-sm bg-yellow-100 p-4 text-stone-900 shadow-md motion-safe:transition-transform motion-safe:hover:rotate-0 ${TILTS[index % TILTS.length]} ${
-                  late ? "border-t-4 border-red-600" : item.tone === "warn" ? "border-t-4 border-amber-500" : "border-t-4 border-yellow-200"
-                }`}
-              >
-                <span className="text-xs font-semibold text-stone-500">{index + 1}</span>
-                <span className="font-medium break-words">{item.title}</span>
-                {item.body && <span className="text-sm break-words text-stone-700">{item.body}</span>}
-                {due && <span className={`mt-auto text-xs font-semibold ${late ? "text-red-700" : "text-stone-600"}`}>{due}</span>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
     </div>
   );
 }

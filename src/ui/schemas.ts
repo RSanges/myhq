@@ -311,6 +311,8 @@ export const deskObjectSchema = z.object({
   source: z.string(),
   status: z.enum(["ok", "error"]),
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
+  /** What the page can do on the object (POST /api/desk/<id>/actions/<action>). */
+  actions: z.array(z.enum(["add", "done"])).default([]),
   count: z.number().int(),
   items: z.array(deskItemSchema),
   slots: z.array(z.object({ start: z.string(), end: z.string(), label: z.string().nullable() })).nullable(),
@@ -328,6 +330,9 @@ export const deskEventSchema = z.object({
 
 /** POST /api/desk/<id>/seen. */
 export const deskSeenSchema = z.object({ id: z.string(), seenAt: z.string() });
+
+/** POST /api/desk/<id>/actions/<action>. */
+export const deskActionResponseSchema = z.object({ ok: z.literal(true), message: z.string().optional() });
 
 /** POST /api/blocked/relaunch and /api/blocked/close. */
 export const relaunchResponseSchema = z.object({

@@ -910,3 +910,53 @@ something else than this contract puts its object in an error state
 and offers to try again, the desk goes on, and stderr goes to the server's log
 only. A command meant for the desk must be read-only and print no secret.
 
+#### Actions
+
+A command source may declare what the owner can do from the page of its object,
+each as another command of the home:
+
+```json
+{
+  "id": "postits",
+  "object": "postits",
+  "label": "Post-it",
+  "source": {
+    "command": "node tools/desk/afaire.mjs",
+    "cacheSeconds": 30,
+    "actions": {
+      "add": { "command": "node tools/desk/afaire.mjs add" },
+      "done": { "command": "node tools/desk/afaire.mjs done", "timeoutSeconds": 10 }
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `actions.add` | Adds an item. The page of a `postits` object then shows a « Nouveau post-it » field. |
+| `actions.done` | Marks an item done. The page then shows a « Fait » box on each post-it, which hides the note and leaves a few seconds to take it back before the command runs. |
+| `command` | Required. Run like the source's command (system shell, the home's environment, same `cwd` rules). |
+| `cwd`, `timeoutSeconds` | As for a source (the home by default; 1 to 60 seconds, default 10). There is no cache. |
+
+`POST /api/desk/<id>/actions/<action>` (`api.md`) validates the body and runs the
+command with the values as **one JSON document on standard input**, never in the
+command line, so that no text can be read as shell syntax: `{ "text": "..." }`
+for `add` (one line, 1 to 300 characters, trimmed), `{ "id": "..." }` for `done`
+(an `id` from the source's own `items`). The command prints one JSON document on
+stdout:
+
+```json
+{ "ok": true, "message": "Ajouté." }
+{ "ok": false, "message": "Ce post-it n'existe plus." }
+```
+
+`message` is one line in the language of the home (up to 300 characters), required
+when `ok` is false: the page shows it as is. A refusal may also exit with an error
+code. Any other failure (exit code without that JSON, other output, timeout) is
+reported by its code (`ACTION_INVALID_OUTPUT`, `ACTION_TIMEOUT`) and stderr goes to the
+log. Afterwards the server drops the cached output of the source's command (the
+next read runs it again) and the `desk` event carries the new count at once, so
+the scene follows. Actions run one at a time, so two of them never write the same file together
+(a command should still write atomically, in case something else reads it).
+Only command sources have actions.
+

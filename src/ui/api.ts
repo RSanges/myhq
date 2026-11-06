@@ -10,6 +10,7 @@ import {
   chatReplySchema,
   clearedSchema,
   closeResponseSchema,
+  deskActionResponseSchema,
   deskSchema,
   deskSeenSchema,
   dirListingSchema,
@@ -98,6 +99,11 @@ export const fetchDesk = (): Promise<Desk> => request("/api/desk", deskSchema);
 
 /** The page of a desk object was opened: what its unread sources counted is seen. */
 export const markDeskSeen = (id: string) => request(`/api/desk/${encodeURIComponent(id)}/seen`, deskSeenSchema, { method: "POST" });
+
+/** An action of a desk object: a new item (`add`, its text) or an item done (`done`, its id). */
+/** `keepalive`: the request outlives the page (an action sent as the owner leaves). */
+export const runDeskAction = (id: string, action: "add" | "done", body: { text: string } | { id: string }, keepalive = false) =>
+  request(`/api/desk/${encodeURIComponent(id)}/actions/${action}`, deskActionResponseSchema, { ...jsonInit("POST", body), keepalive });
 
 /** What the actions of the Standard act on: a task, or a failed or interrupted run and its tasks. */
 export type BlockedTarget = { kind: "task" | "run"; id: number };
