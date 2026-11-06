@@ -70,7 +70,7 @@ export function createRoomStore(): RoomStore {
                   rooms: state.rooms.map((room) => ({
                     name: room.name,
                     color: room.color,
-                    agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun })),
+                    agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun, roam: agent.roam ?? false })),
                   })),
                   approvals: state.approvals.pending,
                   reception: {
@@ -94,7 +94,7 @@ export function createRoomStore(): RoomStore {
                 model,
                 {
                   type: "hydrate",
-                  agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun })),
+                  agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun, roam: agent.roam ?? false })),
                   approvals: state.approvals.pending.filter(
                     (approval) => pileRoomOf(approval) === room.name || (here && pileRoomOf(approval) === RECEPTION_ROOM),
                   ),

@@ -80,6 +80,8 @@ export type FloorPlanOptions = {
   reception: string | null;
   /** Draw the counter and the receptionist. */
   receptionist?: boolean;
+  /** Agents who roam the floor (`floor.behaviour: "roam"`, `room/agent` keys): no desk, a broom closet in the lobby. */
+  roamers?: string[];
 };
 
 type LocalPiece = { name: string; turn: 0 | 1; u: number; v: number };
@@ -221,13 +223,26 @@ function placeSuite(plan: SuitePlan, x: number, y: number): { spec: RoomSpec; dr
   return { spec, drop: { stand: [plan.door, ROOM_DEPTH - 1] }, door: [x + plan.door, y + ROOM_DEPTH] };
 }
 
+/** The broom closet against the lobby's back wall, and where the roaming agents rest beside it (the second one and beyond share a cell). */
+const CLOSET: Cell = [3, 0];
+const CLOSET_REST: Cell[] = [
+  [2, 1],
+  [1, 1],
+];
+
 /**
  * The lobby, LOBBY_SIZE square: the coffee corner against the back wall, a
  * bookshelf and a sofa by a rug, the reception counter, the receptionist
- * behind it. It opens downwards (+y) onto the main corridor, at the corner of
- * the spine; room proposals are dropped in its opening.
+ * behind it; with agents who roam the floor, a broom closet against the back
+ * wall, and they rest beside it. It opens downwards (+y) onto the main
+ * corridor, at the corner of the spine; room proposals are dropped in its
+ * opening.
  */
-function lobbyRoom(x: number, y: number): { spec: RoomSpec; drop: DropSpec; counter: NonNullable<BuildRoom["counter"]>; door: Cell } {
+function lobbyRoom(
+  x: number,
+  y: number,
+  roamers: string[],
+): { spec: RoomSpec; drop: DropSpec; counter: NonNullable<BuildRoom["counter"]>; closet: BuildRoom["closet"]; door: Cell } {
   const size = LOBBY_SIZE;
   const piece = (name: string, turn: 0 | 1, at: Cell): PieceSpec => ({ name, turn, at });
   const spec: RoomSpec = {
@@ -263,12 +278,15 @@ function lobbyRoom(x: number, y: number): { spec: RoomSpec; drop: DropSpec; coun
         [LOBBY_DOOR, 2],
         [LOBBY_DOOR, size],
       ],
+      // From the first aisle to the cells by the closet (only with roaming agents).
+      ...(roamers.length > 0 ? [[[2, 2], ...CLOSET_REST] satisfies Cell[]] : []),
     ],
   };
   return {
     spec,
     drop: { stand: [LOBBY_DOOR, size - 1] },
     counter: { at: [5, 3], staff: [4, 4], stand: [4, 2], faces: "SE", turn: 1 },
+    closet: roamers.length > 0 ? { at: CLOSET, turn: 0, rest: CLOSET_REST, faces: "SW", keys: roamers } : undefined,
     door: [x + LOBBY_DOOR, y + size],
   };
 }
@@ -387,8 +405,8 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
     let right = spine;
     let leftmost = spine;
     if (index === 0) {
-      const lobby = lobbyRoom(spine - LOBBY_SIZE, rib - LOBBY_SIZE);
-      built.push({ spec: lobby.spec, project: RECEPTION_ROOM, color: null, keys: [], drop: lobby.drop, counter: lobby.counter, sign: true });
+      const lobby = lobbyRoom(spine - LOBBY_SIZE, rib - LOBBY_SIZE, options.roamers ?? []);
+      built.push({ spec: lobby.spec, project: RECEPTION_ROOM, color: null, keys: [], drop: lobby.drop, counter: lobby.counter, closet: lobby.closet, sign: true });
       right = spine - LOBBY_SIZE - BESIDE;
       office = ownerOffice(right - OFFICE_LENGTH, rib - ROOM_DEPTH);
       right -= OFFICE_LENGTH + BESIDE;

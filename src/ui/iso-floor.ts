@@ -80,7 +80,14 @@ export const floorSetSchema = z.object({
   version: z.literal(1),
   cell: z.object({ voxels: z.literal(CELL), w: z.number(), h: z.number() }),
   wall: z.object({ height: z.number(), thick: z.number(), rim: z.number() }),
-  atlas: z.object({ file: z.string(), w: z.number(), h: z.number(), frames: z.array(z.tuple([z.number(), z.number(), z.number(), z.number()])) }),
+  atlas: z.object({
+    file: z.string().regex(/^[\w.-]+\.png$/),
+    w: z.number(),
+    h: z.number(),
+    /** A hash of the atlas image: the runtime asks for `file?v=<hash>`, so the frames always match the image. */
+    hash: z.string().regex(/^[0-9a-f]+$/).optional(),
+    frames: z.array(z.tuple([z.number(), z.number(), z.number(), z.number()])),
+  }),
   tiles: z.record(z.string(), z.array(tileSchema).min(1)),
   walls: z.object({
     wall: z.object({ 0: wallSchema, 1: wallSchema }),
@@ -122,6 +129,9 @@ export const NEUTRAL_PEOPLE = [
 ] as const;
 
 export const RECEPTIONIST_SHEET = "/sprites/iso-receptionist.png";
+
+/** The janitor (broom and bucket, its `type` row sweeps): the sheet of an agent that roams the floor without one of its own. */
+export const JANITOR_SHEET = "/sprites/iso-janitor.png";
 
 /** The neutral person of an agent: always the same for the same key (a small string hash). */
 export function neutralPersonFor(key: string): string {
@@ -194,6 +204,47 @@ export function depthOrder(boxes: Box[]): number[] {
 
 /** The footprint of a character standing at (x, y): 8 by 8 voxels around its feet. */
 export const characterBox = (x: number, y: number): Box => ({ x0: x - 4, y0: y - 4, x1: x + 4, y1: y + 4 });
+
+/** What a thing covers on the screen, in art pixels (x1 and y1 excluded). */
+export type ScreenRect = { x0: number; y0: number; x1: number; y1: number };
+
+const overlaps = (a: ScreenRect, b: ScreenRect): boolean => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+/**
+ * Where the characters that stand or walk go in the depth order, the walls
+ * and furniture keeping theirs. The order of the static items is computed
+ * once, from their own boxes (`rank[i]`, from `depthOrder`): `behind` is not
+ * transitive, so sorting the characters together with them made the order
+ * of the furniture itself change with where a character stood, and walls or
+ * pieces swapped places for a frame as someone walked by. Here a character
+ * goes just in front of the frontmost static item that is behind it among
+ * the ones it overlaps on the screen (behind all of them when none is), and
+ * nothing else moves. Characters with the same place among the static items
+ * are ordered among themselves by their footprints (back to front), then by
+ * index. Returns a depth per mover, between the ranks of the static items.
+ */
+export function moverDepths(
+  statics: { box: Box; rect: ScreenRect }[],
+  rank: number[],
+  movers: { box: Box; rect: ScreenRect }[],
+): number[] {
+  const base = movers.map((mover) => {
+    let after = -1;
+    statics.forEach((item, index) => {
+      if (rank[index]! > after && overlaps(item.rect, mover.rect) && behind(item.box, mover.box) && !behind(mover.box, item.box)) after = rank[index]!;
+    });
+    return after;
+  });
+  const order = movers
+    .map((mover, index) => ({ index, key: mover.box.x0 + mover.box.y0 }))
+    .sort((a, b) => base[a.index]! - base[b.index]! || a.key - b.key || a.index - b.index);
+  const depths = new Array<number>(movers.length);
+  // A slot between two ranks, split evenly among its characters.
+  order.forEach(({ index }, position) => {
+    depths[index] = base[index]! + 0.25 + (position + 1) / (2 * (movers.length + 1));
+  });
+  return depths;
+}
 
 // ---- The scene of a floor ------------------------------------------------------------------------
 

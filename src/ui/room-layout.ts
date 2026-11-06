@@ -294,6 +294,11 @@ export type BuildRoom = {
   counter?: { at: Cell; staff: Cell; stand: Cell; faces: Direction; turn: 0 | 1 };
   /** The user's own office (single floor), drawn whole from the floor set. */
   office?: boolean;
+  /**
+   * The broom closet of the lobby (single floor) and the agents who roam the floor (`floor.behaviour:
+   * "roam"`): each rests in a cell of `rest` (the last one is shared beyond them), facing `faces`.
+   */
+  closet?: { at: Cell; turn: 0 | 1; rest: Cell[]; faces: Direction; keys: string[] };
   /** A signboard on its back wall (single floor). */
   sign?: boolean;
 };
@@ -369,6 +374,16 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
       offices.push({ key, room: index, chair, seat, faces, stand });
       seated += 1;
     });
+    if (build.closet && build.closet.keys.length > 0) {
+      const { at, turn, rest, faces, keys } = build.closet;
+      place(spec, index, "broom-closet", turn, at);
+      keys.forEach((key, order) => {
+        // A roaming agent has no chair: it stands by the closet, where the others sit at their desks.
+        const stand = centreOf(add(spec, rest[Math.min(order, rest.length - 1)]!));
+        stands.push(stand);
+        offices.push({ key, room: index, chair: null, seat: stand, faces, stand });
+      });
+    }
     for (const aisle of spec.aisles ?? []) lines.push(aisle.map((cell) => centreOf(add(spec, cell))));
     if (build.drop && build.project !== null) {
       const stand = centreOf(add(spec, build.drop.stand));
@@ -499,6 +514,12 @@ export function boundsOf(rooms: PlacedRoom[], hall: Cell[]): RoomLayout["bounds"
   const pad = 8;
   return { x: minX - pad, y: minY, w: maxX - minX + 2 * pad, h: maxY - minY + 2 * pad };
 }
+
+/** The node of the graph at a point, or -1 when no node is there. */
+export const graphNodeAt = (layout: RoomLayout, point: Point): number => layout.graph.nodes.findIndex((node) => same(node, point));
+
+/** The shortest way along the aisles and lanes between two nodes of the graph. */
+export const routeBetween = (layout: RoomLayout, from: number, to: number): Point[] => graphRoute(layout.graph, from, to);
 
 export function officeOf(layout: RoomLayout, key: string): Office | null {
   if (key === RECEPTION_KEY) return layout.reception?.office ?? null;

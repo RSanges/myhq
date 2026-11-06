@@ -527,6 +527,10 @@ export const strings = {
       returning: "revient à sa table",
       failed: "tour échoué",
       blocked: "bloqué, attend une réponse",
+      roaming: "fait sa ronde",
+      sweeping: "balaie",
+      stowing: "retourne au placard",
+      closet: "au placard",
     },
     /** Said by the screen reader when the coarse state of an agent changes. */
     announce: {

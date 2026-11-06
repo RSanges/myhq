@@ -8,7 +8,7 @@ import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
 import { parseHash } from "./deep-link";
 import { pileHref } from "./floor-mode";
-import { neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
+import { JANITOR_SHEET, neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
 import { pendingTitle, selectAgents, selectPending, selectUnseen } from "./model";
 import { RECEPTION_AGENT, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
@@ -167,8 +167,10 @@ export function RoomPage() {
   const boardForCanvas = useMemo(() => ({ title: t.board.title, rows: board }), [board]);
   const sprites = useMemo(
     () => ({
-      // An agent's own iso sheet (`isoSprite`), or a neutral person picked from its key.
-      ...Object.fromEntries(roomAgents.map((agent) => [agent.key, agent.isoSprite ?? neutralPersonFor(agent.key)])),
+      // An agent's own iso sheet (`isoSprite`), or the janitor for one that roams the floor, or a neutral person picked from its key.
+      ...Object.fromEntries(
+        roomAgents.map((agent) => [agent.key, agent.isoSprite ?? (agent.roam ? JANITOR_SHEET : neutralPersonFor(agent.key))]),
+      ),
       ...(receptionHere ? { [RECEPTION_KEY]: RECEPTIONIST_SHEET } : {}),
     }),
     [roomAgents, receptionHere],

@@ -12,6 +12,7 @@ import {
   GLYPH_SCALE,
   inkFor,
   paintFace,
+  placeSign,
   planSign,
   shrinkLogo,
   SIGN_INK,
@@ -57,7 +58,7 @@ test("the sign font: the zero is a plain ring (a slash made it read as a crossed
   assert.equal(new Set([zero, o, eight].map((glyph) => glyph.join("/"))).size, 3, "0, O and 8 are three different glyphs");
 });
 
-test("a board as long as its name and logo need, in whole segments, never longer than its wall", () => {
+test("a board as long as its name and logo need, in whole segments, and the name never cut", () => {
   const short = planSign(sign, font, "art", 0, 10 * CELL);
   const long = planSign(sign, font, "planygo", 0, 10 * CELL);
   assert.ok(short.segments <= long.segments);
@@ -68,11 +69,13 @@ test("a board as long as its name and logo need, in whole segments, never longer
   const logo = planSign(sign, font, "planygo", 14, 10 * CELL);
   assert.equal(logo.logoWidth, 14);
   assert.ok(logo.segments >= long.segments);
-  // A wall too short: the logo first, then the end of the name.
+  // A wall too short: the logo goes, the name stays whole, and the board grows past the wall, centred over it.
   const tight = planSign(sign, font, "a-very-long-room-name", 14, 5 * CELL);
-  assert.ok(boardLength(sign, tight.segments) <= 5 * CELL - 8, "the board stays on its wall");
   assert.equal(tight.logoWidth, 0);
-  assert.ok(tight.text.length < "a-very-long-room-name".length && "A-VERY-LONG-ROOM-NAME".startsWith(tight.text));
+  assert.equal(tight.text, "A-VERY-LONG-ROOM-NAME", "never a letter cut");
+  assert.ok(faceWidth(sign, tight.segments) >= 2 * SIGN_PADDING + textWidth(font, tight.text));
+  const over = placeSign(sign, font, "a-very-long-room-name", 14, 5 * CELL, false);
+  assert.ok(over.from < 0 && over.from + over.length > 5 * CELL, "it overhangs both ends of its wall, centred");
   assert.equal(signText(font, "été"), "T", "characters the font lacks are left out");
   assert.equal(textWidth(font, "I"), GLYPH_SCALE * 3);
 });
@@ -156,4 +159,54 @@ test("the counters: a board of the floor set as long as the layout assumes, by t
   const x = suite.x * CELL - 70;
   assert.ok(hiddenByWalls(layout, x, suite.y * CELL + COUNTER_FROM + 10 - 70), "the counter hides what is right behind it");
   assert.ok(!hiddenByWalls(layout, x, (suite.y + 5) * CELL - 70), "the rest of the side wall only hides up to its own top");
+});
+
+/** The rooms of a real home (names and team sizes), the user's office and the lobby: every name whole, on its own wall. */
+test("the signboards of real rooms hold their whole name and stand on their room's back wall, their counter too", () => {
+  const rooms = [
+    ["assistant", 6],
+    ["creation", 6],
+    ["enseignes", 2],
+    ["planygo", 9],
+    ["portfolio", 2],
+  ] as const;
+  const layout = layoutFloor(
+    rooms.map(([name, count]) => ({ name, color: null, keys: Array.from({ length: count }, (_, k) => `${name}/a${k}`) })),
+    { reception: "assistant", receptionist: true },
+  );
+  const names = new Map<string | null, string>([["_hq", "Accueil"]]);
+  let checked = 0;
+  for (const room of layout.rooms) {
+    if (!room.sign) continue;
+    const name = room.kind === "owner" ? "Votre bureau" : (names.get(room.project) ?? room.project!);
+    const wall = room.w * CELL;
+    // With no logo, a small one and the widest a logo can be (three times its height).
+    for (const logo of [0, 14, 42]) {
+      const { plan, from, length, counter } = placeSign(sign, font, name, logo, wall, room.counter);
+      assert.equal(plan.text, signText(font, name), `${name}: the whole name`);
+      assert.equal(plan.text.length, name.replace(/[^a-z0-9 &'._-]/gi, "").length, `${name}: no letter left out`);
+      const content = (plan.logoWidth > 0 ? plan.logoWidth + 4 : 0) + textWidth(font, plan.text);
+      assert.ok(plan.start >= SIGN_PADDING - 1 && plan.start + content <= faceWidth(sign, plan.segments), `${name}: the text inside its face`);
+      // Painted, every glyph pixel lands on a column of the face (nothing drawn past its end).
+      const columns = faceColumns(sign, plan.segments);
+      const face = paintFace(columns, { ...plan, logoWidth: 0 }, font, 0xffffff, null);
+      const inked = face ? [...face.pixels.data].filter((_, i) => i % 4 === 3 && face.pixels.data[i] === 255).length : 0;
+      const glyphs = [...plan.text].reduce((sum, char) => sum + (font.glyphs[char] ?? []).join("").split("#").length - 1, 0);
+      assert.equal(inked, glyphs * GLYPH_SCALE * GLYPH_SCALE, `${name}: every letter painted whole`);
+      assert.ok(from >= 0 && from + length <= wall, `${name}: on its own back wall (${from} to ${from + length} of ${wall})`);
+      if (counter?.beside) assert.ok(counter.from + COUNTER_LENGTH <= wall, `${name}: its counter beside it, on the same wall`);
+      if (counter && !counter.beside) assert.ok(counter.from + COUNTER_LENGTH <= room.d * CELL, `${name}: its counter on the other back wall`);
+    }
+    checked += 1;
+  }
+  assert.equal(checked, rooms.length + 2, "every room, the user's office and the lobby");
+});
+
+test("a counter's digits are as tall as the letters of the names, on a face as tall as theirs", () => {
+  const digit = font.glyphs["7"]!;
+  const letter = font.glyphs["A"]!;
+  assert.equal(digit.length, letter.length);
+  const counter = faceColumns(sign, COUNTER_SEGMENTS);
+  const name = faceColumns(sign, 6);
+  assert.equal(Math.min(...counter.map((col) => col.h)), Math.min(...name.map((col) => col.h)));
 });

@@ -17,6 +17,7 @@ import {
   type Point,
   type RoomLayout,
 } from "./room-layout";
+import { buildTour, homeMs, tourPose, wayHome, type Tour } from "./roam";
 
 // The animation model of the room: what each agent is doing, derived from the
 // entities of the SSE stream (docs/api.md). Pure and testable: no canvas, no
@@ -63,7 +64,7 @@ export const HQ_TASK_UPDATE_TOOL = "mcp__hq__hq_task_update";
 
 // ---- Poses and sheet animations ---------------------------------------------------
 
-export type Pose = "sit" | "type" | "walk" | "stand" | "think" | "sleep";
+export type Pose = "sit" | "type" | "walk" | "stand" | "think" | "sleep" | "sweep";
 
 /** Animations of an iso character sheet (docs/home-layout.md): a row per direction and animation. */
 export type Animation = "idle" | "walk" | "type";
@@ -83,6 +84,8 @@ export const POSES: Record<Pose, { animation: Animation; frames: number; ms: num
   stand: { animation: "idle", frames: 2, ms: 600 },
   think: { animation: "type", frames: 1, ms: 0 },
   sleep: { animation: "type", frames: 1, ms: 0 },
+  // The janitor's sheet sweeps, standing, in its `type` row (scripts/iso/README.md).
+  sweep: { animation: "type", frames: 4, ms: 150 },
 };
 
 /** Frame index of a pose at `at`; held on the first frame with reduced motion. A walk is framed by distance (`walkFrame`). */
@@ -107,7 +110,8 @@ export type ApprovalSeed = Pick<Approval, "id" | "room" | "agentId" | "status"> 
  * shared room (`forRoom`), or the room of the agent that submitted it.
  */
 export const pileRoomOf = (approval: { room: string; forRoom?: string | null }): string => approval.forRoom ?? approval.room;
-export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null };
+/** `roam`: the agent roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`). */
+export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null; roam?: boolean };
 
 export type RoomInput =
   /**
@@ -162,6 +166,12 @@ type AgentRuntime = {
   typingUntil: number;
   thought: { text: string; until: number } | null;
   trips: Trip[];
+  /** It roams the floor (no desk, no errands): during a run it does its round (roam.ts), otherwise it rests by the closet. */
+  roam: boolean;
+  /** When the round of the current run began. */
+  roamSince: number;
+  /** The walk back to the closet after a run, from where the round was when the run ended. */
+  homing: { start: number; path: Point[]; ms: number } | null;
 };
 
 type ApprovalState = {
@@ -301,13 +311,14 @@ function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
       case "tool_call": {
         const input = toolInput(view.input);
         const typing = { ...active, typingUntil: at + TYPING_MS, thought: null };
-        if (view.name === HQ_MESSAGE_TOOL) {
+        // A roaming agent runs no errands: it goes on with its round (or stays by its closet).
+        if (view.name === HQ_MESSAGE_TOOL && !agent.roam) {
           // A message to nobody in this room is just a tool call.
           const room = typeof input.room === "string" && input.room !== "" ? input.room : null;
           const trip = startVisit(model, active, typeof input.to === "string" ? input.to : "", room, at);
           return trip === active ? typing : { ...trip, thought: null };
         }
-        if (view.name === HQ_SUBMIT_TOOL) {
+        if (view.name === HQ_SUBMIT_TOOL && !agent.roam) {
           const forRoom = typeof input.forRoom === "string" && input.forRoom !== "" ? input.forRoom : null;
           const trip = startSubmit(model, active, forRoom, at);
           return trip === active ? typing : { ...trip, thought: null };
@@ -332,7 +343,17 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
     if (run.status === "running") {
       if (run.id > agent.runId) {
         // A new run starts afresh: no question mark, no leftover bubble. The same run seen again changes nothing.
-        return { ...agent, running: true, runId: run.id, lastActive: at, question: null, thought: null, typingUntil: 0 };
+        return {
+          ...agent,
+          running: true,
+          runId: run.id,
+          lastActive: at,
+          question: null,
+          thought: null,
+          typingUntil: 0,
+          roamSince: roundStart(run, at),
+          homing: null,
+        };
       }
       return { ...agent, running: true, lastActive: at };
     }
@@ -342,8 +363,40 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
       runId: run.id,
       lastActive: at,
       question: run.status === "failed" ? "failed" : agent.question,
+      homing: agent.roam && agent.running ? homingOf(model.layout, agent, at) : agent.homing,
     };
   });
+}
+
+/** When the round of a run begins: when the run started (so a reload finds the agent where it was), never later than now. */
+function roundStart(run: RunSeed, at: number): number {
+  const started = parseTime(run.startedAt);
+  return Number.isFinite(started) ? Math.min(started, at) : at;
+}
+
+/** The rounds of each layout, by resting spot (built once: the layout object only changes with the floor). */
+const tours = new WeakMap<RoomLayout, Map<string, Tour>>();
+function tourOf(layout: RoomLayout, office: Office): Tour {
+  let byKey = tours.get(layout);
+  if (!byKey) {
+    byKey = new Map();
+    tours.set(layout, byKey);
+  }
+  let tour = byKey.get(office.key);
+  if (!tour) {
+    tour = buildTour(layout, office);
+    byKey.set(office.key, tour);
+  }
+  return tour;
+}
+
+/** The walk back to the closet of a roaming agent whose run ends at `at`, from where its round was. */
+function homingOf(layout: RoomLayout, agent: AgentRuntime, at: number): AgentRuntime["homing"] {
+  const office = officeOf(layout, agent.key);
+  if (!office) return null;
+  const tour = tourOf(layout, office);
+  const path = wayHome(layout, tour, tourPose(tour, at - agent.roamSince, office.faces));
+  return path.length >= 2 ? { start: at, path, ms: homeMs(path) } : null;
 }
 
 function applyApproval(model: RoomModel, approval: ApprovalSeed, at: number): RoomModel {
@@ -397,11 +450,13 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
   const sameKeys =
     (reception !== null) === model.reception &&
     keys.length + (reception ? 1 : 0) === model.agents.length &&
-    keys.every((key, index) => key === model.agents[index]?.key);
+    keys.every((key, index) => key === model.agents[index]?.key && (input.agents[index]!.roam ?? false) === model.agents[index]?.roam);
+  // A roaming agent has no desk; the floor of one room has no closet either, so it is not drawn there (only listed).
+  const desks = keys.filter((_, index) => !input.agents[index]!.roam);
   return {
     ...model,
     reception: reception !== null,
-    layout: sameKeys ? model.layout : layoutRoom(keys, { reception: reception !== null }),
+    layout: sameKeys ? model.layout : layoutRoom(desks, { reception: reception !== null }),
     agents,
     approvals,
   };
@@ -410,10 +465,13 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
 /** A runtime for a seed, or the one the model already had for that key (its trips and bubbles go on). */
 function runtimeOf(model: RoomModel, key: string, seed: AgentSeed, at: number): AgentRuntime {
   const kept = model.agents.find((agent) => agent.key === key);
-  if (kept) return { ...kept, name: seed.name };
+  if (kept) return { ...kept, name: seed.name, roam: seed.roam ?? false };
   const run = seed.lastRun;
   const running = run?.status === "running";
   return {
+    roam: seed.roam ?? false,
+    roamSince: run && running ? roundStart(run, at) : Number.NEGATIVE_INFINITY,
+    homing: null,
     key,
     id: seed.id,
     name: seed.name,
@@ -445,13 +503,26 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
     };
   }
   // The plan changes with the rooms, their agents, their colours and the reception: rebuilt only then.
-  const signature = JSON.stringify([input.rooms.map((room) => [room.name, room.color, room.agents.map((agent) => agent.id)]), input.reception.room, receptionist !== null]);
+  const signature = JSON.stringify([
+    input.rooms.map((room) => [room.name, room.color, room.agents.map((agent) => [agent.id, agent.roam ?? false])]),
+    input.reception.room,
+    receptionist !== null,
+  ]);
+  // Roaming agents have no desk in their room's suite: they rest by the broom closet of the lobby.
   const layout =
     signature === floorSignatures.get(model.layout)
       ? model.layout
       : layoutFloor(
-          input.rooms.map((room) => ({ name: room.name, color: room.color, keys: room.agents.map((agent) => agentKey(room.name, agent.id)) })),
-          { reception: input.reception.room, receptionist: receptionist !== null },
+          input.rooms.map((room) => ({
+            name: room.name,
+            color: room.color,
+            keys: room.agents.filter((agent) => !agent.roam).map((agent) => agentKey(room.name, agent.id)),
+          })),
+          {
+            reception: input.reception.room,
+            receptionist: receptionist !== null,
+            roamers: input.rooms.flatMap((room) => room.agents.filter((agent) => agent.roam).map((agent) => agentKey(room.name, agent.id))),
+          },
         );
   floorSignatures.set(layout, signature);
   return { ...model, rooms: names, reception: receptionist !== null, layout, agents, approvals };
@@ -490,7 +561,12 @@ export type AgentStatus =
   | { kind: "dropping" }
   | { kind: "returning" }
   | { kind: "failed" }
-  | { kind: "blocked" };
+  | { kind: "blocked" }
+  /** A roaming agent (the janitor): on its round, sweeping, walking back to the closet, by the closet. */
+  | { kind: "roaming" }
+  | { kind: "sweeping" }
+  | { kind: "stowing" }
+  | { kind: "closet" };
 
 /** The coarse state announced to a screen reader: it changes far less often than `AgentStatus`. */
 export type Coarse =
@@ -595,7 +671,7 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
 
 const isAwake = (agent: AgentRuntime, at: number): boolean => agent.running || at - agent.lastActive < ASLEEP_AFTER_MS;
 
-function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number, reduced: boolean): AgentView {
+function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number, reduced: boolean, layout: RoomLayout): AgentView {
   const base = { key: agent.key, id: agent.id, name: agent.name, index };
   const phase = index * 137;
   const trip = agent.trips.find((candidate) => at >= candidate.start && at < tripEnd(candidate));
@@ -627,6 +703,31 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
       coarse,
     };
   };
+
+  if (agent.roam) {
+    const thought = agent.thought && at < agent.thought.until ? agent.thought.text : null;
+    const bubble: Bubble | null = agent.question ? { kind: "question" } : thought !== null ? { kind: "thought", text: thought } : null;
+    const stuck: AgentStatus | null = agent.question ? { kind: agent.question } : null;
+    const coarse: Coarse = stuck ? { kind: "stuck" } : { kind: "working" };
+    const walking = { seated: false };
+    if (agent.running) {
+      // With reduced motion there is no round: the agent stays by its closet, its status says it is on it.
+      if (reduced) return make("stand", stuck ?? { kind: "roaming" }, coarse, bubble);
+      const pose = tourPose(tourOf(layout, spot), at - agent.roamSince, spot.faces);
+      return pose.sweeping
+        ? make("sweep", stuck ?? { kind: "sweeping" }, coarse, bubble, pose, walking)
+        : make("walk", stuck ?? { kind: "roaming" }, coarse, bubble, pose, walking);
+    }
+    const homing = agent.homing;
+    if (homing && !reduced && at < homing.start + homing.ms) {
+      const { point, direction, walked } = pointOnRoute(homing.path, ease((at - homing.start) / homing.ms));
+      return make("walk", stuck ?? { kind: "stowing" }, coarse, bubble, { ...point, direction, walked }, walking);
+    }
+    if (stuck) return make("stand", stuck, coarse, bubble);
+    if (thought !== null) return make("stand", { kind: "thinking" }, coarse, bubble);
+    if (isAwake(agent, at)) return make("stand", { kind: "closet" }, coarse, null);
+    return make("sleep", { kind: "asleep" }, { kind: "asleep" }, { kind: "zzz" });
+  }
 
   if (trip) {
     const at2 = tripPose(trip, at, reduced);
@@ -676,6 +777,12 @@ export function nextChangeAt(model: RoomModel, at: number): number {
     if (time > at && time < next) next = time;
   };
   for (const agent of model.agents) {
+    if (agent.roam) {
+      // The round changes step (a walk, a sweep) by itself, and the walk home ends.
+      const office = officeOf(model.layout, agent.key);
+      if (agent.running && office) consider(agent.roamSince + tourPose(tourOf(model.layout, office), at - agent.roamSince).stepEnd);
+      if (agent.homing) consider(agent.homing.start + agent.homing.ms);
+    }
     consider(agent.typingUntil);
     if (agent.thought) consider(agent.thought.until);
     if (!agent.running) consider(agent.lastActive + ASLEEP_AFTER_MS);
@@ -704,7 +811,7 @@ export const MOVE_FPS = 60;
 export function snapshotRoom(model: RoomModel, at: number, reduced = false): RoomView {
   const agents = model.agents.map((agent, index) => {
     const spot = officeOf(model.layout, agent.key);
-    return spot ? viewAgent(agent, index, spot, at, reduced) : null;
+    return spot ? viewAgent(agent, index, spot, at, reduced, model.layout) : null;
   });
   const views = agents.filter((view): view is AgentView => view !== null);
   // With reduced motion a "walk" is only the crossfade of a move, which still asks for frames.

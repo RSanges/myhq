@@ -240,6 +240,8 @@ export type StateDto = {
       isoSprite: string | null;
       /** Voxels per walk frame the iso sheet declares (`iso.json` next to it), or null for the default. */
       isoStride: number | null;
+      /** It roams the single floor with a broom instead of sitting at a desk (room.json `floor.behaviour`). */
+      roam: boolean;
       /** Armed state of the routines (the database value, or room.json's until changed). */
       armed: boolean;
       routines: RoutineDto[];
@@ -325,6 +327,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           sprite: spriteUrl(room.name, agent),
           isoSprite: isoSpriteUrl(room.name, agent),
           isoStride: isoStrideOf(agent),
+          roam: agent.roam ?? false,
           armed: isArmed(db, room.name, agent),
           routines: agent.routines.map((routine) => toRoutineDto(routine, at, scheduler.timeZone)),
           state,

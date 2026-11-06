@@ -122,6 +122,11 @@ tile, wall and furniture frame, their floor shadows and tint masks;
 tinted with an example colour; `mock-floor.png` (and `@3x`) is a composed
 floor with two rooms and characters.
 
+**Atlas version.** `atlas.hash` is a hash of `floor.png` itself: the runtime
+loads `floor.json` first, then `floor.png?v=<hash>`, so a page never pairs a
+floor.json with an atlas of another build (a cached image after a rebuild
+draws every frame from the wrong rectangle: shifted furniture, cut boards).
+
 **Placement.** Floor cell `(cx, cy)` has its top corner at screen
 `(32 (cx - cy), 16 (cx + cy))` from the floor origin. Every frame reference
 in `floor.json` is `[frame, dx, dy]`: draw atlas frame `frame` at
@@ -134,7 +139,7 @@ floor.json
   cell: { voxels: 16, w: 64, h: 32 }
   wall: { height: 64, thick: 4, rim: 6 }
   seatTop: 14, deskTop: 25, shadowAlpha: 72
-  atlas: { file, w, h, frames: [[x, y, w, h], ...] }
+  atlas: { file, w, h, hash, frames: [[x, y, w, h], ...] }
   tiles: { wood | carpet | tiles | carpet-room | tiles-room | grass: [ { sprite, masks } ] }
   walls: {
     wall | wall-window | wall-door: { 0: { edge: "-y", sprite }, 1: { edge: "-x", sprite } },
@@ -181,8 +186,9 @@ floor.json
   `workstation` 2 x 1 (desk, monitor, keyboard), `desk-chair` 1 x 1 (four
   turns), `meeting-table` 3 x 2 (with six chairs), `sofa` 2 x 1 (room colour
   pillows), `coffee-corner` 2 x 1, `whiteboard` 2 x 1, `bookshelf` 2 x 1,
-  `plant-tall`, `plant-small`, `printer`, `water-cooler`, `filing-cabinet`
-  1 x 1, `rug` 3 x 2 (room colour border; `flat: true`: draw it right after the
+  `plant-tall`, `plant-small`, `printer`, `water-cooler`, `filing-cabinet`,
+  `broom-closet` (a tall cupboard with a spare broom, where the janitor of the
+  single floor rests) 1 x 1, `rug` 3 x 2 (room colour border; `flat: true`: draw it right after the
   shadows, before sorting, so characters always walk over it),
   `reception-counter` 3 x 1 (room colour band).
 - **Desk and chair**: a `workstation` at turn t takes a `desk-chair` at
@@ -250,8 +256,9 @@ rows of `#` (ink) and `.`, `spacing` pixels apart.
 ## Characters: `public/sprites/iso-*.png`
 
 One sheet per character: `iso-person-blue`, `iso-person-green`,
-`iso-person-mustard`, `iso-person-grey` (a neutral person in four looks) and
-`iso-receptionist` (headset). `iso-characters.json` repeats the format and
+`iso-person-mustard`, `iso-person-grey` (a neutral person in four looks),
+`iso-receptionist` (headset) and `iso-janitor` (a navy overall and cap, a
+broom and a yellow bucket of water). `iso-characters.json` repeats the format and
 lists the sheets. Previews: `public/iso/characters-preview.png` and
 `characters-walk@3x.png`.
 
@@ -264,6 +271,15 @@ lists the sheets. Previews: `public/iso/characters-preview.png` and
   (4 frames, 150 ms, seated, hands on a keyboard at desk height in front).
   Row = `direction * 3 + animation`: NE idle is row 0, SE walk row 4, NW
   type row 11.
+- The janitor (`janitor()` in `character.mjs`, the sheet of an agent with
+  `floor.behaviour: "roam"`) never sits: its `type` row is **sweeping**,
+  standing, both hands on the broom, the brush going side to side in front
+  of the feet (4 frames, 150 ms), the bucket on the floor. Standing still it
+  holds the broom upright, the bucket by its left foot; walking, it carries
+  both. Same format otherwise, so it needs no row of its own.
+- Everything a character holds stays within `|x| + |y| <= 12` voxels of its
+  feet: further out, the bottom of the frame (15 px under the anchor) cuts
+  it in some direction (`renderSheet` throws).
 - Walking: a human moves 3 voxels per walk frame (`walk.voxelsPerFrame`;
   a sheet from a private home may give another value in its own JSON), along the axis it faces: per voxel, `+x` is (+2, +1) px,
   `+y` is (-2, +1) px. Paths are axis aligned (no diagonal directions).
@@ -271,8 +287,9 @@ lists the sheets. Previews: `public/iso/characters-preview.png` and
   at 25 voxels: check `mock-floor@3x.png`.
 
 The rig lives in `character.mjs`: a model is a function `(b, pose)` that
-draws a character facing +y with its feet centre at the origin; `poseOf()`
-gives the shared poses, `renderSheet()` turns the model per direction and
+draws a character facing +y with its feet centre at the origin; `human(look,
+rig)` takes a `rig` to place the hands and draw what they hold (the
+janitor's broom and bucket); `poseOf()` gives the shared poses, `renderSheet()` turns the model per direction and
 packs the sheet, `sheetFormat()` gives the JSON. A private home can draw its
 own model (a mascot) with the same rig and format by importing these files.
 

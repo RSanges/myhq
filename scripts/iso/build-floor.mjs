@@ -1,11 +1,13 @@
 // Builds the floor set into public/iso/floor/: one atlas (floor.png) with
 // the tiles, walls, rims and furniture in both orientations, their floor
 // shadows and tint masks, floor.json, and a contact sheet. See README.md.
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { World, material, render } from "./engine.mjs";
 import { Img, bbox, blit, colour, contactSheet, crop, fromRender, pack, pastel, tintOnto, upscale, writePng } from "./image.mjs";
+import { encodePng } from "./png.mjs";
 import * as F from "./furniture.mjs";
 import { signFont } from "./font.mjs";
 import * as P from "./props.mjs";
@@ -315,7 +317,10 @@ export function composePiece(p, roomColour = "#ff3d7f") {
 
 export function writeFloor({ json, atlas, previews }) {
   mkdirSync(OUT, { recursive: true });
-  writePng(path.join(OUT, "floor.png"), atlas.img);
+  // The atlas's own hash: the runtime loads floor.png?v=<hash>, so a page never pairs this floor.json with another atlas.
+  const png = encodePng(atlas.img.w, atlas.img.h, atlas.img.data);
+  json.atlas.hash = createHash("sha256").update(png).digest("hex").slice(0, 16);
+  writeFileSync(path.join(OUT, "floor.png"), png);
   writeFileSync(path.join(OUT, "floor.json"), JSON.stringify(json, null, 1).replace(/\n\s+(-?\d+,?)(?=\n)/g, " $1").replace(/\[\s+/g, "[").replace(/\s+\]/g, "]") + "\n");
   const sheet = contactSheet(previews.map(({ name, p }) => ({ name, img: composePiece(p) })), { maxW: 640 });
   writePng(path.join(OUT, "contact-sheet.png"), sheet);

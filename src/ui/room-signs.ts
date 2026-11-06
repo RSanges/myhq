@@ -1,4 +1,5 @@
 import type { SignFont, SignSet } from "./iso-floor";
+import { COUNTER_FROM, COUNTER_SEGMENTS } from "./room-layout";
 
 // The signboards of the single floor (one on the back wall of each room, see
 // scripts/iso/README.md, "Signboards"): how long a board must be for a name
@@ -37,7 +38,7 @@ export const boardLength = (set: SignSet, segments: number): number => 2 * set.e
 
 export type SignPlan = {
   segments: number;
-  /** The name as drawn (uppercase, cut to fit when the wall is too short). */
+  /** The name as drawn (uppercase, the characters the font lacks left out): always whole. */
   text: string;
   /** Width of the logo on the face (0: no logo). */
   logoWidth: number;
@@ -47,21 +48,48 @@ export type SignPlan = {
 
 /**
  * The board for a name (and a logo `logoWidth` face pixels wide, 0 for none)
- * on a wall `wallVoxels` long: the fewest segments that hold the content,
- * at most what the wall holds with a margin at each end. When even the
- * longest board is too short, the logo goes first, then the end of the name.
+ * on a wall `wallVoxels` long: the fewest segments that hold the content.
+ * The name is never cut: when the longest board the wall holds (with a
+ * margin at each end) is too short for the logo and the name, the logo goes,
+ * and when it is too short for the name alone, the board grows past the wall
+ * (`placeSign` centres it, over the corner and the next wall).
  */
 export function planSign(set: SignSet, font: SignFont, name: string, logoWidth: number, wallVoxels: number): SignPlan {
   const most = Math.max(1, Math.floor((wallVoxels - 8 - 2 * set.end) / set.segment));
-  let text = signText(font, name);
+  const text = signText(font, name);
   let logo = logoWidth;
   const need = () => 2 * SIGN_PADDING + (logo > 0 ? logo + (text ? LOGO_GAP : 0) : 0) + textWidth(font, text);
   if (need() > faceWidth(set, most)) logo = 0;
-  while (text.length > 1 && need() > faceWidth(set, most)) text = text.slice(0, -1);
   let segments = 1;
-  while (segments < most && faceWidth(set, segments) < need()) segments += 1;
+  while (faceWidth(set, segments) < need()) segments += 1;
   const content = need() - 2 * SIGN_PADDING;
   return { segments, text, logoWidth: logo, start: Math.floor((faceWidth(set, segments) - content) / 2) };
+}
+
+/** Voxels between a name's board and its counter on the same wall. */
+export const COUNTER_GAP = 4;
+
+/**
+ * Where the signboard of a room and its counter stand. `from` is where the
+ * name's board starts along the back wall along x (voxels from the room's back
+ * corner, negative when a name longer than its wall overhangs the corner). The
+ * counter (when the room has one) stands beside the name on the same wall when
+ * the wall holds both (the pair centred, `beside`), else on the back wall along
+ * y, COUNTER_FROM voxels from the corner, the name's board then starting there
+ * too. Without a counter the name is centred on its wall.
+ */
+export type SignPlacement = { plan: SignPlan; from: number; length: number; counter: { beside: boolean; from: number } | null };
+
+export function placeSign(set: SignSet, font: SignFont, name: string, logoWidth: number, wallVoxels: number, counter: boolean): SignPlacement {
+  const plan = planSign(set, font, name, logoWidth, wallVoxels);
+  const length = boardLength(set, plan.segments);
+  if (!counter) return { plan, from: Math.floor((wallVoxels - length) / 2), length, counter: null };
+  const pair = length + COUNTER_GAP + boardLength(set, COUNTER_SEGMENTS);
+  if (pair <= wallVoxels - 2 * COUNTER_FROM) {
+    const from = Math.floor((wallVoxels - pair) / 2);
+    return { plan, from, length, counter: { beside: true, from: from + length + COUNTER_GAP } };
+  }
+  return { plan, from: COUNTER_FROM, length, counter: { beside: false, from: COUNTER_FROM } };
 }
 
 const channel = (value: number) => {

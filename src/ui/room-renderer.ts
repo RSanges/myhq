@@ -3,6 +3,7 @@ import {
   buildFloorScene,
   characterBox,
   depthOrder,
+  moverDepths,
   floorSetSchema,
   NEUTRAL_ROOM_COLOR,
   neutralPersonFor,
@@ -14,12 +15,13 @@ import {
   type Draw,
   type FloorSet,
   type OfficeState,
+  type ScreenRect,
   type SignPart,
 } from "./iso-floor";
 import { focusZoom } from "./floor-view";
 import type { LabelLayer } from "./room-labels";
 import { CELL, COUNTER_FROM, COUNTER_SEGMENTS, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type Point, type RoomLayout } from "./room-layout";
-import { boardLength, faceColumns, faceWidth, inkFor, LOGO_MARGIN, paintFace, planSign, shrinkLogo, textWidth, type Pixels } from "./room-signs";
+import { faceColumns, faceWidth, inkFor, LOGO_MARGIN, paintFace, placeSign, planSign, shrinkLogo, textWidth, type Pixels } from "./room-signs";
 import { VOXELS_PER_STEP, walkFrame, type AgentView, type RoomView } from "./room-model";
 import { RECEPTION_KEY } from "./reception";
 
@@ -157,8 +159,6 @@ const COUNTER_FLASH_MS = 260;
 const COUNTER_PERIOD_MS = 1600;
 /** The most a counter shows (its font has no plus sign). */
 const COUNTER_MAX = 99;
-/** Voxels between a name's board and its counter on the same wall. */
-const COUNTER_GAP = 4;
 /** How long the view takes to fly to a room or back to the overview. */
 const FLIGHT_MS = 380;
 /** Free space around the floor when it is fitted, in art pixels. */
@@ -280,14 +280,12 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let theme = options.theme;
   let resolution = window.devicePixelRatio || 1;
 
-  const [set, atlasImage] = await Promise.all([
-    fetch(`${options.floorUrl}/floor.json`).then(async (response) => {
-      if (!response.ok) throw new Error(`floor.json: ${response.status}`);
-      return floorSetSchema.parse(await response.json());
-    }),
-    loadImage(`${options.floorUrl}/floor.png`),
-  ]);
-  const floorSet: FloorSet = set;
+  // floor.json first, revalidated, then the atlas it was built with (`atlas.hash`): a page never pairs the frames of
+  // one build with the image of another (a cached atlas after a rebuild drew shifted furniture and cut signboards).
+  const response = await fetch(`${options.floorUrl}/floor.json`, { cache: "no-cache" });
+  if (!response.ok) throw new Error(`floor.json: ${response.status}`);
+  const floorSet: FloorSet = floorSetSchema.parse(await response.json());
+  const atlasImage = await loadImage(`${options.floorUrl}/${floorSet.atlas.file}${floorSet.atlas.hash ? `?v=${floorSet.atlas.hash}` : ""}`);
 
   const app = new Application();
   await app.init({
@@ -459,7 +457,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
 
   // ---- The static floor ----
   let staticKey = "";
-  let staticItems: { node: Container; box: Box }[] = [];
+  /** Walls, rims and furniture: their sorted node, footprint, what they cover on the screen, and their fixed depth. */
+  let staticItems: { node: Container; box: Box; rect: ScreenRect }[] = [];
+  let staticRanks: number[] = [];
   const chairs = new Map<number, ChairNode>();
   let roomColor = NEUTRAL_ROOM_COLOR;
 
@@ -505,7 +505,15 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         chairs.set(item.piece, { group, empty: sprites, under, over, slot, seat: { x: corner.x + seat[0], y: corner.y + seat[1] } });
       }
       sortedLayer.addChild(group);
-      staticItems.push({ node: group, box: item.box });
+      const rect = { x0: Number.POSITIVE_INFINITY, y0: Number.POSITIVE_INFINITY, x1: Number.NEGATIVE_INFINITY, y1: Number.NEGATIVE_INFINITY };
+      for (const draw of item.draws) {
+        const [, , w, h] = floorSet.atlas.frames[draw.frame]!;
+        rect.x0 = Math.min(rect.x0, draw.x);
+        rect.y0 = Math.min(rect.y0, draw.y);
+        rect.x1 = Math.max(rect.x1, draw.x + w);
+        rect.y1 = Math.max(rect.y1, draw.y + h);
+      }
+      staticItems.push({ node: group, box: item.box, rect });
     }
     // The live objects of the user's office (its pile, its letter tray): over the office's own sprite.
     officeLive = null;
@@ -518,7 +526,12 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       const room = next.rooms[next.office.room]!;
       officeLive = { pile, mail, corner: screenOf(room.x * CELL, room.y * CELL), drawn: { pile: "", mail: "" } };
     }
-    lastOrderKey = "";
+    // The depth order of the walls and furniture, once for this floor: characters are slotted in between (moverDepths).
+    staticRanks = new Array<number>(staticItems.length);
+    depthOrder(staticItems.map((each) => each.box)).forEach((index, z) => {
+      staticRanks[index] = z;
+      staticItems[index]!.node.zIndex = z;
+    });
     signKey = "";
   }
 
@@ -643,13 +656,10 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       if (!text) return;
       const url = urls[index];
       const logo = url ? (logos.get(url)?.pixels ?? null) : null;
-      const plan = planSign(set, floorSet.font, text, logo?.width ?? 0, room.w * CELL);
-      const length = boardLength(set, plan.segments);
       // The counter beside the name on the same wall when both fit (the pair centred), else on the other back
-      // wall, by the corner, the name starting there too.
-      const pair = length + COUNTER_GAP + boardLength(set, COUNTER_SEGMENTS);
-      const beside = room.counter && pair <= room.w * CELL - 2 * COUNTER_FROM;
-      const from = !room.counter ? Math.floor((room.w * CELL - length) / 2) : beside ? Math.floor((room.w * CELL - pair) / 2) : COUNTER_FROM;
+      // wall, by the corner, the name starting there too (placeSign).
+      const { plan, from, counter: place } = placeSign(set, floorSet.font, text, logo?.width ?? 0, room.w * CELL, room.counter && room.project !== null);
+      const beside = place?.beside ?? false;
       const anchor = screenOf(room.x * CELL + from, room.y * CELL);
       const color = colorOf(index);
       const columns = faceColumns(set, plan.segments);
@@ -670,7 +680,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       // On the other wall it is mirrored: its columns run the other way (x' = -x - 1), read left to right.
       const straight = faceColumns(set, COUNTER_SEGMENTS);
       const columnsOf = beside ? straight : straight.map((col) => ({ x: -col.x - 1, top: col.top, h: col.h })).reverse();
-      const at = beside ? screenOf(room.x * CELL + from + length + COUNTER_GAP, room.y * CELL) : screenOf(room.x * CELL, room.y * CELL + COUNTER_FROM);
+      const at = beside ? screenOf(room.x * CELL + (place?.from ?? 0), room.y * CELL) : screenOf(room.x * CELL, room.y * CELL + COUNTER_FROM);
       const masks = board(at, COUNTER_SEGMENTS, boardColor, paintFace(columnsOf, counterPlan, floorSet.font, ink, null, boardColor), !beside);
       counters.push({ masks, color: boardColor, live });
       const a = columnsOf[0];
@@ -758,7 +768,6 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     for (const mask of state.masks) add(mask.frame, colors[mask.slot] ?? theme.accent);
   };
 
-  let lastOrderKey = "";
   let drawnLayout: RoomLayout | null = null;
   /** A room to show, asked for before the floor was built. */
   let pendingFocus: { room: string; animate: boolean; insetRight: number } | null = null;
@@ -941,7 +950,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         for (const sprite of [...chair.under, ...chair.over]) sprite.visible = sitting;
       }
 
-      const standing: { node: AgentNode; box: Box }[] = [];
+      const standing: { node: AgentNode; box: Box; rect: ScreenRect }[] = [];
       for (const agent of view.agents) {
         const node = nodeFor(agent.key);
         const sheet = sheetFor(agent.key);
@@ -966,7 +975,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
           if (node.sprite.parent !== node.standing) node.standing.addChildAt(node.sprite, 0);
           if (node.standing.parent !== sortedLayer) sortedLayer.addChild(node.standing);
           node.box = characterBox(Math.round(agent.x), Math.round(agent.y));
-          standing.push({ node, box: node.box });
+          // What it covers on the screen, its broom and bucket included.
+          const rect = { x0: node.feet.x - 24, y0: node.feet.y - node.height - 4, x1: node.feet.x + 24, y1: node.feet.y + 16 };
+          standing.push({ node, box: node.box, rect });
           // A soft shadow under the feet.
           if (agent.alpha > 0.05) marks.ellipse(node.feet.x, node.feet.y, 11, 5).fill({ color: theme.ink, alpha: 0.18 * agent.alpha });
         }
@@ -1009,15 +1020,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         }
       }
 
-      // Depth order of walls, furniture and standing characters, when a standing footprint changed.
-      const orderKey = standing.map(({ box }) => `${box.x0},${box.y0}`).join(";") + `|${staticItems.length}`;
-      if (orderKey !== lastOrderKey) {
-        lastOrderKey = orderKey;
-        const items = [...staticItems, ...standing.map(({ node, box }) => ({ node: node.standing, box }))];
-        depthOrder(items.map((item) => item.box)).forEach((index, z) => {
-          items[index]!.node.zIndex = z;
-        });
-      }
+      // Standing characters among the walls and furniture, whose own order never changes (see moverDepths).
+      moverDepths(staticItems, staticRanks, standing).forEach((z, index) => {
+        const node = standing[index]!.node.standing;
+        if (node.zIndex !== z) node.zIndex = z;
+      });
 
       // The user's desk and the tray of the lobby, with its count (the floor of one room).
       userBoxes = [];

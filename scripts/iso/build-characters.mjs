@@ -1,10 +1,10 @@
 // Builds the generic iso characters into public/sprites/: a neutral person
-// in a few colour variants and the receptionist, one sheet each in the
-// format of character.mjs, plus iso-characters.json. See README.md.
+// in a few colour variants, the receptionist and the janitor, one sheet each
+// in the format of character.mjs, plus iso-characters.json. See README.md.
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ANIMATIONS, DIRECTIONS, FRAME, frameOf, human, renderSheet, sheetFormat } from "./character.mjs";
+import { ANIMATIONS, DIRECTIONS, FRAME, frameOf, human, janitor, renderSheet, sheetFormat } from "./character.mjs";
 import { blit, colour, contactSheet, filled, upscale, writePng } from "./image.mjs";
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public", "sprites");
@@ -33,10 +33,16 @@ export const CHARACTERS = [
     id: "receptionist",
     look: { skin: SKIN.medium, hair: HAIR.brown, top: CLOTH("pink", 3, 2, 1), trim: TRIM, bottom: CLOTH("ink", 2, 2, 1), hairStyle: "bun", headset: true, extra: CLOTH("ink", 2, 2, 1) },
   },
+  {
+    // A navy work overall and cap, a broom and a bucket; its `type` row is sweeping (see janitor()).
+    id: "janitor",
+    model: janitor,
+    look: { skin: SKIN.light, hair: HAIR.grey, top: CLOTH("blue", 3, 2, 1), trim: CLOTH("blue", 2, 1, 1), bottom: CLOTH("blue", 2, 2, 1), hairStyle: "short", cap: true, extra: CLOTH("blue", 2, 1, 0) },
+  },
 ];
 
 export function buildCharacters() {
-  return CHARACTERS.map((c) => ({ ...c, sheet: renderSheet(human(c.look)) }));
+  return CHARACTERS.map((c) => ({ ...c, sheet: renderSheet((c.model ?? human)(c.look)) }));
 }
 
 /** A preview of a few frames of each sheet: every direction of every animation, first frame. */

@@ -528,6 +528,33 @@ export function filingCabinet(b) {
   b.box(4, 6, 32, 6, 5, 1, material({ ramp: "gold", top: 4, left: 3, right: 2 })); // a box file on top
 }
 
+/**
+ * A broom closet, 1 x 1 cell: a tall oak cupboard, its door towards +y (a
+ * gold knob, a vent at the bottom) and a spare broom leaning on its right
+ * side. The janitor of the floor rests beside it.
+ */
+export function broomCloset(b) {
+  const body = material({
+    ramp: "wood", top: 4, left: 3, right: 2,
+    paint(face, x, y, z, level) {
+      if (face !== LEFT) return level;
+      if (band(x, 3) || band(x, 12.5) || band(z, 1) || band(z, 41)) return level - 1; // the door's frame
+      if ((band(x, 5) || band(x, 10.5)) && within(z, 12, 38)) return level - 1; // the panel
+      if ((band(z, 12) || band(z, 37.5)) && within(x, 5, 11)) return level - 1;
+      if (within(z, 4, 9) && within(x, 5, 11) && band(frac(z / 2) * 2, 0, 1)) return level - 1; // vent slats
+      if (within(x, 11, 12) && within(z, 22, 24)) return { ramp: "gold", level: 3 }; // knob
+      return level;
+    },
+  });
+  b.box(2, 4, 0, 12, 10, 44, body);
+  b.box(1, 3, 44, 14, 12, 2, walnut); // cornice
+  // The spare broom, leaning on the front right corner, its brush on the floor.
+  const handle = material({ ramp: "wood", top: 5, left: 4, right: 3, rim: false, crease: false });
+  b.capsule([12.5, 15, 4], [14.5, 14.5, 38], 0.8, handle);
+  b.box(10, 14, 2, 6, 2, 2, walnut); // brush head
+  b.box(10, 14, 0, 6, 2, 2, gold); // bristles
+}
+
 // ---------------------------------------------------------------- rug and reception
 
 /** A rug, 3 x 2 cells: a room colour border, a woven neutral field. */
@@ -636,6 +663,7 @@ export const FURNITURE = [
   { name: "printer", build: printer, cells: [1, 1], turns: [0, 1] },
   { name: "water-cooler", build: waterCooler, cells: [1, 1], turns: [0, 1] },
   { name: "filing-cabinet", build: filingCabinet, cells: [1, 1], turns: [0, 1] },
+  { name: "broom-closet", build: broomCloset, cells: [1, 1], turns: [0, 1] },
   { name: "rug", build: rug, cells: [3, 2], turns: [0, 1], flat: true },
   { name: "reception-counter", build: receptionCounter, cells: [3, 1], turns: [0, 1], staff: [1, -1] },
 ];

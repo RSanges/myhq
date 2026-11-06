@@ -268,6 +268,7 @@ restart.
           "sprite": null,
           "isoSprite": "/api/sprites/demo/scout?sheet=iso",
           "isoStride": null,
+          "roam": false,
           "armed": false,
           "routines": [
             {
@@ -306,6 +307,9 @@ restart.
 - `isoStride`: voxels per walk frame of that sheet, read from `walk.voxelsPerFrame`
   of the `iso.json` next to it; `null` when there is no such file or value (the
   floor then walks at 3 voxels per frame).
+- `roam`: `true` for an agent with `floor.behaviour: "roam"` in `room.json` (no
+  desk: it does its round of the floor during its runs and rests by the broom
+  closet of the lobby, see `home-layout.md`), `false` otherwise.
 - `sprite`: `/api/sprites/<room>/<agent>` when the agent declares an old
   top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
   no longer draws it.

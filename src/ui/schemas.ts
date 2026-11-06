@@ -113,6 +113,8 @@ export const agentSchema = z.object({
   isoSprite: z.string().nullable().optional(),
   /** Voxels per walk frame declared next to the iso sheet (`iso.json`); null or absent: the default of 3. */
   isoStride: z.number().int().positive().nullable().optional(),
+  /** It roams the single floor (room.json `floor.behaviour: "roam"`); absent from an older server: false. */
+  roam: z.boolean().optional(),
   armed: z.boolean().default(false),
   routines: z.array(routineSchema).default([]),
   /** Shared resources its runs hold (room.json `resources`). */

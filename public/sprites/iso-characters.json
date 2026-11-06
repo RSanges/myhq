@@ -109,6 +109,10 @@
   {
    "id": "receptionist",
    "file": "iso-receptionist.png"
+  },
+  {
+   "id": "janitor",
+   "file": "iso-janitor.png"
   }
  ]
 }

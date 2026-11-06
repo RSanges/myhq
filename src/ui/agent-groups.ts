@@ -27,6 +27,10 @@ export function groupOf(status: AgentStatus | null): AgentGroup {
     case "carrying":
     case "dropping":
     case "returning":
+    case "roaming":
+    case "sweeping":
+    case "stowing":
+    case "closet":
       return "working";
     case "blocked":
     case "failed":

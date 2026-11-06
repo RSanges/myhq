@@ -104,6 +104,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. Read-only: the write guard refuses any write there. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
 | `agents[].isoSprite` | no | Isometric character sheet of the floor (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing or is not a sheet of the right size, the agent is drawn as one of the neutral people shipped with MyHQ, always the same one for the same agent. |
+| `agents[].floor` | no | How the agent lives on the single floor (`floor.layout: "room-per-project"`): `{ "behaviour": "desk" }` (the default) sits at a desk of its room; `{ "behaviour": "roam" }` has no desk (see "Agents who roam the floor" below). |
 | `agents[].sprite` | no | The old top-down sheet of the floor (4 by 4 square cells), relative to the home, inside it. Still accepted and served by `GET /api/sprites/<room>/<agent>`, but **no longer drawn**: the floor is isometric and only draws `isoSprite`. |
 | `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved); MyHQ itself never does. Default: nothing happens on approval (no task: an approved item is usually the user's to post). |
 | `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
@@ -295,6 +296,29 @@ home's own mascot with the same rig:
 The old top-down `sprite` (a 4 by 4 grid of square cells: sit and type,
 walk, think, sleep, facing right) is still accepted and served, but no longer
 drawn.
+
+#### Agents who roam the floor: `floor.behaviour: "roam"`
+
+An agent with `"floor": { "behaviour": "roam" }` (the janitor of the floor,
+say) has no desk in its room's suite: its suite is sized without it, and a
+broom closet stands against the back wall of the lobby, the agent resting
+beside it. During its runs it does its round: from the closet it walks into
+every room of the floor in turn (the lobby, the user's office, every suite,
+row after row), along the aisles and the corridors like everyone else, stops
+in each room to sweep, and in the corridor before every other door; then
+it starts again, for as long as the run lasts. When the run ends it walks back
+to its closet and rests there, then falls asleep like the others. It runs no
+errands on the floor: a message or an item it sends is not walked over. With
+reduced motion there is no round: it stays by the closet, its status (in the
+strip, as for any agent) says it is on its round.
+
+Its sheet is `isoSprite` as usual; without one it is drawn as the janitor
+shipped with MyHQ (`public/sprites/iso-janitor.png`: a broom and a bucket).
+A roaming agent's sheet uses its `type` row for **sweeping**, standing, not
+for typing (`scripts/iso/README.md`, "Characters"); a home that gives it its
+own sheet draws that row so. The round only exists on the single floor: the
+floor of one room (`floor-per-project`) has no closet, so a roaming agent is
+listed in the strip without being drawn there.
 
 #### Environment placeholders in `mcpServers`
 

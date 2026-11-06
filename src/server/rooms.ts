@@ -85,6 +85,12 @@ export const agentSchema = z.strictObject({
   /** Isometric character sheet of the floor, relative to the home (a neutral person when left out). */
   isoSprite: spriteSchema.optional(),
   /**
+   * How the agent lives on the single floor: "desk" (the default) sits at a desk of its room; "roam" has no
+   * desk: during its runs it walks the corridors and the rooms and stops to sweep, otherwise it rests by the
+   * broom closet of the lobby (the janitor).
+   */
+  floor: z.strictObject({ behaviour: z.enum(["desk", "roam"]) }).optional(),
+  /**
    * "task": approving one of its items gives the agent a task to execute it, and wakes it
    * (the default: left out, an approval gives it no task). "queue": the task is created
    * but the agent is not woken, it finds it at its next run.
@@ -161,6 +167,8 @@ export type Agent = {
   sprite: string | null;
   /** Absolute path of the agent's iso character sheet, always inside the home, or null for a neutral person. */
   isoSprite: string | null;
+  /** It roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`); false for most agents. */
+  roam?: boolean;
   /** "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; null: no task (see wakeAgents). */
   onApproval: "task" | "queue" | null;
   /** A message addressed to the agent wakes it, unless "queue" (null is the default: wake, see wakeAgents). */
@@ -299,6 +307,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       skills,
       sprite,
       isoSprite,
+      roam: agent.floor?.behaviour === "roam",
       onApproval: agent.onApproval ?? null,
       onMessage: agent.onMessage ?? null,
       onRevise: agent.onRevise ?? null,

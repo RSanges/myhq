@@ -111,9 +111,13 @@ function lookMaterials(look) {
 /**
  * A human, about 51 voxels tall, facing +y, feet centre at (0, 0, 0).
  * `look`: { skin, hair, top, bottom, shoes, trim, extra } material specs
- * ({ ramp, top, left, right }), `hairStyle` (short, bun, long), `headset`.
+ * ({ ramp, top, left, right }), `hairStyle` (short, bun, long), `headset`,
+ * `cap` (a cap with a peak towards +y, in the `extra` material).
+ * `rig` lets a model hold things: `hand(pose, { side, k, shoulder, sz })`
+ * returns a hand target (or null for the shared pose), `props(b, pose,
+ * { sz, hipZ, H, hands })` draws what the hands hold, after the body.
  */
-export function human(look) {
+export function human(look, rig = {}) {
   const M = lookMaterials(look);
   const eyes = material({ ramp: "ink", top: 1, left: 1, right: 1, rim: false });
   return (b, pose) => {
@@ -163,6 +167,10 @@ export function human(look) {
     for (const x of [-3, 2]) for (const z of [H + 4, H + 5]) b.set(x, 4, z, eyes);
     if (look.hairStyle === "bun") b.ellipsoid(0, -5, H + 11, 2.8, 2.8, 2.8, M.hair);
     if (look.hairStyle === "long") rounded(b, -4, -6, H - 2, 8, 3, 9, 1.4, (x, y, z) => (b.has(x, y, z) ? null : M.hair));
+    if (look.cap) {
+      rounded(b, -5, -6, H + 8, 10, 11, 4, 1.6, () => M.extra); // crown over the hair
+      b.box(-4, 5, H + 8, 8, 3, 1, M.extra); // peak
+    }
     if (look.headset) {
       b.box(-6, -1, H + 3, 1, 3, 5, M.extra);
       b.box(5, -1, H + 3, 1, 3, 5, M.extra);
@@ -183,6 +191,7 @@ export function human(look) {
       } else {
         hand = [side * 7, 0.5, sz - 13.5 + breath];
       }
+      hand = rig.hand?.(pose, { side, k, shoulder, sz }) ?? hand;
       const elbow = bend(shoulder, hand, A1, A2, [side * 0.6, -0.4, -1]);
       return { shoulder, elbow, hand };
     });
@@ -191,7 +200,95 @@ export function human(look) {
       b.capsule(elbow, hand, 1.35, M.sleeve);
       b.ellipsoid(hand[0], hand[1], hand[2] - 0.5, 1.6, 1.6, 1.6, M.skin);
     }
+    rig.props?.(b, pose, { sz, hipZ, H, hands: arms.map((arm) => arm.hand) });
   };
+}
+
+// ---------------------------------------------------------------- janitor
+
+/**
+ * Where the brush is in the sweep frames (the `type` row of a janitor's
+ * sheet): an arc in front of the feet, from the middle to the right. Everything a character
+ * holds stays within |x| + |y| <= 12 voxels of its feet, or the frame's
+ * bottom (15 px under the anchor) cuts it in some direction.
+ */
+const SWEEP = [
+  [1, 6],
+  [4, 4.5],
+  [6, 2],
+  [4, 4.5],
+];
+
+/**
+ * The floor's janitor: a human (see `human`) with a broom (a wooden handle
+ * and a brush) and a bucket of water with a bail. Standing still, the broom
+ * stands in the right hand and the bucket on the floor by the left foot;
+ * walking, it carries both; the `type` row of its sheet is not seated
+ * typing but sweeping, standing, both hands on the handle, the brush going
+ * side to side in front, the bucket on the floor.
+ */
+export function janitor(look) {
+  const wood = material({ ramp: "wood", top: 4, left: 4, right: 3, rim: false, crease: false });
+  const brush = material({ ramp: "wood", top: 2, left: 2, right: 1, rim: false });
+  const bristle = material({ ramp: "gold", top: 4, left: 3, right: 2, rim: false, crease: false });
+  const pail = material({ ramp: "gold", top: 4, left: 3, right: 2, round: [0, 0], rim: false });
+  const water = material({ ramp: "sky", top: 2, left: 2, right: 1, rim: false, emissive: true });
+  const bail = material({ ramp: "ink", top: 3, left: 2, right: 2, rim: false, crease: false });
+
+  /** The broom: a handle from `foot` (the brush, on the ground) to `top`, the brush across x (sweeping) or along y (carried). */
+  const broom = (b, foot, top, across) => {
+    b.capsule(foot, top, 0.9, wood);
+    const [x, y, z] = foot.map(Math.round);
+    const [bx, by, w, d] = across ? [x - 3, y - 1, 7, 3] : [x - 1, y - 2, 2, 5];
+    b.box(bx, by, z + 1, w, d, 2, brush);
+    b.box(bx, by, z - 2, w, d, 3, bristle);
+  };
+  /** The bucket, its bottom centre at (x, y, z): a yellow pail, water inside, its bail up to `grip` (or resting on the rim). */
+  const bucket = (b, [x, y, z], grip = null) => {
+    const r = 3.6, h = 8;
+    b.cylinder(x, y, z, r - 0.5, 1, pail);
+    b.cylinder(x, y, z + 1, r, h - 1, pail, r - 1.3);
+    b.cylinder(x, y, z + h - 2, r - 1.2, 1, water);
+    const top = z + h;
+    if (grip) {
+      b.line([x - r + 0.5, y, top - 1], grip, bail);
+      b.line([x + r - 0.5, y, top - 1], grip, bail);
+    } else {
+      b.line([x - r + 0.5, y, top - 1], [x, y + r - 0.5, top - 1], bail);
+    }
+  };
+  const sweeping = (pose) => pose.animation === "sweep";
+  /** Brush and top of the handle while sweeping: the brush on the ground, the top of the handle in front of the chest. */
+  const sweepHandle = (pose) => {
+    const [bx, by] = SWEEP[pose.frame % SWEEP.length];
+    return { foot: [bx, by, 2], top: [1, 6, 37] };
+  };
+  const along = ({ foot, top }, t) => foot.map((v, k) => v + (top[k] - v) * t);
+
+  const body = human(look, {
+    hand(pose, { side, sz }) {
+      if (sweeping(pose)) return along(sweepHandle(pose), side < 0 ? 0.8 : 0.55);
+      if (pose.animation === "walk") {
+        // Right hand: the broom, carried upright; left hand: the bucket. Both swing a little.
+        const swing = (side < 0 ? 1 : -1) * pose.stride * 1.5;
+        return side > 0 ? [6.5, 1 + swing, sz - 12] : [-7.5, swing, sz - 13.5];
+      }
+      return side > 0 ? [6.5, 1.5, sz - 12 + (pose.breath ?? 0)] : null;
+    },
+    props(b, pose, { hands }) {
+      const [left, right] = hands;
+      if (sweeping(pose)) {
+        const { foot, top } = sweepHandle(pose);
+        broom(b, foot, top, true);
+        bucket(b, [-8, -1, 0]);
+        return;
+      }
+      broom(b, [right[0] + 0.5, right[1] + 1, 2], [right[0], right[1] - 1, right[2] + 18], false);
+      if (pose.animation === "walk") bucket(b, [left[0], left[1], left[2] - 14], [left[0], left[1], left[2] - 1]);
+      else bucket(b, [-8, 0, 0]);
+    },
+  });
+  return (b, pose) => body(b, pose.animation === "type" ? { animation: "sweep", frame: pose.frame, seated: false } : pose);
 }
 
 // ---------------------------------------------------------------- sheets
