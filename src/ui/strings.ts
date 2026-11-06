@@ -942,12 +942,17 @@ export const strings = {
       /** Written by MyHQ, in the supervisor's name, when an entry it relaunched is stuck again. */
       secondFailure: (name: string) =>
         `${name} l'a déjà relancée une fois et elle est encore coincée : à toi de voir (relancer, clore ou corriger).`,
+      /** Written by MyHQ on the Standard when the supervisor did not answer the check of a long run (long-runs.ts). */
+      longRunNoAnswer: (p: { supervisor: string; runId: number; agent: string; minutes: number; slice: number; hard: number }) =>
+        `Pas de réponse de ${p.supervisor} sur le tour #${p.runId} de ${p.agent}, qui tourne depuis ${p.minutes} min : MyHQ le laisse continuer par tranches de ${p.slice} min, jusqu'au plafond de ${p.hard} min.`,
       /** Why an entry is stuck, one sentence, written by the server (GET /api/desk). */
       reasons: {
         blocked: (note: string) => `Bloquée par l'agent : ${note}`,
         blockedNoNote: "Bloquée par l'agent, sans dire pourquoi.",
         runFailed: (runId: number, summary: string) => `Le tour #${runId} a échoué : ${summary}`,
         runCancelled: (runId: number) => `Le tour #${runId} a été interrompu : MyHQ s'est arrêté pendant le tour.`,
+        runStopped: (runId: number, by: string, reason: string) => `Le tour #${runId} a été arrêté par ${by} : ${reason}`,
+        runHardLimit: (runId: number, minutes: number) => `Le tour #${runId} a été interrompu au plafond de ${minutes} min.`,
         busy: (runId: number) => `Agent occupé : son tour #${runId} tourne, et sa fin ne reprendra pas cette tâche.`,
         cap: (today: number, cap: number) => `Plafond du jour atteint (${today} tours sur ${cap}) : elle repart quand le compteur le permet.`,
         resource: (resource: string, runId: number, holder: string) =>

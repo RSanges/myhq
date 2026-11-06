@@ -4,6 +4,7 @@ import { RECEPTION_ROOM } from "../ui/reception";
 import { liveConfig, type HqConfig } from "./config";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
+import { readDeadlines } from "./long-runs";
 import { RELAUNCH_REASON } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import type { Agent, Home } from "./rooms";
@@ -185,6 +186,17 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
        ORDER BY r.id`,
     )
     .all(new Date(at.getTime() - FAILED_RUN_WINDOW_MS).toISOString()) as RunRow[];
+  // A run a supervisor stopped, or that reached its hard limit, says so (long-runs.ts).
+  const failedReason = (run: RunRow): string => {
+    const deadlines = readDeadlines(db, run.id);
+    if (deadlines?.stop_requested_at) {
+      return r.runStopped(run.id, nameOf(deadlines.stop_room ?? "", deadlines.stop_agent ?? ""), oneLine(deadlines.stop_reason));
+    }
+    if (deadlines && run.ended_at && run.ended_at >= deadlines.hard_deadline_at) {
+      return r.runHardLimit(run.id, Math.round((Date.parse(deadlines.hard_deadline_at) - Date.parse(run.started_at)) / 60_000));
+    }
+    return r.runFailed(run.id, oneLine(run.summary));
+  };
   for (const run of runs) {
     const taskIds = runTaskIds(db, run);
     if (taskIds.length === 0) continue;
@@ -197,7 +209,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       agentName: nameOf(run.room, run.agent_id),
       state: run.status === "cancelled" ? "cancelled" : "failed",
       since: run.ended_at ?? run.started_at,
-      reason: run.status === "cancelled" ? r.runCancelled(run.id) : r.runFailed(run.id, oneLine(run.summary)),
+      reason: run.status === "cancelled" ? r.runCancelled(run.id) : failedReason(run),
       text: runText(db, run, taskIds),
       taskIds,
       note: null,
@@ -216,6 +228,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
   for (const task of blocked) {
     if (listed.has(task.id)) continue;
     const note = oneLine(task.note);
+    // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts): said as written.
+    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined;
     entries.push({
       entry: "task",
       id: task.id,
@@ -224,7 +238,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       agentName: nameOf(task.room, task.agent_id),
       state: "blocked",
       since: task.updated_at,
-      reason: note ? r.blocked(note) : r.blockedNoNote,
+      reason: myhqNote && note ? note : note ? r.blocked(note) : r.blockedNoNote,
       text: task.text,
       taskIds: [task.id],
       note: null,

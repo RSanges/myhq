@@ -16,6 +16,7 @@ import {
 } from "../server/attachments";
 import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
+import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStatus } from "../server/long-runs";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
 import { loadHome, type Home } from "../server/rooms";
@@ -87,7 +88,10 @@ const targetShape = {
   id: blockedTargetSchema.shape.id.describe("The `target.id` of the entry in hq_blocked (a task id, or a run id)."),
 };
 
-/** Input shapes of the thirteen tools (zod raw shapes, as the MCP SDK expects). */
+/** The run a supervisor checks: the run number of its « long run to check » task. */
+const runIdShape = z.number().int().positive().describe("The number of the run (#12 gives 12), as your task « Long run to check » names it.");
+
+/** Input shapes of the sixteen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -192,6 +196,25 @@ export const inputs = {
       .boolean()
       .optional()
       .describe("true: the entry is handed to the owner (shown first on the Standard, and you are no longer woken for it)."),
+  },
+  hq_run_status: { runId: runIdShape },
+  hq_run_extend: {
+    runId: runIdShape,
+    minutes: z
+      .number()
+      .int()
+      .min(EXTEND_MIN_MINUTES)
+      .max(EXTEND_MAX_MINUTES)
+      .describe(`How many more minutes the run may go on, from now (${EXTEND_MIN_MINUTES} to ${EXTEND_MAX_MINUTES}); never past its hard limit.`),
+  },
+  hq_run_stop: {
+    runId: runIdShape,
+    reason: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .describe("For the owner, in one sentence of the home's language: why the run is stuck (the facts of hq_run_status). Shown on the Standard."),
   },
 } as const;
 
@@ -762,6 +785,40 @@ export function hqBlockedNote(db: Db, ctx: HqContext, args: Args<"hq_blocked_not
     parsed.text,
     parsed.handOff ?? false,
   );
+}
+
+/** The runs folder of the home: the journals are `<home>/data/runs/<id>.jsonl`, next to the database. */
+const runsDirOf = (ctx: HqContext) => path.join(path.dirname(path.resolve(ctx.dbPath)), "runs");
+
+/** hq_run_status: a run as the supervisor checks it, with MyHQ's hints on its activity. Read-only. */
+export function hqRunStatus(db: Db, ctx: HqContext, args: Args<"hq_run_status">) {
+  assertSupervisor(db, ctx, "hq_run_status");
+  const parsed = z.object(inputs.hq_run_status).parse(args);
+  const { home } = office(ctx);
+  return runStatus(db, home, runsDirOf(ctx), parsed.runId);
+}
+
+/** hq_run_extend: more time for a long run that progresses, never past its hard limit. */
+export function hqRunExtend(db: Db, ctx: HqContext, args: Args<"hq_run_extend">) {
+  assertSupervisor(db, ctx, "hq_run_extend");
+  const parsed = z.object(inputs.hq_run_extend).parse(args);
+  const result = extendRun(db, { room: ctx.room, agentId: ctx.agentId }, parsed.runId, parsed.minutes);
+  return {
+    ...result,
+    note: result.cappedByHardLimit
+      ? "Extended up to its hard limit only: MyHQ interrupts the run then, whatever happens."
+      : "Extended: MyHQ wakes you again if it is still running at its new deadline.",
+  };
+}
+
+/** hq_run_stop: interrupts a stuck run, with the reason the Standard shows. */
+export function hqRunStop(db: Db, ctx: HqContext, args: Args<"hq_run_stop">) {
+  assertSupervisor(db, ctx, "hq_run_stop");
+  const parsed = z.object(inputs.hq_run_stop).parse(args);
+  return {
+    ...requestStop(db, { room: ctx.room, agentId: ctx.agentId }, parsed.runId, parsed.reason),
+    note: "MyHQ interrupts the run now: it ends failed, its own task blocked and its mailbox tasks pending, and the Standard shows your reason.",
+  };
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {

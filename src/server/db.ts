@@ -576,6 +576,34 @@ CREATE TABLE IF NOT EXISTS standard_announced (
 );
 `,
   },
+  {
+    version: 17,
+    sql: `
+-- The deadlines of a run (docs/architecture.md, "Long runs"), one row per run,
+-- written by the runner at its start. Idempotent, as the migrations after 14.
+-- deadline_at: when the runner looks at the run again (the soft deadline,
+-- pushed by a check, a slice or hq_run_extend); hard_deadline_at: the run is
+-- always interrupted then. check_asked_at: a check of the supervisor waits for
+-- its decision. The stop_* columns: hq_run_stop, applied by the app.
+CREATE TABLE IF NOT EXISTS run_deadlines (
+  run_id INTEGER PRIMARY KEY,
+  budget_usd REAL NOT NULL,
+  deadline_at TEXT NOT NULL,
+  hard_deadline_at TEXT NOT NULL,
+  extensions INTEGER NOT NULL DEFAULT 0,
+  checks INTEGER NOT NULL DEFAULT 0,
+  slices INTEGER NOT NULL DEFAULT 0,
+  check_asked_at TEXT,
+  check_run_id INTEGER,
+  note_task_id INTEGER,
+  stop_reason TEXT,
+  stop_room TEXT,
+  stop_agent TEXT,
+  stop_requested_at TEXT,
+  updated_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

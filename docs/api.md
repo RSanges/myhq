@@ -68,8 +68,10 @@ French text per `code`.
 A run is `cancelled` when it was interrupted because the app stopped during it
 (the grace of a stop was over, or the app crashed or was killed: summary
 « Interrupted: MyHQ stopped during the run. »), and `failed` when the engine
-reports an error, the budget (`--max-budget-usd`) is exceeded or the run times
-out (`HQ_RUN_TIMEOUT_MINUTES`).
+reports an error, the budget (`--max-budget-usd`) is exceeded, the run times
+out (`HQ_RUN_TIMEOUT_MINUTES`, in a home without a supervisor), reaches its
+hard limit (`HQ_RUN_HARD_LIMIT_MINUTES`) or is stopped by the supervisor
+(`hq_run_stop`): see "Long runs" in `architecture.md`.
 
 All timestamps are ISO 8601 strings in UTC (`2026-11-02T16:18:11.256Z`). Ids
 are integers.
@@ -1261,7 +1263,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its thirteen tools write to the same
+for each run (see `architecture.md`). Its sixteen tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

@@ -40,6 +40,7 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     maxRunsPerDay: 12,
     defaultMaxBudgetUsd: 1,
     runTimeoutMs: 60_000,
+    runHardLimitMs: 180 * 60_000,
     shutdownGraceMs: 1_000,
     messageWakeIntervalMs: 10 * 60_000,
     // Never the real binary: a wake-up that no test scripted must fail at once, not spend tokens.

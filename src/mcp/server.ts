@@ -21,6 +21,9 @@ import {
   hqReadDecisions,
   hqRelaunch,
   hqRooms,
+  hqRunExtend,
+  hqRunStatus,
+  hqRunStop,
   hqSubmit,
   hqSuggestAgent,
   hqTaskUpdate,
@@ -166,6 +169,33 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_blocked_note,
     },
     async (args) => respond(() => hqBlockedNote(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_run_status",
+    {
+      description:
+        "Supervisor of the Standard only. Check a run in progress (a « long run to check »): agent, room, task, minutes since its start, its deadlines and extensions, its cost so far against its budget (an estimate from its tokens while it runs), its 20 latest events with their time, the time of its last event, and MyHQ's hints: minutes without activity, events and tool calls of the last 10 minutes, identical tool calls repeated in a row (`trailingIdenticalCalls`) and the most repeated one. Read-only.",
+      inputSchema: inputs.hq_run_status,
+    },
+    async (args) => respond(() => hqRunStatus(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_run_extend",
+    {
+      description:
+        "Supervisor of the Standard only. Let a long run that progresses go on for `minutes` more from now (10 to 60), never past its hard limit (HQ_RUN_HARD_LIMIT_MINUTES), which always interrupts it. Each extension is counted. You are woken again if it still runs at its new deadline.",
+      inputSchema: inputs.hq_run_extend,
+    },
+    async (args) => respond(() => hqRunExtend(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_run_stop",
+    {
+      description:
+        "Supervisor of the Standard only. Interrupt a run that is clearly stuck, with the reason for the owner. It ends failed, as a run that timed out: its own task blocked, its mailbox tasks pending, and a line of the Standard gives your reason.",
+      inputSchema: inputs.hq_run_stop,
+    },
+    async (args) => respond(() => hqRunStop(db, ctx, args)),
   );
 
   await server.connect(new StdioServerTransport());

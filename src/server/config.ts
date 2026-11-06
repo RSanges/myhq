@@ -16,6 +16,7 @@ const envSchema = z.object({
   HQ_MAX_RUNS_PER_DAY: z.coerce.number().int().min(0).default(12),
   HQ_DEFAULT_MAX_BUDGET_USD: z.coerce.number().positive().default(1),
   HQ_RUN_TIMEOUT_MINUTES: z.coerce.number().positive().default(30),
+  HQ_RUN_HARD_LIMIT_MINUTES: z.coerce.number().positive().default(180),
   HQ_SHUTDOWN_GRACE_SECONDS: z.coerce.number().min(0).default(90),
   HQ_MESSAGE_WAKE_MINUTES: z.coerce.number().min(0).default(10),
   HQ_CLAUDE_BIN: z.string().trim().min(1).default("claude"),
@@ -42,7 +43,13 @@ export type HqConfig = {
   runsDir: string;
   maxRunsPerDay: number;
   defaultMaxBudgetUsd: number;
+  /**
+   * The soft deadline of a run (HQ_RUN_TIMEOUT_MINUTES): past it, a home with
+   * a supervisor has the run checked instead of interrupted (long-runs.ts).
+   */
   runTimeoutMs: number;
+  /** A run still going this long after its start is always interrupted (HQ_RUN_HARD_LIMIT_MINUTES). */
+  runHardLimitMs: number;
   /**
    * When the app is asked to stop, how long it waits for the runs in progress
    * to end before it interrupts them (HQ_SHUTDOWN_GRACE_SECONDS).
@@ -104,6 +111,7 @@ export function getConfig(env: Env = process.env): HqConfig {
     maxRunsPerDay: vars.HQ_MAX_RUNS_PER_DAY,
     defaultMaxBudgetUsd: vars.HQ_DEFAULT_MAX_BUDGET_USD,
     runTimeoutMs: vars.HQ_RUN_TIMEOUT_MINUTES * 60_000,
+    runHardLimitMs: vars.HQ_RUN_HARD_LIMIT_MINUTES * 60_000,
     shutdownGraceMs: vars.HQ_SHUTDOWN_GRACE_SECONDS * 1000,
     messageWakeIntervalMs: vars.HQ_MESSAGE_WAKE_MINUTES * 60_000,
     claudeBin: vars.HQ_CLAUDE_BIN,

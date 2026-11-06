@@ -105,7 +105,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Thirteen tools, all validated with zod:
+room) and writes directly to SQLite. Sixteen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -122,6 +122,9 @@ room) and writes directly to SQLite. Thirteen tools, all validated with zod:
 | `hq_blocked()` | Supervisor only: read the Standard, every entry but its own (see "The supervisor"). Read-only. |
 | `hq_relaunch(kind, id, message?)` | Supervisor only: « Relancer » an entry of the Standard, with its guards, once per task. |
 | `hq_blocked_note(kind, id, text, handOff?)` | Supervisor only: a sentence for the owner on an entry of the Standard; `handOff` hands it to the owner. |
+| `hq_run_status(runId)` | Supervisor only: a run as it checks it, with MyHQ's hints on its activity (see "Long runs"). Read-only. |
+| `hq_run_extend(runId, minutes)` | Supervisor only: 10 to 60 more minutes for a long run, never past its hard limit. |
+| `hq_run_stop(runId, reason)` | Supervisor only: interrupts a stuck run, with the reason shown on the Standard. |
 
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
@@ -855,14 +858,77 @@ Migration 16 adds the tables `supervisors`, `blocked_notes`,
 `supervisor_relaunches` and `standard_announced` (idempotent, as every
 migration after 14).
 
+### Long runs
+
+A run has a soft deadline, `HQ_RUN_TIMEOUT_MINUTES` (30 by default) after its
+start, and a hard limit, `HQ_RUN_HARD_LIMIT_MINUTES` (180 by default; the soft
+deadline never comes after it). The budget of the run (`--max-budget-usd`)
+stays the CLI's to apply, whatever the deadlines say. The runner owns the
+timer; `src/server/long-runs.ts` decides what happens each time it fires,
+from the run's row of `run_deadlines` (written at the start of every run: its
+budget, its next deadline, its hard limit), which the HQ MCP server writes to
+as well.
+
+- **Without a supervisor** in the home, the run is interrupted at the soft
+  deadline as it always was: `failed`, « Timed out after 30 minutes
+  (HQ_RUN_TIMEOUT_MINUTES). ». So is a run of the supervisor itself: nobody
+  checks it.
+- **With a supervisor**, MyHQ does not interrupt the run. It wakes the
+  supervisor (the first one of the home, reason `long_run`) with a task that
+  starts with « Long run to check: run #12 of room/agent (name) », gives its
+  duration, its task, and what to call, and the deadline moves 5 minutes later
+  while it decides. A check is a run like another one: agent lock, shared
+  resources, daily cap.
+- **`hq_run_status { runId }`** gives the run (agent, room, task, status,
+  start, minutes), its deadlines (`deadlineAt`, `hardDeadlineAt`,
+  `extensions`, `checks`, `slices`, `stopRequested`), its cost against its
+  budget (`cost.usd`, `cost.budgetUsd`, `cost.shareOfBudget`, `cost.tokens`:
+  while it runs, an estimate from the tokens of its journal
+  `data/runs/<id>.jsonl`, each model call once, at the API prices of the
+  current Opus, Sonnet and Haiku, `estimated: true`; once it ended, its
+  recorded cost), its 20 latest events with their time (`events`: `at`,
+  `type`, a one-line `detail`), `lastEventAt`, and MyHQ's hints:
+  `minutesSinceLastEvent`, `eventsLast10Minutes`, `toolCallsLast10Minutes`,
+  `trailingIdenticalCalls` (the identical tool calls, same tool and same
+  input, in a row at the end) and `mostRepeatedCall` among the 30 latest tool
+  calls.
+- **`hq_run_extend { runId, minutes }`** (10 to 60) moves the deadline to
+  `minutes` from now, never earlier than it was and never past the hard limit
+  (`cappedByHardLimit` then), and counts the extension. When the run still
+  works at its new deadline, the supervisor is woken again.
+- **`hq_run_stop { runId, reason }`** records the stop; the app interrupts the
+  run on the tool result of that call (`applyRunStops`, from `wakeAgents`,
+  and at each tick of the scheduler's timer). The run ends `failed` as a run
+  that timed out (its own instruction blocked, its mailbox tasks back to
+  pending, the failure alert), with the summary « Stopped by <name>
+  (supervisor) after N minutes: <reason> », and its line of the Standard says
+  « Le tour #12 a été arrêté par <name> : <reason> ».
+- **No answer.** When the wait is over without a decision, or when the check
+  cannot start (supervisor busy, daily cap, failure), the run goes on for a
+  slice of `HQ_RUN_TIMEOUT_MINUTES`, then the supervisor is asked again, and
+  so on: a run is never interrupted for want of an answer. MyHQ puts one note
+  per run on the Standard, a blocked task of the supervisor whose reason is
+  « Pas de réponse de <name> sur le tour #12 de <agent>... », kept up to date
+  at each slice; the owner relaunches it (the supervisor then checks the run)
+  or closes it.
+- **The hard limit** interrupts the run whatever the extensions: `failed`,
+  « Interrupted at the hard limit of 180 minutes (HQ_RUN_HARD_LIMIT_MINUTES),
+  after N extension(s). », and on the Standard « Le tour #12 a été interrompu
+  au plafond de 180 min. ».
+
+The three tools are refused to any other agent, as the supervisor's other
+tools are, and a supervisor never decides on its own run (`OWN_RUN`) nor on a
+run that ended (`NOT_RUNNING`). Migration 17 adds the table `run_deadlines`.
+
 ### Why a run started
 
 Each run stores a `reason` (`runs.reason`, null when started from the desk,
 `/run` or a routine): the `reason` of `POST /api/runs` from a script of the
 home (for example a mail listener calling with `reason: "mail"`), or MyHQ's
 own `approval`, `message`, `revise`, `chat`, `agent_need`, `relaunch` (the
-Standard, or the supervisor's `hq_relaunch`) and `standard` (the supervisor
-woken for the Standard). It is in the Run shape (API, live stream, daily
+Standard, or the supervisor's `hq_relaunch`), `standard` (the supervisor
+woken for the Standard) and `long_run` (the supervisor woken to check a long
+run). It is in the Run shape (API, live stream, daily
 export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.

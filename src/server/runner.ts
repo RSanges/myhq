@@ -12,6 +12,15 @@ import { HqError } from "./errors";
 import { exitProcess } from "./exit";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
+import {
+  atDeadline,
+  CHECK_WAIT_MS,
+  readDeadlines,
+  recordDeadlines,
+  stoppedSummary,
+  stopsFor,
+  type DeadlineDecision,
+} from "./long-runs";
 import { languageName, wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { startRelaunchRequests } from "./relaunch-requests";
@@ -47,6 +56,8 @@ export type RunnerDeps = {
   env?: Env;
   /** Delay before the one retry of a run stopped for an MCP server not connected. Default: 5 s. */
   mcpRetryDelayMs?: number;
+  /** How long a long run waits for the supervisor's decision (long-runs.ts). Default: 5 minutes. */
+  runCheckWaitMs?: number;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -84,10 +95,17 @@ function promptLanguage(home: string): string {
 }
 
 /**
- * Why a run was stopped by the app: its timeout, or the app stopping (the run
- * is then `cancelled`, an interruption, see `releaseOrphanTasks`).
+ * Why a run was stopped by the app: its timeout (no supervisor to check it),
+ * its hard limit, a supervisor's hq_run_stop, or the app stopping (the run is
+ * then `cancelled`, an interruption, see `releaseOrphanTasks`).
  */
-type ActiveRun = { controller: AbortController; reason: "timeout" | "shutdown" | null; mcpConfigPath: string | null };
+type ActiveRun = {
+  controller: AbortController;
+  reason: "timeout" | "hard_limit" | "stopped" | "shutdown" | null;
+  mcpConfigPath: string | null;
+  /** The database of the run: a supervisor's stop is read there (`applyRunStops`). */
+  db: Db;
+};
 
 type RunnerState = {
   active: Map<number, ActiveRun>;
@@ -418,6 +436,8 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
  * over. Never throws for a busy agent or the cap; returns the runs started.
  */
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
+  // A supervisor's hq_run_stop is applied here: on the tool result of that very call.
+  applyRunStops(db);
   // MyHQ's own onboarding agent is in no room of the home: its revisions are woken apart.
   const onboarding = wakeOnboarding(config, db, deps);
   // The relaunches a supervisor asked for (hq_relaunch), before the mailbox wake-ups: the run takes the whole mailbox.
@@ -479,6 +499,26 @@ export function pairWokeRecently(db: Db, candidate: WakeCandidate, since: string
   );
 }
 
+/**
+ * Interrupts the runs in progress of this process that a supervisor asked to
+ * stop (hq_run_stop, written by the HQ MCP server): they end `failed`, as a
+ * run that timed out. Never throws.
+ */
+export function applyRunStops(db: Db): void {
+  try {
+    const active = runnerState().active;
+    const ids = [...active.entries()].filter(([, run]) => run.db === db && run.reason === null).map(([id]) => id);
+    for (const row of stopsFor(db, ids)) {
+      const run = active.get(row.run_id);
+      if (!run || run.reason !== null) continue;
+      run.reason = "stopped";
+      run.controller.abort();
+    }
+  } catch (error) {
+    console.error("[runner] applying the stops of the supervisor failed", error);
+  }
+}
+
 /** Errors that leave a woken task pending, to be taken by a later run. */
 export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED", "SHUTTING_DOWN"]);
 
@@ -493,6 +533,7 @@ export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"
  */
 export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   try {
+    applyRunStops(db);
     if (runsToday(db) >= liveConfig(config).maxRunsPerDay) return [];
     return wakeAgents(config, db, deps);
   } catch (error) {
@@ -647,12 +688,49 @@ function wake(p: ExecuteParams): void {
 async function execute(p: ExecuteParams): Promise<void> {
   const { db, config, engine, room, agent, run } = p;
   const state = runnerState();
-  const active: ActiveRun = { controller: new AbortController(), reason: null, mcpConfigPath: null };
+  const active: ActiveRun = { controller: new AbortController(), reason: null, mcpConfigPath: null, db };
   state.active.set(run.id, active);
-  const timer = setTimeout(() => {
-    active.reason = "timeout";
+  const interrupt = (why: NonNullable<ActiveRun["reason"]>) => {
+    if (active.reason !== null) return;
+    active.reason = why;
     active.controller.abort();
-  }, config.runTimeoutMs);
+  };
+  // The soft deadline (HQ_RUN_TIMEOUT_MINUTES) and the hard limit (HQ_RUN_HARD_LIMIT_MINUTES): see long-runs.ts.
+  const startedAt = Date.parse(run.started_at);
+  const hardAt = startedAt + config.runHardLimitMs;
+  try {
+    recordDeadlines(db, run.id, agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd, startedAt + config.runTimeoutMs, hardAt);
+  } catch (error) {
+    // Without its row the run is interrupted at its soft deadline, as before long runs existed.
+    console.error(`[runner] the deadlines of run #${run.id} could not be recorded`, error);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (until: number) => {
+    timer = setTimeout(onDeadline, Math.max(0, Math.min(until, hardAt) - Date.now()));
+  };
+  const onDeadline = () => {
+    const at = Date.now();
+    if (at >= hardAt) return interrupt("hard_limit");
+    let decision: DeadlineDecision;
+    try {
+      decision = atDeadline({
+        config,
+        db,
+        home: loadHome(config.home),
+        run,
+        at,
+        waitMs: p.deps.runCheckWaitMs ?? CHECK_WAIT_MS,
+        start: (request) => startRun(request, { ...p.deps, config, engine: p.engine, send: p.send }),
+      });
+    } catch (error) {
+      // Never interrupted for an error of MyHQ's: the run is looked at again in a minute, the hard limit holds.
+      console.error(`[runner] the deadline of run #${run.id} could not be checked`, error);
+      return arm(at + 60_000);
+    }
+    if (decision.kind === "wait") return arm(decision.until);
+    interrupt(decision.kind === "stop" ? "stopped" : decision.why);
+  };
+  arm(startedAt + config.runTimeoutMs);
 
   const logFile = path.join(config.runsDir, `${run.id}.jsonl`);
   const mcpConfigPath = path.join(config.runsDir, `${run.id}.mcp.json`);
@@ -769,6 +847,18 @@ async function execute(p: ExecuteParams): Promise<void> {
   if (active.reason === "timeout") {
     status = "failed";
     summary = `Timed out after ${Math.round(config.runTimeoutMs / 60_000)} minutes (HQ_RUN_TIMEOUT_MINUTES).`;
+  }
+  if (active.reason === "hard_limit" || active.reason === "stopped") {
+    // As a run that timed out: its instruction is blocked, its mailbox tasks go back to pending.
+    status = "failed";
+    const deadlines = readDeadlines(db, run.id);
+    const minutes = Math.round((Date.now() - Date.parse(run.started_at)) / 60_000);
+    if (active.reason === "hard_limit") {
+      summary = `Interrupted at the hard limit of ${Math.round(config.runHardLimitMs / 60_000)} minutes (HQ_RUN_HARD_LIMIT_MINUTES), after ${deadlines?.extensions ?? 0} extension(s).`;
+    } else if (deadlines) {
+      const by = loadHome(config.home).rooms.find((each) => each.name === deadlines.stop_room)?.agents.find((each) => each.id === deadlines.stop_agent);
+      summary = stoppedSummary(deadlines, by?.name ?? deadlines.stop_agent ?? "the supervisor", minutes);
+    }
   }
   if (active.reason === "shutdown") {
     // Not a failure: the tasks go back to the queue and wake the agent again after the restart (wakeAgents).
