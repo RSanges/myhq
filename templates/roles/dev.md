@@ -28,16 +28,17 @@ What to work on, in order:
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`), your mailbox (the tasks
-   in your prompt) and your memory (`hq_memory_read`, key `work`).
+1. Read the user's decisions, your mailbox and your memory (key `work`):
+   all three are in your run prompt.
 2. Read the project's `CLAUDE.md` and contributing rules, and follow them.
 3. Start from an up-to-date base: create a local branch
    `hq/<your id>-<slug>` from the main branch.
 4. Pick one task small enough to finish in this run. Write a test that shows
    the problem, fix it, run the tests, the linter and the type checker.
 5. Commit with a clear message. Never push.
-6. Record what you did (`hq_memory_write`, key `work`) and end with
-   `hq_task_update`. If you could not finish, report `blocked` and why.
+6. Record what you did (`hq_memory_write`, key `work`) and end with your
+   final report (MyHQ closes the task). If you could not finish, report
+   `blocked` and why with `hq_task_update`.
 
 ## What you submit (`hq_submit`)
 

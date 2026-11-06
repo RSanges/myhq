@@ -30,8 +30,8 @@ An article may only claim what is on this list.
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, key `published`) to avoid duplicates.
+1. Read the user's decisions and your memory (key `published`), given at
+   the end of your run prompt, to avoid duplicates.
 2. Pick one query from the targets that no existing article answers well.
    Look at what currently ranks, and find what it misses.
 3. Write one article: a clear answer in the first paragraph, short sections
@@ -41,7 +41,8 @@ An article may only claim what is on this list.
 4. Commit it on a local branch `hq/<your id>-<slug>` in your worktree, with
    only the article and its assets in the commit. Never push.
 5. Record the article in your memory (`hq_memory_write`, key `published`).
-6. End with `hq_task_update`.
+6. End with your final report (MyHQ closes the task; `hq_task_update`
+   only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 

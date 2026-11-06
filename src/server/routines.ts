@@ -123,7 +123,8 @@ export function fireRoutine(
   try {
     const run = start(
       { room: room.name, agent: agent.id, ...(routine.task ? { task: routine.task } : {}) },
-      { ...deps, config },
+      // The motive of the run for the agent's `modelFor` and `prepare`: a routine has no reason.
+      { ...deps, config, motive: "routine" },
     );
     return recordFiring(db, { ...base, outcome: "started", runId: run.id });
   } catch (error) {

@@ -27,6 +27,20 @@ const remoteServerSchema = z.looseObject({
 export const MODELS = ["opus", "sonnet", "haiku"] as const;
 export type Model = (typeof MODELS)[number];
 
+/** Reasoning effort levels of the CLI (`claude --effort`). */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** Prompt cache durations the CLI can be asked for (CLAUDE_CODE_PROMPT_CACHE_TTL). */
+export const CACHE_TTLS = ["5m", "1h"] as const;
+export type CacheTtl = (typeof CACHE_TTLS)[number];
+
+/** The motive of a run (`runs.reason`, or `routine`, `manual`): the key of `modelFor`. */
+const motiveSchema = z.string().regex(/^[a-z_]{1,40}$/, "lowercase letters and underscores, 40 at most");
+
+/** How long a prepare command may run by default, in seconds. */
+export const PREPARE_TIMEOUT_SECONDS = 60;
+
 const cronSchema = z.string().superRefine((value, ctx) => {
   const error = cronError(value);
   if (error) ctx.addIssue({ code: "custom", message: error });
@@ -114,6 +128,22 @@ export const agentSchema = z.strictObject({
    * of every room. MyHQ wakes it when something new is stuck (docs/architecture.md, "The supervisor").
    */
   supervisor: z.boolean().optional(),
+
+  // Run options: how each run of the agent is started (see "Run options" in docs/home-layout.md).
+  /** Reasoning effort of its runs, passed as `--effort`. Default: the CLI's own. */
+  effort: z.enum(EFFORTS).optional(),
+  /** The model of a run by its motive (`{ "message": "sonnet" }`), over `model`. */
+  modelFor: z.record(motiveSchema, z.enum(MODELS)).optional(),
+  /** A command run before each turn, which may skip it or add context (src/server/prepare.ts). */
+  prepare: z
+    .strictObject({
+      /** The program and its arguments, relative to the home (cwd = the home). */
+      command: z.array(z.string().min(1)).min(1),
+      timeoutSeconds: z.number().positive().max(600).optional(),
+    })
+    .optional(),
+  /** Prompt cache duration of its runs (CLAUDE_CODE_PROMPT_CACHE_TTL). Default: the CLI's own (1 hour on a subscription). */
+  cacheTtl: z.enum(CACHE_TTLS).optional(),
 });
 
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
@@ -181,6 +211,15 @@ export type Agent = {
   resources: string[];
   /** The supervisor of the Standard (see supervisor.ts); false for most agents. */
   supervisor?: boolean;
+  // Run options (room.json), absent for MyHQ's own agents.
+  /** `--effort` of its runs, or null for the CLI's default. */
+  effort?: Effort | null;
+  /** The model of a run by its motive, over `model`. */
+  modelFor?: Partial<Record<string, Model>>;
+  /** The command run before each turn (prepare.ts), its arguments relative to the home. */
+  prepare?: { command: string[]; timeoutMs: number } | null;
+  /** Prompt cache duration of its runs, or null for the CLI's default. */
+  cacheTtl?: CacheTtl | null;
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -314,6 +353,12 @@ export function loadRoom(home: string, roomDir: string): Room {
       notifyRuns: agent.notifyRuns ?? null,
       resources: agent.resources ?? [],
       supervisor: agent.supervisor ?? false,
+      effort: agent.effort ?? null,
+      modelFor: agent.modelFor ?? {},
+      prepare: agent.prepare
+        ? { command: agent.prepare.command, timeoutMs: (agent.prepare.timeoutSeconds ?? PREPARE_TIMEOUT_SECONDS) * 1000 }
+        : null,
+      cacheTtl: agent.cacheTtl ?? null,
     };
   });
 

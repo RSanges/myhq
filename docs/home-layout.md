@@ -113,6 +113,10 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].resources` | no | Shared resources the agent's runs hold, for example `["gpu"]` (lowercase letters, digits, `-` or `_`, each listed once). Two runs holding a common resource never run at once, in any room (see "Shared resources" below). Default: none. |
 | `agents[].supervisor` | no | `true`: the supervisor of the Standard. It reads what is stuck (`hq_blocked`), writes to any agent of any room, reads the items of every room, relaunches a stuck entry once (`hq_relaunch`) and leaves a note for the owner on it (`hq_blocked_note`); it submits nothing to approve. MyHQ wakes it when something new is stuck, and every 30 minutes at most while entries remain open (see "The supervisor" in `architecture.md`). It also checks a run that reaches `HQ_RUN_TIMEOUT_MINUTES` (`hq_run_status`), and extends it (`hq_run_extend`) or stops it (`hq_run_stop`) instead of letting MyHQ interrupt it (see "Long runs"). Give it only the hq tools. MyHQ wakes the first one of the home. Default: `false`. |
 | `agents[].skills` | no | Claude Code skills the agent follows: folders relative to the **room directory**, each holding a `SKILL.md` (see "Skills" below). Default: none. |
+| `agents[].effort` | no | Reasoning effort of the agent's runs, passed as `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. `low` suits an agent that formats more than it thinks (a brief, a recap, a watch). Default: the CLI's own (see "Run options" below). |
+| `agents[].modelFor` | no | The model of a run by its motive, over `model`: `{ "message": "sonnet" }` coordinates on Sonnet and creates on the agent's `model`. Keys: the motives of "Run options" below. |
+| `agents[].prepare` | no | `{ "command": [...], "timeoutSeconds": 60 }`: a command of the home MyHQ runs before each turn of the agent, which may skip the turn (no model call, cost 0) or add context to it (see "Run options" below). |
+| `agents[].cacheTtl` | no | Prompt cache duration of the agent's runs: `"5m"` or `"1h"`. Default: the CLI's own, one hour on a subscription (see "Run options" below). |
 
 Cron expressions accept `*`, numbers, ranges (`1-5`), steps (`*/15`,
 `8-18/2`), lists (`1,15`) and names (`mon`, `jan`); 0 and 7 are Sunday. When
@@ -319,6 +323,84 @@ for typing (`scripts/iso/README.md`, "Characters"); a home that gives it its
 own sheet draws that row so. The round only exists on the single floor: the
 floor of one room (`floor-per-project`) has no closet, so a roaming agent is
 listed in the strip without being drawn there.
+
+#### Run options: `effort`, `modelFor`, `prepare` and `cacheTtl`
+
+These fields change how a run of the agent is started, never what it may do.
+
+**The motive of a run** is its `reason` (`runs.reason`, see "Why a run
+started" in `architecture.md`: `message`, `approval`, `revise`, `chat`,
+`desk`, `relaunch`, `standard`, `long_run`, or a reason of the home such as
+`mail`), `routine` for a run started by a routine, and `manual` for a run
+started by hand (the desk, `/run`, `POST /api/runs` without a reason).
+
+**`effort`** is passed to `claude -p` as `--effort <level>`. Left out, the CLI
+decides.
+
+**`modelFor`** maps a motive to a model (`opus`, `sonnet` or `haiku`); a motive
+it does not name runs on `model`:
+
+```json
+{ "model": "opus", "modelFor": { "message": "sonnet", "routine": "sonnet" } }
+```
+
+**`prepare`** runs a command before each turn: `command` is the program and its
+arguments, relative to the home, and it runs with the home as working
+directory, for at most `timeoutSeconds` (default 60, at most 600). Use an
+absolute program or one on the `PATH` (`node`, `python`), not a shell built-in.
+Its environment is the agent's (no secret of the app, see "A run" in
+`architecture.md`) plus `MYHQ_HOME`, the absolute path of the home. It reads one
+JSON object on stdin:
+
+```json
+{
+  "room": "example",
+  "agent": "analyst",
+  "motive": "routine",
+  "task": { "id": 812, "title": "Morning alert on yesterday's sign-ups.", "body": "Morning alert on yesterday's sign-ups." },
+  "messages": [{ "from": "example/lead", "text": "Any news on the launch?", "expects": null }],
+  "lastRunAt": "2026-11-05T07:00:02.114Z",
+  "now": "2026-11-06T07:00:01.530Z"
+}
+```
+
+- `task`: the run's own instruction (`title` is its first line), or `null`
+  when the run was woken only to take its mailbox.
+- `messages`: the mailbox tasks the run takes. `from` is `room/agent` for a
+  message of an agent, otherwise where the task comes from (`approval`,
+  `revise`, `chat`); `expects` is what the sender expects of a message
+  (`reply`, `action` or `none`) when MyHQ knows it, else `null`.
+- `lastRunAt`: the start of the agent's last run that ended well, a skipped
+  one included (nothing was left to do then), or `null`.
+
+It answers one JSON object on stdout, one of:
+
+- `{ "run": false, "reason": "No sign-up yesterday." }`: no model turn. The run
+  is still recorded, so the skip is visible in the list of runs and on the
+  desk: status `done`, cost 0, no tokens, its summary « Skipped by its prepare
+  command, no model turn: » followed by the reason (end reason
+  `prepare_skipped`). Its tasks are closed `done` with the reason as their
+  note. Nothing is delivered (`notifyRuns` sends nothing). A skipped run does
+  not count in the daily cap (`maxRunsPerDay`) and never triggers its alert.
+- `{ "run": true, "context": "...", "model": "sonnet", "effort": "low" }`: a
+  normal turn. `context` (Markdown, optional) is added to the prompt under the
+  heading `## Préparé par MyHQ`, before the date line; `model` and `effort`
+  (optional) override `modelFor`, `model` and `effort` for this run only.
+
+It fails open: a command that cannot start, exits with a non-zero code, runs
+past its timeout (it is killed) or prints anything else than one of these two
+objects leaves the turn to run as if there were no `prepare`; MyHQ logs the
+error (`[runner] the prepare command of <room>/<agent> failed ...`). A command
+meant to save turns must therefore be cheap and quick, and say `run: true`
+whenever it is unsure.
+
+**`cacheTtl`** sets the prompt cache duration of the agent's runs, through the
+CLI's `CLAUDE_CODE_PROMPT_CACHE_TTL` variable. On a subscription the CLI keeps
+the prompt for an hour, and a cache write costs twice the input price; for one
+that lasts five minutes, it costs 1.25 times. An agent that runs less than once
+an hour (a daily brief, a weekly review) rewrites its whole prompt prefix at
+each run anyway: `"5m"` makes that write cheaper. Keep the default for an
+agent woken several times an hour, which reads its prefix from the cache.
 
 #### Environment placeholders in `mcpServers`
 

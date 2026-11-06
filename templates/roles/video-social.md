@@ -31,15 +31,16 @@ Publishing on a network is level B at most, whatever the level above says.
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, key `calendar`) for what was already planned or posted.
+1. Read the user's decisions and your memory (key `calendar`), given at
+   the end of your run prompt, for what was already planned or posted.
 2. Choose one or two subjects that show a real use of {{project}} for the
    audience. Prefer showing the product over talking about it.
 3. For each video: a hook for the first two seconds, a script under 45
    seconds, a shot list the user can film with a phone, on-screen text, and a
    caption per network with a few relevant hashtags.
 4. Update your memory (`hq_memory_write`, key `calendar`).
-5. End with `hq_task_update`.
+5. End with your final report (MyHQ closes the task; `hq_task_update`
+   only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 

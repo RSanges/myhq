@@ -205,6 +205,11 @@ export const CLAUDE_ENV = {
   MCP_CONNECT_TIMEOUT_MS: "60000",
 } as const;
 
+/** Environment additions of one run: its prompt cache duration when the agent sets one (`cacheTtl`). */
+export function runEnv(input: Pick<RunInput, "cacheTtl">): Record<string, string> {
+  return input.cacheTtl ? { CLAUDE_CODE_PROMPT_CACHE_TTL: input.cacheTtl } : {};
+}
+
 /** The exact argument list given to `claude`. */
 export function buildClaudeArgs(input: RunInput): string[] {
   const args = [
@@ -224,7 +229,11 @@ export function buildClaudeArgs(input: RunInput): string[] {
     // do not run inside agents.
     "--setting-sources",
     "project,local",
+    // The per-machine sections (working directory, environment, git status) go to the first
+    // user message: the system prompt of an agent stays the same from run to run, and cached.
+    "--exclude-dynamic-system-prompt-sections",
   ];
+  if (input.effort) args.push("--effort", input.effort);
   for (const dir of input.addDirs ?? []) args.push("--add-dir", dir);
   const tools = input.tools ?? builtInTools(input.allowedTools);
   args.push("--tools", ...(tools.length > 0 ? tools : [""]));
@@ -398,7 +407,7 @@ export class ClaudeEngine implements Engine {
   async *run(input: RunInput): AsyncIterable<RunEvent> {
     const child = spawn(this.bin, buildClaudeArgs(input), {
       cwd: input.workDir,
-      env: { ...input.env, ...CLAUDE_ENV } as unknown as NodeJS.ProcessEnv,
+      env: { ...input.env, ...CLAUDE_ENV, ...runEnv(input) } as unknown as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

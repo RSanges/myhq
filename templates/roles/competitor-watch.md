@@ -30,8 +30,8 @@ Use this list to say where a competitor is ahead or behind.
 
 ## Each run
 
-1. Read the user's decisions (`hq_read_decisions`) and your memory
-   (`hq_memory_read`, key `last_note`) to report only what changed since.
+1. Read the user's decisions and your memory (key `last_note`), given at
+   the end of your run prompt, to report only what changed since.
 2. Check the competitors' sites, pricing pages, changelogs and public
    announcements, and the press of the sector, for the period.
 3. Keep only what could change a decision of the user: a new feature, a price
@@ -39,7 +39,7 @@ Use this list to say where a competitor is ahead or behind.
 4. Write the note: at most ten items, each with its date, its source link
    and one line on what it means for {{project}}.
 5. Save the date and the headlines (`hq_memory_write`, key `last_note`) and
-   end with `hq_task_update`.
+   end with your final report (MyHQ closes the task; `hq_task_update` only to report `blocked`).
 
 ## What you submit (`hq_submit`)
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { recordBotMessage } from "./chat-history";
 import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
+import { briefingText, giveBackDecisions, readMemories, takeDecisions } from "./briefing";
 import { alertCapReached } from "./cap-alert";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
@@ -24,6 +25,7 @@ import {
 import { languageName, wakeOnboarding } from "./onboarding";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { startRelaunchRequests } from "./relaunch-requests";
+import { runPrepare, type PrepareInput, type PrepareOutcome } from "./prepare";
 import { resourceHolder } from "./resources";
 import { toTelegramMessages } from "../assistant/text";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
@@ -58,6 +60,11 @@ export type RunnerDeps = {
   mcpRetryDelayMs?: number;
   /** How long a long run waits for the supervisor's decision (long-runs.ts). Default: 5 minutes. */
   runCheckWaitMs?: number;
+  /**
+   * The motive of a run started without a `reason` (`modelFor`, `prepare`): `routine` for a
+   * routine (routines.ts), `manual` by default. Never passed on to the runs this one wakes.
+   */
+  motive?: string;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -285,10 +292,15 @@ export function installShutdown(
   });
 }
 
+/** The runs started today that count in the daily cap: a turn its prepare command skipped (no model call) does not. */
 export function runsToday(db: Db): number {
   const row = db
-    .prepare("SELECT COUNT(*) AS n FROM runs WHERE date(started_at, 'localtime') = date('now', 'localtime')")
-    .get() as { n: number };
+    .prepare(
+      `SELECT COUNT(*) AS n FROM runs WHERE date(started_at, 'localtime') = date('now', 'localtime')
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.run_id = runs.id AND e.type = 'end'
+           AND json_extract(e.data, '$.reason') = ?)`,
+    )
+    .get(PREPARE_SKIPPED) as { n: number };
   return row.n;
 }
 
@@ -319,8 +331,9 @@ export function buildPrompt(params: {
   const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
-    "Report through the hq tools: hq_task_update for your task, hq_submit for anything to approve. Never publish anything yourself.",
-    "A decision comes to you once (hq_read_decisions). Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
+    "Report through the hq tools: hq_submit for anything to approve. Never publish anything yourself.",
+    "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
+    "Your new decisions and your memory are given at the end of this message: do not call hq_read_decisions or hq_memory_read for them, whatever your role says. A decision comes to you once. Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
     `Language of this home: ${language}. Write your final report, the last message of your run, in ${language}, whatever the language of the task, of your role or of the files you worked on. Tool names, ids and code stay as they are.`,
   ];
   if (params.room.shared) {
@@ -389,6 +402,8 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     agent,
     task,
     reason: request.reason ?? null,
+    motive: request.reason ?? deps.motive ?? "manual",
+    briefing: true,
     prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox, sharedRooms, language: promptLanguage(config.home) }),
   });
 }
@@ -561,8 +576,14 @@ export function launchRun(params: {
   prompt: (runId: number, mailbox: TaskRow[]) => string;
   /** 1 for the automatic retry of a run stopped for an MCP server not connected; there is no second one. */
   attempt?: number;
+  /** The motive of the run for the agent's `modelFor` and `prepare`. Default: the reason, else `manual`. */
+  motive?: string;
+  /** The prompt gives the agent's new decisions and its memory (briefing.ts): the runs of room agents. */
+  briefing?: boolean;
 }): RunRow {
-  const { config, deps, room, agent, task } = params;
+  const { config, room, agent, task } = params;
+  // The motive is this run's own: the runs it wakes get theirs.
+  const deps: RunnerDeps = { ...params.deps, motive: undefined };
   if (runnerState().stopping) {
     throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: the run of "${agent.id}" starts after the restart.`);
   }
@@ -632,10 +653,25 @@ export function launchRun(params: {
     .immediate();
 
   const today = todayLine(new Date(), liveConfig(config).timeZone, promptLanguage(config.home));
-  const prompt = `${params.prompt(run.id, mailbox)}\n\n${today}`;
+  const prompt = params.prompt(run.id, mailbox);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
   const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
-  const execution = execute({ db, config, engine, room, agent, run, prompt, send: deps.send ?? sendAlert, deps, retry }).catch(
+  const execution = execute({
+    db,
+    config,
+    engine,
+    room,
+    agent,
+    run,
+    prompt,
+    today,
+    mailbox,
+    motive: params.motive ?? params.reason ?? "manual",
+    briefing: params.briefing ?? false,
+    send: deps.send ?? sendAlert,
+    deps,
+    retry,
+  }).catch(
     (error) => {
       console.error(`[runner] run #${run.id} crashed`, error);
     },
@@ -654,7 +690,13 @@ type ExecuteParams = {
   room: Room;
   agent: Agent;
   run: RunRow;
+  /** The prompt of the run, before the briefing, the prepared context and the date line (`today`). */
   prompt: string;
+  today: string;
+  /** The tasks of the mailbox the run claimed. */
+  mailbox: TaskRow[];
+  motive: string;
+  briefing: boolean;
   send: Send;
   /** Passed on to the runs this one wakes (wakeAgents). */
   deps: RunnerDeps;
@@ -683,6 +725,69 @@ function wake(p: ExecuteParams): void {
   } catch (error) {
     console.error(`[runner] wake after run #${p.run.id} failed`, error);
   }
+}
+
+/** End reason of a run whose prepare command skipped the turn (`{ "run": false }`). */
+export const PREPARE_SKIPPED = "prepare_skipped";
+/** The summary of a skipped run starts with it, then the reason. */
+export const SKIPPED_SUMMARY = "Skipped by its prepare command, no model turn:";
+/** The heading of the context a prepare command adds to the prompt. */
+export const PREPARED_HEADING = "## Préparé par MyHQ";
+
+/** What a prepare command reads on stdin (prepare.ts). */
+export function prepareInput(
+  db: Db,
+  params: { room: string; agentId: string; runId: number; motive: string; mailbox: readonly TaskRow[] },
+): PrepareInput {
+  const own = db
+    .prepare("SELECT id, text FROM tasks WHERE run_id = ? AND source = 'manual' ORDER BY id LIMIT 1")
+    .get(params.runId) as { id: number; text: string } | undefined;
+  const last = db
+    .prepare("SELECT MAX(started_at) AS at FROM runs WHERE room = ? AND agent_id = ? AND status = 'done' AND id <> ?")
+    .get(params.room, params.agentId, params.runId) as { at: string | null };
+  return {
+    room: params.room,
+    agent: params.agentId,
+    motive: params.motive,
+    // A wake-up's instruction only says to take the mailbox: the work is in `messages`.
+    task:
+      own && own.text !== WAKE_TASK
+        ? { id: own.id, title: (own.text.split("\n")[0] ?? "").trim().slice(0, 200), body: own.text }
+        : null,
+    messages: params.mailbox.map((t) => {
+      // `expects` is the column a message may carry (hq_message), when the database has it.
+      const expects = (t as TaskRow & { expects?: unknown }).expects;
+      return {
+        from: t.from_room && t.from_agent ? `${t.from_room}/${t.from_agent}` : t.source,
+        text: t.text,
+        expects: typeof expects === "string" ? expects : null,
+      };
+    }),
+    lastRunAt: last.at,
+    now: new Date().toISOString(),
+  };
+}
+
+/** Runs the agent's prepare command before its turn; a failure is logged and the turn runs (fail open). */
+async function prepareRun(p: ExecuteParams, hqEnv: Record<string, string>, signal: AbortSignal): Promise<PrepareOutcome> {
+  const { db, config, room, agent, run } = p;
+  let outcome: PrepareOutcome;
+  try {
+    outcome = await runPrepare({
+      command: agent.prepare!.command,
+      cwd: config.home,
+      env: { ...agentEnv(process.env, hqEnv), MYHQ_HOME: config.home },
+      input: prepareInput(db, { room: room.name, agentId: agent.id, runId: run.id, motive: p.motive, mailbox: p.mailbox }),
+      timeoutMs: agent.prepare!.timeoutMs,
+      signal,
+    });
+  } catch (error) {
+    outcome = { kind: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+  if (outcome.kind === "error") {
+    console.error(`[runner] the prepare command of ${room.name}/${agent.id} failed for run #${run.id}, the turn runs: ${outcome.error}`);
+  }
+  return outcome;
 }
 
 async function execute(p: ExecuteParams): Promise<void> {
@@ -751,73 +856,109 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   let end: Extract<RunEvent, { type: "end" }> | null = null;
   let mcpDown = false;
+  /** The run reached the model: a start event that did not stop it. */
+  let reachedModel = false;
+  /** The reason of a turn its prepare command skipped. */
+  let skipped: string | null = null;
+  /** The decisions given in the prompt, given back when the run never reached the model. */
+  let taken: { ids: number[]; seenAt: string } | null = null;
   try {
-    if (agent.worktree) {
-      ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
-    }
-    fs.mkdirSync(agent.workDir, { recursive: true });
-    syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
-    // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
-    const guard = writeGuardConfig({ workDir: agent.workDir, allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools });
-    if (guard.allow.length > 0) {
-      installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
-    }
-    fs.mkdirSync(config.runsDir, { recursive: true });
-    writeMcpConfig({
-      file: mcpConfigPath,
-      repoRoot: config.repoRoot,
-      hqEnv,
-      extraServers: agent.mcpServers,
-      env: process.env,
-    });
-    const input: RunInput = {
-      runId: run.id,
-      room: room.name,
-      agentId: agent.id,
-      prompt: p.prompt,
-      model: agent.model,
-      rolePath: agent.rolePath,
-      allowedTools: agent.allowedTools,
-      disallowedTools: agent.disallowedTools,
-      addDirs: agent.addDirs,
-      tools: skillTools(agent),
-      mcpConfigPath,
-      maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
-      workDir: agent.workDir,
-      env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard) },
-      signal: active.controller.signal,
-      onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
-    };
-    for await (const event of engine.run(input)) {
-      if (event.type === "start") {
-        // The init event comes after the CLI connected its servers, so it has read the file: its secrets leave the disk now.
-        removeMcpConfig(mcpConfigPath);
-        // A run without the tools of its servers must never deliver: it is stopped before its first turn.
-        const down = notConnectedServers(event.mcpServers);
-        if (down.length > 0) {
-          mcpDown = true;
-          storeEvent(db, run, event);
-          end = {
-            type: "end",
-            status: "failed",
-            reason: MCP_NOT_CONNECTED,
-            summary: `Stopped at its start, before doing anything: MCP server not connected: ${down.join(", ")}.`,
-            usage: { ...ZERO_USAGE },
-            costUsd: 0,
-          };
-          storeEvent(db, run, end);
-          active.controller.abort();
-          break;
+    const prepared = agent.prepare ? await prepareRun(p, hqEnv, active.controller.signal) : null;
+    if (prepared?.kind === "skip") {
+      // No model turn: the run is recorded done at no cost, with the reason (see the end of this function).
+      skipped = prepared.reason;
+      end = {
+        type: "end",
+        status: "done",
+        reason: PREPARE_SKIPPED,
+        summary: `${SKIPPED_SUMMARY} ${prepared.reason}`,
+        usage: { ...ZERO_USAGE },
+        costUsd: 0,
+      };
+      storeEvent(db, run, end);
+    } else {
+      if (active.controller.signal.aborted) throw new Error("Stopped before its start.");
+      if (agent.worktree) {
+        ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
+      }
+      fs.mkdirSync(agent.workDir, { recursive: true });
+      syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
+      // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
+      const guard = writeGuardConfig({ workDir: agent.workDir, allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools });
+      if (guard.allow.length > 0) {
+        installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
+      }
+      fs.mkdirSync(config.runsDir, { recursive: true });
+      writeMcpConfig({
+        file: mcpConfigPath,
+        repoRoot: config.repoRoot,
+        hqEnv,
+        extraServers: agent.mcpServers,
+        env: process.env,
+      });
+      let briefing: string | null = null;
+      if (p.briefing) {
+        const { decisions, seenAt } = takeDecisions(db, room.name, agent.id);
+        taken = { ids: decisions.map((d) => d.approvalId), seenAt };
+        briefing = briefingText(decisions, readMemories(db, room.name, agent.id));
+      }
+      const ready = prepared?.kind === "run" ? prepared : null;
+      const prompt = [p.prompt, briefing, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
+        .filter((part): part is string => part !== null)
+        .join("\n\n");
+      const effort = ready?.effort ?? agent.effort ?? null;
+      const input: RunInput = {
+        runId: run.id,
+        room: room.name,
+        agentId: agent.id,
+        prompt,
+        model: ready?.model ?? agent.modelFor?.[p.motive] ?? agent.model,
+        ...(effort ? { effort } : {}),
+        ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
+        rolePath: agent.rolePath,
+        allowedTools: agent.allowedTools,
+        disallowedTools: agent.disallowedTools,
+        addDirs: agent.addDirs,
+        tools: skillTools(agent),
+        mcpConfigPath,
+        maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
+        workDir: agent.workDir,
+        env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard) },
+        signal: active.controller.signal,
+        onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
+      };
+      for await (const event of engine.run(input)) {
+        if (event.type === "start") {
+          // The init event comes after the CLI connected its servers, so it has read the file: its secrets leave the disk now.
+          removeMcpConfig(mcpConfigPath);
+          // A run without the tools of its servers must never deliver: it is stopped before its first turn.
+          const down = notConnectedServers(event.mcpServers);
+          if (down.length > 0) {
+            mcpDown = true;
+            storeEvent(db, run, event);
+            end = {
+              type: "end",
+              status: "failed",
+              reason: MCP_NOT_CONNECTED,
+              summary: `Stopped at its start, before doing anything: MCP server not connected: ${down.join(", ")}.`,
+              usage: { ...ZERO_USAGE },
+              costUsd: 0,
+            };
+            storeEvent(db, run, end);
+            active.controller.abort();
+            break;
+          }
+          reachedModel = true;
         }
-      }
-      if (event.type === "end") end = event;
-      if (event.type === "start" && event.sessionId) {
-        db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
-      }
-      storeEvent(db, run, event);
-      if (event.type === "tool_result") {
-        void notifyPendingApprovals(db, p.send, p.deps.env);
-        wake(p);
+        if (event.type === "end") end = event;
+        if (event.type === "start" && event.sessionId) {
+          db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
+        }
+        storeEvent(db, run, event);
+        if (event.type === "tool_result") {
+          void notifyPendingApprovals(db, p.send, p.deps.env);
+          wake(p);
+        }
       }
     }
   } catch (error) {
@@ -835,6 +976,13 @@ async function execute(p: ExecuteParams): Promise<void> {
     state.active.delete(run.id);
     // Whatever the end (no init event, failure, abort, timeout), the config does not outlive the run.
     removeMcpConfig(mcpConfigPath);
+  }
+  if (taken && !reachedModel) {
+    try {
+      giveBackDecisions(db, taken.ids, taken.seenAt);
+    } catch (error) {
+      console.error(`[runner] the decisions taken by run #${run.id} could not be given back`, error);
+    }
   }
 
   let status: RunStatus = end?.status ?? "failed";
@@ -884,10 +1032,10 @@ async function execute(p: ExecuteParams): Promise<void> {
       run.id,
     );
     if (status === "done") {
-      db.prepare("UPDATE tasks SET status = 'done', updated_at = ? WHERE run_id = ? AND status = 'in_progress'").run(
-        at,
-        run.id,
-      );
+      // A skipped turn closes its tasks with the reason of its prepare command.
+      db.prepare(
+        "UPDATE tasks SET status = 'done', note = COALESCE(?, note), updated_at = ? WHERE run_id = ? AND status = 'in_progress'",
+      ).run(skipped, at, run.id);
     } else {
       // The run's own instruction is closed; mailbox tasks go back to the queue.
       db.prepare(
@@ -914,7 +1062,7 @@ async function execute(p: ExecuteParams): Promise<void> {
     if (await p.send(text)) recordBotMessage(db, text, "alert");
   }
   // A brief or a recap agent delivers its text this way: its summary is the message.
-  if (status === "done" && agent.notifyRuns === "summary") {
+  if (status === "done" && agent.notifyRuns === "summary" && skipped === null) {
     let sent = false;
     const link = deskLinkLine(p.deps.env);
     for (const part of appendLine(toTelegramMessages(summary), link)) sent = (await p.send(part)) || sent;
