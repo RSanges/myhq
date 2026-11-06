@@ -380,8 +380,8 @@ It answers one JSON object on stdout, one of:
   desk: status `done`, cost 0, no tokens, its summary « Skipped by its prepare
   command, no model turn: » followed by the reason (end reason
   `prepare_skipped`). Its tasks are closed `done` with the reason as their
-  note. Nothing is delivered (`notifyRuns` sends nothing). A skipped run counts
-  in the daily cap like any run.
+  note. Nothing is delivered (`notifyRuns` sends nothing). A skipped run does
+  not count in the daily cap (`maxRunsPerDay`) and never triggers its alert.
 - `{ "run": true, "context": "...", "model": "sonnet", "effort": "low" }`: a
   normal turn. `context` (Markdown, optional) is added to the prompt under the
   heading `## Préparé par MyHQ`, before the date line; `model` and `effort`

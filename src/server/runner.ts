@@ -292,10 +292,15 @@ export function installShutdown(
   });
 }
 
+/** The runs started today that count in the daily cap: a turn its prepare command skipped (no model call) does not. */
 export function runsToday(db: Db): number {
   const row = db
-    .prepare("SELECT COUNT(*) AS n FROM runs WHERE date(started_at, 'localtime') = date('now', 'localtime')")
-    .get() as { n: number };
+    .prepare(
+      `SELECT COUNT(*) AS n FROM runs WHERE date(started_at, 'localtime') = date('now', 'localtime')
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.run_id = runs.id AND e.type = 'end'
+           AND json_extract(e.data, '$.reason') = ?)`,
+    )
+    .get(PREPARE_SKIPPED) as { n: number };
   return row.n;
 }
 

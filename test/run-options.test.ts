@@ -6,7 +6,7 @@ import { getDbAt, now, type TaskRow } from "../src/server/db";
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { parsePrepareOutput, type PrepareInput } from "../src/server/prepare";
 import { loadHome } from "../src/server/rooms";
-import { PREPARE_SKIPPED, PREPARED_HEADING, SKIPPED_SUMMARY, startRun, wakeAgents } from "../src/server/runner";
+import { PREPARE_SKIPPED, PREPARED_HEADING, runsToday, SKIPPED_SUMMARY, startRun, wakeAgents } from "../src/server/runner";
 import { makeHome, waitForRun } from "./helpers";
 
 const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
@@ -240,4 +240,22 @@ test("the prepare answer is read strictly", () => {
   assert.equal(parsePrepareOutput('{"run":true,"model":"gpt"}').kind, "error");
   assert.equal(parsePrepareOutput('{"run":true,"effort":"huge"}').kind, "error");
   assert.equal(parsePrepareOutput("").kind, "error");
+});
+
+test("a skipped turn does not count in the daily cap, nor alerts it, and stays in the list of runs", async () => {
+  const seen: RunInput[] = [];
+  const sent: string[] = [];
+  const config = homeWith({ ...prepare("gate.mjs") }, { "gate.mjs": gate({ run: false, reason: "Nothing new." }) });
+  config.maxRunsPerDay = 1;
+  const db = getDbAt(config.dbPath);
+  const send = async (text: string) => (sent.push(text), true);
+  for (let i = 0; i < 3; i++) {
+    const run = startRun({ room: "demo", agent: "scout" }, { config, engine: fakeEngine(seen), send });
+    assert.equal((await waitForRun(db, run.id)).status, "done");
+  }
+  assert.equal(runsToday(db), 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number }).n, 3, "the skipped runs are listed");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(sent, [], "no cap alert");
+  assert.equal(seen.length, 0);
 });
