@@ -75,6 +75,8 @@ export const approvalSchema = z.object({
   annotations: z.array(annotationSchema).default([]),
   decisionHistory: z.array(decisionRecordSchema).default([]),
   actionDone: z.boolean().default(false),
+  /** What MyHQ's approval command said when it executed the item itself; absent from the items built by hand. */
+  actionNote: z.string().nullable().optional(),
   informational: z.boolean().default(false),
   /** The room that ordered it from a shared room: its pile and its colour. `room` stays the producing agent's. */
   forRoom: z.string().nullable().optional(),

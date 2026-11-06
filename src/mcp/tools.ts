@@ -18,9 +18,19 @@ import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db"
 import { readNotifyTypes } from "../server/home-settings";
 import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStatus } from "../server/long-runs";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
+import { MESSAGE_EXPECTS } from "../server/portier";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
-import { loadHome, type Home } from "../server/rooms";
-import { isSupervisor, noteBlocked, OWNER_NOTE, requestRelaunch, supervisedEntries, writeMessage } from "../server/supervisor";
+import { idSchema, loadHome, type Home } from "../server/rooms";
+import {
+  isSupervisor,
+  noteBlocked,
+  OWNER_NOTE,
+  recordRelays,
+  requestRelaunch,
+  supervisedEntries,
+  writeMessage,
+  type RelayMessage,
+} from "../server/supervisor";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
@@ -104,6 +114,12 @@ export const inputs = {
       .describe(
         "Room of the recipient, when it is not yours: a shared room (see hq_rooms), or the room of an agent that ordered from your room. Default: your room.",
       ),
+    expects: z
+      .enum(MESSAGE_EXPECTS)
+      .optional()
+      .describe(
+        'What you expect from the recipient. "reply" or "action": it is woken at once. "none": it is not woken, the message waits in its mailbox for its next run; use it for an acknowledgement, a thanks, a status that asks nothing ("received", "still waiting for the clips"). Left out: a small model reads the message and decides, and a question mark wakes it at once.',
+      ),
   },
   hq_submit: {
     type: z
@@ -130,6 +146,22 @@ export const inputs = {
       .optional()
       .describe(
         "Files to validate with the item (a render: video mp4/webm/mov, image png/jpg/webp/gif, sound wav/mp3/ogg/flac/m4a, 3D 3mf/stl/glb, pdf), each { path, caption? }. path is relative to your working directory and must stay inside it: copy a render made elsewhere (ComfyUI output...) into your directory first. MyHQ keeps a copy, so the owner validates exactly what you sent. An image named like a 3D file or a PDF (piece.png next to piece.3mf) is shown as its preview.",
+      ),
+    onApprove: z
+      .array(
+        z.strictObject({
+          to: z
+            .string()
+            .regex(/^(?:[a-z0-9][a-z0-9_-]{0,62}\/)?[a-z0-9][a-z0-9_-]{0,62}$/, '"room/agent", or "agent" for an agent of your room')
+            .describe('The recipient, "room/agent" (or "agent" in your room), as for hq_message.'),
+          text: z.string().trim().min(1).max(20_000).describe("The order to give it: MyHQ appends the item's title, body and files."),
+        }),
+      )
+      .min(1)
+      .max(10)
+      .optional()
+      .describe(
+        "Messages MyHQ delivers itself, in your name, the moment the owner approves the item (for example the order to a studio to produce the approved script): each one gets the item's title, body and files appended and wakes its recipient. You are not woken to relay them. The recipients are checked now, as hq_message checks them.",
       ),
   },
   hq_task_update: {
@@ -275,25 +307,56 @@ function orderedFrom(db: Db, ctx: HqContext, room: string, agent: string): boole
 export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
   const parsed = z.object(inputs.hq_message).parse(args);
   const room = parsed.room ?? ctx.room;
+  assertMayWrite(db, ctx, room, parsed.to);
+  return db
+    .transaction(() => ({
+      messageId: writeMessage(
+        db,
+        { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId },
+        { room, agentId: parsed.to },
+        parsed.text,
+        parsed.expects,
+      ),
+    }))
+    .immediate();
+}
+
+/**
+ * Whether this run's agent may write to `to` of `room`: within its room, to a
+ * shared room, to an agent that ordered from its room, anywhere for the
+ * supervisor. A tool error otherwise.
+ */
+function assertMayWrite(db: Db, ctx: HqContext, room: string, to: string): void {
   const elsewhere = room !== ctx.room;
   if (elsewhere) {
     const info = roomInfo(db, room);
     if (!info) throw new ToolError(`Unknown room "${room}".`);
     // The supervisor of the Standard writes to any agent of any room.
-    if (info.shared !== 1 && !orderedFrom(db, ctx, room, parsed.to) && !isSupervisor(db, ctx.room, ctx.agentId)) {
+    if (info.shared !== 1 && !orderedFrom(db, ctx, room, to) && !isSupervisor(db, ctx.room, ctx.agentId)) {
       throw new ToolError(
         `Room "${room}" is not shared: you may write to a shared room (see hq_rooms), or answer an agent of a room that ordered from yours.`,
       );
     }
   }
-  const target = db.prepare("SELECT id FROM agents WHERE room = ? AND id = ?").get(room, parsed.to);
-  if (!target) throw new ToolError(`Unknown agent "${parsed.to}" in room "${room}".`);
-  if (!elsewhere && parsed.to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
-  return db
-    .transaction(() => ({
-      messageId: writeMessage(db, { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId }, { room, agentId: parsed.to }, parsed.text),
-    }))
-    .immediate();
+  const target = db.prepare("SELECT id FROM agents WHERE room = ? AND id = ?").get(room, to);
+  if (!target) throw new ToolError(`Unknown agent "${to}" in room "${room}".`);
+  if (!elsewhere && to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
+}
+
+/** The messages of hq_submit `onApprove`, their recipients checked as hq_message checks them. */
+function relayMessages(db: Db, ctx: HqContext, onApprove: Args<"hq_submit">["onApprove"]): RelayMessage[] {
+  return (onApprove ?? []).map((message) => {
+    const [first, second] = message.to.split("/");
+    const room = second === undefined ? ctx.room : first!;
+    const agent = second ?? first!;
+    if (!idSchema.safeParse(agent).success) throw new ToolError(`onApprove: "${message.to}" is not "room/agent".`);
+    try {
+      assertMayWrite(db, ctx, room, agent);
+    } catch (error) {
+      throw new ToolError(`onApprove: ${(error as Error).message}`);
+    }
+    return { room, agent, text: message.text };
+  });
 }
 
 /** The shared rooms of the home and their agents: the studios any agent may order from. Read-only. */
@@ -403,6 +466,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
       throw new ToolError(`agent_proposal: room "${proposal.room}" already has an agent "${proposal.agent.id}": pick another id.`);
     }
   }
+  // The recipients of onApprove are checked now, so that the agent can fix them within the same run.
+  const relays = relayMessages(db, ctx, parsed.onApprove);
   // Checked before anything is written, so that the agent can fix its paths within the same run.
   const files: ResolvedAttachment[] = [];
   if (parsed.attachments && parsed.attachments.length > 0) {
@@ -459,6 +524,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
       const id = Number(result.lastInsertRowid);
       // MyHQ keeps its database in the data directory of the home.
       storeAttachments(db, path.dirname(path.resolve(ctx.dbPath)), id, files);
+      // An informational item is never approved: its messages would never leave.
+      if (!informational) recordRelays(db, id, relays);
       return { id, duplicate: null };
     })
     .immediate();

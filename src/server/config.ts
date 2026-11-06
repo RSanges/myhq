@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { DEFAULT_PORTIER, type PortierSetting } from "./home-settings";
 import { readRuntimeOverrides } from "./runtime-settings";
 import { isValidTimeZone, systemTimeZone } from "./time";
 
@@ -73,6 +74,11 @@ export type HqConfig = {
   /** HQ_TRIGGER_TOKEN: required by POST /api/runs for a request that carries a `reason`. Null when not set. */
   triggerToken: string | null;
   /**
+   * The portier when myhq.json has no `portier` block (the file wins, read at each wake-up, see
+   * portier.ts). Left out: on, on Haiku.
+   */
+  portier?: PortierSetting;
+  /**
    * The values of `scheduler`, `timeZone` and `maxRunsPerDay` before the
    * overrides of `myhq.json` (environment, else default). Set by getConfig;
    * liveConfig starts from them to read the file again.
@@ -120,6 +126,7 @@ export function getConfig(env: Env = process.env): HqConfig {
     weeklyBudgetUsd: vars.HQ_WEEKLY_BUDGET_USD ?? null,
     onboardingMaxBudgetUsd: vars.HQ_ONBOARDING_MAX_BUDGET_USD,
     triggerToken: vars.HQ_TRIGGER_TOKEN ?? null,
+    portier: DEFAULT_PORTIER,
   });
 }
 

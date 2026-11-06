@@ -50,6 +50,8 @@ export function makeHome(overrides: Partial<HqConfig> = {}, roomJson?: unknown):
     weeklyBudgetUsd: null,
     onboardingMaxBudgetUsd: 0.3,
     triggerToken: null,
+    // No portier unless a test asks for one: a message wakes its recipient at once, as before the portier.
+    portier: { enabled: false, model: "haiku" },
     ...overrides,
   };
 }

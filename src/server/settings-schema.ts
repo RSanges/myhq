@@ -67,6 +67,29 @@ export const settingsViewSchema = z.object({
   invalidRooms: z.array(z.object({ name: z.string(), error: z.string() })),
   /** --max-budget-usd of an agent that sets none (HQ_DEFAULT_MAX_BUDGET_USD). */
   defaultMaxBudgetUsd: z.number(),
+  /** The portier (myhq.json `portier`, read-only here) and its latest verdicts, newest first. */
+  portier: z.object({
+    enabled: z.boolean(),
+    model: z.string(),
+    source: z.enum(["file", "default"]),
+    week: z.object({ calls: z.number(), skips: z.number(), costUsd: z.number() }),
+    verdicts: z.array(
+      z.object({
+        id: z.number(),
+        room: z.string(),
+        agent: z.string(),
+        verdict: z.enum(["wake", "skip"]),
+        reason: z.string(),
+        model: z.string(),
+        costUsd: z.number(),
+        messages: z.number(),
+        from: z.string().nullable(),
+        excerpt: z.string(),
+        failed: z.boolean(),
+        at: z.string(),
+      }),
+    ),
+  }),
   /** Problems found in myhq.json, one line each; the keys concerned fall back to their defaults. */
   errors: z.array(z.string()),
 });

@@ -82,6 +82,8 @@ export type ApprovalDto = {
   decisionHistory: DecisionRecord[];
   /** The task that executes the item once approved (`onApproval: "task"`) has run: the action happened. */
   actionDone: boolean;
+  /** What the agent's approval command said when MyHQ executed the item itself (`onApproval: "command"`), null otherwise. */
+  actionNote: string | null;
   /**
    * An informational item (`notifyTypes`): nothing to decide or revise. It is
    * `unseen` then `seen`; the ones stored before that status existed were
@@ -101,12 +103,13 @@ export type ApprovalDto = {
 };
 
 /** An approval row, with whether its execution task is done (see `APPROVAL_SELECT`). */
-export type ApprovalRowWithAction = ApprovalRow & { action_done?: number; files?: string | null };
+export type ApprovalRowWithAction = ApprovalRow & { action_done?: number; action_note?: string | null; files?: string | null };
 
 /** Selects approvals as `a`, with `action_done` and `files`; append a WHERE clause. */
 export const APPROVAL_SELECT = `SELECT a.*, EXISTS(
   SELECT 1 FROM tasks t WHERE t.source = 'approval' AND t.ref_id = a.id AND t.status = 'done'
-) AS action_done, ${FILES_SELECT} FROM approvals a`;
+) AS action_done, (SELECT c.note FROM approval_commands c WHERE c.approval_id = a.id AND c.ok = 1) AS action_note,
+${FILES_SELECT} FROM approvals a`;
 
 export const toRun = (r: RunRow): RunDto => ({
   id: r.id,
@@ -166,6 +169,7 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
   annotations: parseAnnotations(r.annotations),
   decisionHistory: parseDecisionHistory(r.decision_history),
   actionDone: r.action_done === 1,
+  actionNote: r.action_note ?? null,
   informational:
     r.status === "unseen" ||
     r.status === "seen" ||

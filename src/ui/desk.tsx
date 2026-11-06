@@ -472,6 +472,11 @@ function HistoryCard({
         {approval.decidedAt && <span className="text-muted">{strings.desk.decidedOn(formatDateTime(approval.decidedAt))}</span>}
       </p>
       {approval.status === "approved" && <HandoverControls approval={approval} prominent />}
+      {approval.status === "approved" && approval.actionNote && (
+        <p role="note" className="break-words rounded-md bg-soft px-3 py-2 text-sm">
+          {strings.desk.actionNote(approval.actionNote)}
+        </p>
+      )}
       {approval.decisionNote && (
         <p className="break-words rounded-md bg-soft px-3 py-2 text-sm">
           <span className="font-medium">{strings.desk.noteTitle} : </span>

@@ -123,6 +123,8 @@ export const strings = {
     },
     requestRevision: "Demander une révision",
     revisionActionDone: "L'action a déjà eu lieu (par exemple un envoi) : elle ne peut pas être annulée.",
+    /** An item MyHQ executed itself on approval (`onApproval: "command"`), with what the command said. */
+    actionNote: (note: string) => `Exécuté par MyHQ : ${note}`,
     revisionLabel: "Commentaire pour l'agent (obligatoire sans remarque)",
     revisionLabelOptional: "Commentaire général pour l'agent (facultatif)",
     sendRevision: "Envoyer la demande de révision",
@@ -250,6 +252,23 @@ export const strings = {
       budgetInvalid: "Un nombre plus grand que 0.",
       empty: "Aucune salle valide dans ce dossier.",
     },
+    portier: {
+      title: "Portier",
+      hint: "Avant de réveiller un agent pour le message d'un autre agent, un petit modèle lit le message et dit s'il mérite un tour tout de suite ou s'il peut attendre le prochain. Un message qui pose une question, ou dont l'expéditeur attend une réponse ou une action, réveille sans lui. Se règle dans myhq.json, clé portier.",
+      state: (enabled: boolean, model: string) =>
+        enabled ? `Activé, sur ${model}.` : "Désactivé : chaque message réveille son destinataire, comme avant.",
+      week: (p: { calls: number; skips: number; cost: string }) =>
+        `Sur 7 jours : ${p.calls} avis, ${p.skips} ${p.skips === 1 ? "réveil évité" : "réveils évités"}, ${p.cost} $ en tout.`,
+      latest: "Derniers avis",
+      empty: "Aucun avis pour l'instant.",
+      verdict: { wake: "Réveil", skip: "Attend son prochain tour" } as Record<string, string>,
+      failed: "échec, réveil par prudence",
+      from: (from: string) => `de ${from}`,
+      messages: (count: number) => (count === 1 ? "1 message" : `${count} messages`),
+      cost: (usd: string) => `${usd} $`,
+      /** The reason stored when the call failed: the agent is woken (fail open). */
+      failedOpen: "Le portier n'a pas pu lire le message : l'agent est réveillé par prudence.",
+    },
     secrets: {
       title: "Jetons et secrets",
       body: "Les jetons (Telegram, Claude, déclencheur) et toutes les autres variables HQ_* vivent dans .env.local : ils ne sont ni affichés ni modifiables ici. Les changer demande de redémarrer MyHQ.",
@@ -293,6 +312,13 @@ export const strings = {
   tasks: {
     /** Created when an item of an agent with `onApproval: "task"` is approved. */
     executeApproved: (id: number, title: string) => `Exécute l'item approuvé n° ${id} : ${title}`,
+    /** The same task when MyHQ's approval command failed (`onApproval: "command"`): the agent executes it. */
+    executeAfterCommand: (id: number, title: string, error: string) =>
+      `Exécute l'item approuvé n° ${id} : ${title}
+
+MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
+    /** The note of an item MyHQ executed itself with the agent's approval command, when the command says nothing. */
+    commandDone: "Exécuté par MyHQ (commande d'approbation).",
   },
   team: {
     title: "L'équipe",
@@ -942,6 +968,19 @@ export const strings = {
       /** Written by MyHQ, in the supervisor's name, when an entry it relaunched is stuck again. */
       secondFailure: (name: string) =>
         `${name} l'a déjà relancée une fois et elle est encore coincée : à toi de voir (relancer, clore ou corriger).`,
+      /** Written by MyHQ when it relaunched an entry itself, for a passing technical failure (supervisor.ts). */
+      autoRelaunched: (why: string) => `MyHQ l'a relancée une fois tout seul : ${why}.`,
+      /** Written by MyHQ when an entry it relaunched itself is stuck again. */
+      secondFailureMyhq: "MyHQ l'a déjà relancée une fois pour un échec passager et elle est encore coincée : à toi de voir (relancer, clore ou corriger).",
+      /** The passing failures MyHQ relaunches itself, as said in its note. */
+      transient: {
+        mcp: "un serveur MCP n'était pas connecté",
+        gpu: "une ressource (le GPU) était occupée",
+        interrupted: "le tour avait été interrompu",
+        database: "la base de données était occupée",
+        cap: "le plafond du jour, levé depuis",
+        busy: "l'agent était occupé",
+      } as Record<string, string>,
       /** Written by MyHQ on the Standard when the supervisor did not answer the check of a long run (long-runs.ts). */
       longRunNoAnswer: (p: { supervisor: string; runId: number; agent: string; minutes: number; slice: number; hard: number }) =>
         `Pas de réponse de ${p.supervisor} sur le tour #${p.runId} de ${p.agent}, qui tourne depuis ${p.minutes} min : MyHQ le laisse continuer par tranches de ${p.slice} min, jusqu'au plafond de ${p.hard} min.`,

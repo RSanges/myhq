@@ -179,3 +179,45 @@ export function readProjectsRoot(home: string): string {
   }
   return path.resolve(home, parsed.data);
 }
+
+/**
+ * `portier` of myhq.json: the small model that reads a message before MyHQ wakes its recipient for it, and
+ * says whether the message is worth a wake or can wait for the recipient's next run (see portier.ts).
+ */
+export const portierSettingSchema = z.strictObject({
+  enabled: z.boolean(),
+  /** The model alias given to `claude -p --model`. */
+  model: z.string().trim().min(1).max(100).optional(),
+});
+
+export type PortierSetting = { enabled: boolean; model: string };
+
+/** The portier when myhq.json says nothing: on, on Haiku. */
+export const DEFAULT_PORTIER: PortierSetting = { enabled: true, model: "haiku" };
+
+/**
+ * The `portier` block of myhq.json over `fallback` (the default, or what a test configuration sets).
+ * Read apart from the rest of the file, like `floor`: an invalid block keeps the fallback and gives the
+ * reason. Never throws.
+ */
+export function readPortierSetting(
+  home: string,
+  fallback: PortierSetting = DEFAULT_PORTIER,
+): { setting: PortierSetting; fromFile: boolean; error: string | null } {
+  const file = path.join(home, "myhq.json");
+  let raw: unknown;
+  try {
+    if (!fs.existsSync(file)) return { setting: fallback, fromFile: false, error: null };
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    return { setting: fallback, fromFile: false, error: `myhq.json is not valid JSON: ${(error as Error).message}` };
+  }
+  const block = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).portier : undefined;
+  if (block === undefined) return { setting: fallback, fromFile: false, error: null };
+  const parsed = portierSettingSchema.safeParse(block);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `portier.${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return { setting: fallback, fromFile: false, error: `myhq.json: ${details}` };
+  }
+  return { setting: { enabled: parsed.data.enabled, model: parsed.data.model ?? fallback.model }, fromFile: true, error: null };
+}

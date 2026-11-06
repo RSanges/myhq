@@ -23,6 +23,7 @@ import {
   type DeadlineDecision,
 } from "./long-runs";
 import { languageName, wakeOnboarding } from "./onboarding";
+import { messageGate, type PortierCall } from "./portier";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { startRelaunchRequests } from "./relaunch-requests";
 import { runPrepare, type PrepareInput, type PrepareOutcome } from "./prepare";
@@ -65,6 +66,8 @@ export type RunnerDeps = {
    * routine (routines.ts), `manual` by default. Never passed on to the runs this one wakes.
    */
   motive?: string;
+  /** The portier's model call (portier.ts). Default: the real `claude -p`. */
+  portier?: PortierCall;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -409,6 +412,8 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
 }
 
 export type WakeCandidate = {
+  /** The task (given by wakeAgents' query, for the portier). */
+  id?: number;
   room: string;
   agent_id: string;
   source: "approval" | "message" | "revise" | "chat";
@@ -421,7 +426,8 @@ export type WakeCandidate = {
 export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boolean {
   switch (source) {
     case "approval":
-      return agent.onApproval === "task";
+      // With "command", an approval task exists only when the command failed: the agent executes it.
+      return agent.onApproval === "task" || agent.onApproval === "command";
     case "message":
       return agent.onMessage !== "queue";
     case "revise":
@@ -459,7 +465,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const relaunched = startRelaunchRequests(config, db, deps);
   const candidates = db
     .prepare(
-      `SELECT t.room, t.agent_id, t.source, t.from_room, t.from_agent FROM tasks t
+      `SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent FROM tasks t
        WHERE t.status = 'pending' AND t.source IN ('approval', 'message', 'revise', 'chat')
          AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
            AND r.started_at >= t.created_at AND r.status <> 'cancelled')
@@ -481,6 +487,23 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     if (!wakesAgent(agent, candidate.source)) continue;
     // Another task of the agent may still wake it, and its run then takes this one too.
     if (candidate.source === "message" && config.messageWakeIntervalMs > 0 && pairWokeRecently(db, candidate, since)) continue;
+    // The portier: a message that needs no wake waits for the agent's next run (portier.ts).
+    if (
+      candidate.source === "message" &&
+      candidate.id !== undefined &&
+      !messageGate({
+        config,
+        db,
+        room: candidate.room,
+        agent,
+        taskId: candidate.id,
+        env: agentEnv(process.env, {}),
+        call: deps.portier,
+        rewake: () => wakeAgents(config, db, deps),
+      })
+    ) {
+      continue;
+    }
     done.add(key);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };

@@ -119,7 +119,11 @@ test("soft deadline with a supervisor: it is woken to check, and its extension l
   const check = runsOf(db, "regisseur")[0]!;
   assert.equal(check.reason, LONG_RUN_REASON);
   assert.match(check.task, new RegExp(`^Long run to check: run #${run.id} of demo/builder \\(Builder\\)`));
-  assert.match(check.task, /hq_run_status \{ runId: \d+ \}/);
+  // MyHQ's summary of the run comes with the task: the supervisor need not call hq_run_status.
+  assert.match(check.task, /MyHQ's summary of the run is below: it holds what hq_run_status gives/);
+  assert.match(check.task, new RegExp(`Summary of run #${run.id} \\(`));
+  assert.match(check.task, /- Duration: \d+ min; last event/);
+  assert.match(check.task, /hq_run_extend \{ runId: \d+, minutes \}/);
 
   // Well past the wait for the decision: the run still works.
   await sleep(250);

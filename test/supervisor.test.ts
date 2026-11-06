@@ -347,7 +347,7 @@ test("supervisor: a new entry wakes it with a task that lists it, once; a review
   // The same entry does not wake it again before the review.
   assert.equal(watchStandard(config, db, deps), null);
   // A second entry does, and the task says the first one is still open.
-  const second = addTask(db, "demo", "scout", { status: "blocked", note: "MCP server not connected." });
+  const second = addTask(db, "demo", "scout", { status: "blocked", note: "The brief does not say which format." });
   const next = watchStandard(config, db, deps);
   assert.ok(next);
   assert.match(next.task, new RegExp(`\\[task ${second}\\]`));
