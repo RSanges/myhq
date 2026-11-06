@@ -4,6 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { recordBotMessage } from "./chat-history";
 import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
+import { briefingText, giveBackDecisions, readMemories, takeDecisions } from "./briefing";
 import { alertCapReached } from "./cap-alert";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
@@ -325,8 +326,9 @@ export function buildPrompt(params: {
   const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
-    "Report through the hq tools: hq_task_update for your task, hq_submit for anything to approve. Never publish anything yourself.",
-    "A decision comes to you once (hq_read_decisions). Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
+    "Report through the hq tools: hq_submit for anything to approve. Never publish anything yourself.",
+    "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
+    "Your new decisions and your memory are given at the end of this message: do not call hq_read_decisions or hq_memory_read for them, whatever your role says. A decision comes to you once. Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
     `Language of this home: ${language}. Write your final report, the last message of your run, in ${language}, whatever the language of the task, of your role or of the files you worked on. Tool names, ids and code stay as they are.`,
   ];
   if (params.room.shared) {
@@ -396,6 +398,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     task,
     reason: request.reason ?? null,
     motive: request.reason ?? deps.motive ?? "manual",
+    briefing: true,
     prompt: (runId, mailbox) => buildPrompt({ room, agent, runId, task, mailbox, sharedRooms, language: promptLanguage(config.home) }),
   });
 }
@@ -570,6 +573,8 @@ export function launchRun(params: {
   attempt?: number;
   /** The motive of the run for the agent's `modelFor` and `prepare`. Default: the reason, else `manual`. */
   motive?: string;
+  /** The prompt gives the agent's new decisions and its memory (briefing.ts): the runs of room agents. */
+  briefing?: boolean;
 }): RunRow {
   const { config, room, agent, task } = params;
   // The motive is this run's own: the runs it wakes get theirs.
@@ -657,6 +662,7 @@ export function launchRun(params: {
     today,
     mailbox,
     motive: params.motive ?? params.reason ?? "manual",
+    briefing: params.briefing ?? false,
     send: deps.send ?? sendAlert,
     deps,
     retry,
@@ -679,12 +685,13 @@ type ExecuteParams = {
   room: Room;
   agent: Agent;
   run: RunRow;
-  /** The prompt of the run, before the prepared context and the date line (`today`). */
+  /** The prompt of the run, before the briefing, the prepared context and the date line (`today`). */
   prompt: string;
   today: string;
   /** The tasks of the mailbox the run claimed. */
   mailbox: TaskRow[];
   motive: string;
+  briefing: boolean;
   send: Send;
   /** Passed on to the runs this one wakes (wakeAgents). */
   deps: RunnerDeps;
@@ -844,8 +851,12 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   let end: Extract<RunEvent, { type: "end" }> | null = null;
   let mcpDown = false;
+  /** The run reached the model: a start event that did not stop it. */
+  let reachedModel = false;
   /** The reason of a turn its prepare command skipped. */
   let skipped: string | null = null;
+  /** The decisions given in the prompt, given back when the run never reached the model. */
+  let taken: { ids: number[]; seenAt: string } | null = null;
   try {
     const prepared = agent.prepare ? await prepareRun(p, hqEnv, active.controller.signal) : null;
     if (prepared?.kind === "skip") {
@@ -880,8 +891,14 @@ async function execute(p: ExecuteParams): Promise<void> {
         extraServers: agent.mcpServers,
         env: process.env,
       });
+      let briefing: string | null = null;
+      if (p.briefing) {
+        const { decisions, seenAt } = takeDecisions(db, room.name, agent.id);
+        taken = { ids: decisions.map((d) => d.approvalId), seenAt };
+        briefing = briefingText(decisions, readMemories(db, room.name, agent.id));
+      }
       const ready = prepared?.kind === "run" ? prepared : null;
-      const prompt = [p.prompt, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
+      const prompt = [p.prompt, briefing, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
         .filter((part): part is string => part !== null)
         .join("\n\n");
       const effort = ready?.effort ?? agent.effort ?? null;
@@ -926,6 +943,7 @@ async function execute(p: ExecuteParams): Promise<void> {
             active.controller.abort();
             break;
           }
+          reachedModel = true;
         }
         if (event.type === "end") end = event;
         if (event.type === "start" && event.sessionId) {
@@ -953,6 +971,13 @@ async function execute(p: ExecuteParams): Promise<void> {
     state.active.delete(run.id);
     // Whatever the end (no init event, failure, abort, timeout), the config does not outlive the run.
     removeMcpConfig(mcpConfigPath);
+  }
+  if (taken && !reachedModel) {
+    try {
+      giveBackDecisions(db, taken.ids, taken.seenAt);
+    } catch (error) {
+      console.error(`[runner] the decisions taken by run #${run.id} could not be given back`, error);
+    }
   }
 
   let status: RunStatus = end?.status ?? "failed";

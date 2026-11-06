@@ -60,7 +60,14 @@ the start event too: when a server listed there is not `connected`, the run
 is stopped at once, before its first event is read, and fails with the end
 reason `mcp_not_connected`; it is started again once, a few seconds later,
 with the same task and the tasks it had claimed. Only a second failure (or a
-retry that cannot start) is alerted, like any other failed run. An
+retry that cannot start) is alerted, like any other failed run. The prompt of
+a room agent's run gives what MyHQ already knows, so that the agent spends no
+model call to ask for it: the user's new decisions on its submissions (marked
+seen, as `hq_read_decisions` does; given back when the run stops before it
+reaches the model) and its role memory (the values of `hq_memory_read`, up to
+20 000 characters, the keys beyond only named). It tells the agent that MyHQ
+closes its task with its final message (a run that ends well marks its tasks
+`done`), so that `hq_task_update` is only called to report `blocked`. An
 agent with a `prepare` command gets it run first, which may skip the turn or
 add context (`home-layout.md`, "Run options"). The prompt of
 every run ends with today's date, the weekday spelled out in the home's
