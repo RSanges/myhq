@@ -96,12 +96,13 @@ export const strings = {
       `Salle créée. Ajoute ce bloc au CLAUDE.md du projet${targetRepo ? ` (${targetRepo})` : ""} : MyHQ ne l'écrit jamais lui-même.`,
     approve: "Approuver",
     reject: "Refuser",
-    revise: "À retravailler",
     rejectLabel: "Motif du refus (obligatoire)",
-    reviseLabel: "Commentaire pour l'agent (obligatoire)",
-    reviseLabelOptional: "Commentaire général pour l'agent (facultatif)",
+    /** The one general comment of a pending item: with it (or a remark on a passage), the main button sends the item back. */
+    commentLabel: "Commentaire pour l'agent (facultatif)",
+    commentHint: "Sans commentaire ni remarque, le bouton approuve l'item.",
     confirmReject: "Confirmer le refus",
-    confirmRevise: "Envoyer à retravailler",
+    /** The main button once there is a comment or a remark: the item goes back to its agent. */
+    sendToRevise: "Envoyer à retravailler",
     cancel: "Annuler",
     noteRequired: "Ce champ est obligatoire.",
     sending: "Envoi...",
@@ -112,14 +113,6 @@ export const strings = {
       pending: "À valider",
       unseen: "À regarder",
       seen: "Vu",
-    },
-    guard: {
-      pending: (count: number) =>
-        count === 1
-          ? "Tu as 1 remarque en attente. Approuver l'ignore."
-          : `Tu as ${count} remarques en attente. Approuver les ignore.`,
-      toRevise: "Passer en À retravailler",
-      approveAnyway: "Approuver quand même",
     },
     requestRevision: "Demander une révision",
     revisionActionDone: "L'action a déjà eu lieu (par exemple un envoi) : elle ne peut pas être annulée.",
@@ -1105,6 +1098,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         "Je suis là. Parle-moi normalement, par écrit ou en vocal.",
         "/new pour repartir de zéro.",
         "Validations : /pending, /approve, /reject, /revise. Bureau : /run, /status, /arm, /disarm, /salle.",
+        "Sur une alerte, Approuver et Refuser sont des boutons. Pour renvoyer un item à son agent, réponds à son alerte avec ton commentaire.",
         ...(extensionCommands.length > 0 ? [`Autres commandes : ${extensionCommands.map((c) => `/${c}`).join(", ")}.`] : []),
       ].join("\n"),
     newConversation: "Nouvelle conversation. Je repars de zéro.",

@@ -13,12 +13,20 @@ const fileSchema = z.looseObject({
   file_size: z.number().int().nonnegative().optional(),
 });
 
+/** The message a reply answers: what MyHQ needs of it is its id and text (or caption). */
+const repliedSchema = z.looseObject({
+  message_id: z.number().int(),
+  text: z.string().optional(),
+  caption: z.string().optional(),
+});
+
 export const messageSchema = z.looseObject({
   message_id: z.number().int(),
   chat: chatSchema,
   from: userSchema.optional(),
   text: z.string().optional(),
   caption: z.string().optional(),
+  reply_to_message: repliedSchema.optional(),
   voice: fileSchema.optional(),
   audio: fileSchema.extend({ file_name: z.string().optional() }).optional(),
   photo: z.array(fileSchema.extend({ width: z.number().int(), height: z.number().int() })).optional(),

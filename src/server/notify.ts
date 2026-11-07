@@ -61,7 +61,7 @@ async function sendMedia(
 
 /**
  * Sends a plain text Telegram message through the Bot API. A pending-approval
- * alert carries Approve, Reject and Revise buttons, an informational one a
+ * alert carries Approve and Reject buttons (a revision is a reply to it), an informational one a
  * single « Vu » button, but only when MyHQ reads the bot's updates
  * (HQ_TELEGRAM_POLLING=true): otherwise nobody would receive the button presses. Does nothing when HQ_TELEGRAM_BOT_TOKEN or
  * HQ_TELEGRAM_CHAT_ID is missing, and never throws. The token is never logged.

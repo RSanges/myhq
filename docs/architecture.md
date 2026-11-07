@@ -319,13 +319,16 @@ conversation panel) with the item's id, type, title, agent, room and body
 not answer (budget, timeout) leaves the item in « À regarder » and the reason is
 shown.
 
-On the desk, the history items have « Demander une révision », which opens the
-annotation list (the drafts kept for that item) and the general note.
-Approving an item that still has draft remarks asks first (« Tu as N remarques
-en attente. Approuver les ignore. »): « Passer en À retravailler » sends them
-as a revise, « Approuver quand même » approves and drops them, Escape cancels.
-The guard is a small state machine (`src/ui/approve-guard.ts`); it is desk
-only, Telegram has no drafts.
+On the desk, a pending item has **one main button** next to a discreet
+« Refuser ». With no general comment and no remark on a passage it reads
+« Approuver » and approves; as soon as the field « Commentaire pour l'agent
+(facultatif) » (always there) holds a text, or at least one remark is drafted,
+it reads « Envoyer à retravailler » and sends a `revise` carrying them
+(`primaryDecision` in `src/ui/primary-decision.ts`). Approving can therefore
+never drop a draft remark silently. « Refuser » opens its own field, « Motif du
+refus (obligatoire) ». The history items have « Demander une révision », which
+opens the annotation list (the drafts kept for that item) and the general
+note.
 
 On the desk, a revise (or a reject) can also carry **annotations**: selecting a
 passage of the body offers « Annoter », which opens a comment box under the
@@ -343,7 +346,12 @@ revise is optional.
 The same decision can be taken from Telegram, with the same effect as in the
 office, except that annotations are not available there: a decision taken from
 Telegram carries its note only, and a revise with annotations made on the desk
-changes nothing on Telegram.
+changes nothing on Telegram. The alert has two buttons, Approuver and Refuser;
+a revision is a **reply** (Telegram's « Répondre ») to the alert with a text,
+which becomes the note of the `revise` (the item is found from the `(#id)` tag
+in the first line of the replied message, see `src/assistant/replies.ts`; a
+reply to an item that is no longer pending, or to a message without a tag, is
+an ordinary message to the chat).
 
 #### Folded items on the desk
 
@@ -357,7 +365,7 @@ Markdown tree the body is rendered from (Markdown stripped, first non-empty
 heading, paragraph, list item, quote, code or table line), cut at about 120
 characters on a word. On a phone the line wraps in two (who, type and age, then
 title and excerpt). Clicking it unfolds the whole item as it always was (body,
-annotations, the Approuver guard, « Demander une révision », every action); an
+annotations, the main button, « Demander une révision », every action); an
 unfolded body stays mounted when folded again, so a note being typed is kept.
 Which items are unfolded is held by the desk by id, so a refresh from the live
 stream, a switch of tab or a decision elsewhere never folds an item the user
@@ -1572,11 +1580,14 @@ of the home send text on their own, in both modes:
 
 Messages are handled one at a time, in order. Button presses are handled at
 once, even during a long chat turn. In polling mode a pending-approval alert
-carries three buttons: **Approuver** decides at once and edits the alert to
+carries two buttons: **Approuver** decides at once and edits the alert to
 show the decision (its buttons go away), then hands over the body and the link
 of an item that has an http(s) `payload.url` (see the approval cycle);
-**Refuser** and **À retravailler**
-ask for the reason or the comment, which the next text message answers.
+**Refuser** asks for the reason, which the next text message answers. A
+revision is a reply to the alert: the text of the reply is the note of the
+revision, and the alert shows the decision like it does for a button. The
+`hq:v:<id>` code of the old « À retravailler » button is still read, with its
+former behaviour (it asks for the comment), for alerts still on screen.
 Failure alerts stay plain text.
 
 **Links to the desk.** When `HQ_PUBLIC_URL` is set (the address of the desk
@@ -2105,7 +2116,7 @@ object.
   marked, since a module belongs to the desk), the label and the count,
   the connection state, and the interface of the object, chosen by its kind
   and its source. A pile of `approvals` is the desk's own approval cards
-  (`Desk`: folded lines, annotations, the Approuver guard, every action, the
+  (`Desk`: folded lines, annotations, the main button, every action, the
   history tab). A tray of `watch:` sources lists its unseen items with « Vu »
   and « Demander à » the assistant, oldest or newest first, then the ones
   already seen (`WatchDesk`). The newspaper is a reading view: a masthead with

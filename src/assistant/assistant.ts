@@ -30,6 +30,7 @@ import type { AssistantCommand, AssistantContext, LoadedExtension } from "./exte
 import type { AssistantConfig } from "./home-config";
 import { confirmationAnswer } from "./actions";
 import { PendingSelections, type PendingQuestions, type DecisionQuestion } from "./pending";
+import { replyTarget } from "./replies";
 import { parseSelectionData, selectionKeyboard } from "./selection-buttons";
 import { extensionEnv } from "./settings";
 import { fillTemplate, runShell } from "./shell";
@@ -42,6 +43,9 @@ const TRANSCRIBE_TIMEOUT_MS = 5 * 60_000;
 const TELEGRAM_COMMAND_LIMIT = 100;
 
 type Decision = "approved" | "rejected" | "revise";
+
+/** The message a reply answers (see `replyTarget`). */
+type RepliedMessage = NonNullable<TelegramMessage["reply_to_message"]>;
 
 export type AssistantDeps = {
   telegram: Telegram;
@@ -228,14 +232,18 @@ export class Assistant {
   private async handleMessage(message: TelegramMessage): Promise<void> {
     if (message.voice || message.audio) return this.handleVoice(message);
     if (message.photo?.length || message.document) return this.handleFile(message);
-    if (message.text?.trim()) return this.handleText(message.text);
+    if (message.text?.trim()) return this.handleText(message.text, message.reply_to_message);
     return this.reply(strings.assistant.unsupported);
   }
 
-  /** Text, typed or transcribed: pending question, core command, extensions, then chat. */
-  async handleText(text: string): Promise<void> {
+  /**
+   * Text, typed or transcribed: a reply to one of our alerts, pending question,
+   * core command, extensions, then chat.
+   */
+  async handleText(text: string, replyTo?: RepliedMessage): Promise<void> {
     const command = parseCommand(text);
     if (!command) {
+      if (replyTo && (await this.handleReply(text.trim(), replyTo))) return;
       const pending = this.questions.peek();
       if (pending.status === "expired") {
         const question = pending.question;
@@ -466,6 +474,27 @@ export class Assistant {
     return this.chat.errorText(error);
   }
 
+  /**
+   * A reply to one of our messages. Replying to the alert of a pending item
+   * with a text sends the item back to its agent: the text is the note of the
+   * revision. Returns false when the reply is about nothing we can act on (an
+   * unknown message, an item already decided or informational): the text then
+   * goes on as an ordinary message.
+   */
+  private async handleReply(text: string, replied: RepliedMessage): Promise<boolean> {
+    const target = replyTarget(replied.text ?? replied.caption);
+    if (!target) return false;
+    const row = this.deps.db.prepare("SELECT status FROM approvals WHERE id = ?").get(target.approvalId) as
+      | { status: string }
+      | undefined;
+    if (row?.status !== "pending") return false;
+    const alert = replied.text === undefined && replied.caption !== undefined
+      ? { messageId: replied.message_id, text: replied.caption, media: true }
+      : { messageId: replied.message_id, text: replied.text ?? "" };
+    await this.answerQuestion({ decision: "revise", approvalId: target.approvalId, alert }, text);
+    return true;
+  }
+
   private async answerQuestion(question: DecisionQuestion, note: string): Promise<void> {
     try {
       const approval = this.decide(question.approvalId, question.decision, note);
@@ -680,7 +709,7 @@ export class Assistant {
     if (text === null) return this.reply(strings.assistant.voice.failed);
     if (!text) return this.reply(strings.assistant.voice.empty);
     this.log(`voice note transcribed (${text.length} characters)`);
-    return this.handleText(text);
+    return this.handleText(text, message.reply_to_message);
   }
 
   private async handleFile(message: TelegramMessage): Promise<void> {

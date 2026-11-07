@@ -38,9 +38,16 @@ function approval(db: Db, id: number): ApprovalRow {
 }
 
 let updateId = 1;
-const message = (text: string, chatId = Number(CHAT)) => ({
+const message = (text: string, chatId = Number(CHAT), replyTo?: { message_id: number; text?: string; caption?: string }) => ({
   update_id: updateId++,
-  message: { message_id: updateId, chat: { id: chatId, type: "private" }, from: { id: chatId }, date: 1, text },
+  message: {
+    message_id: updateId,
+    chat: { id: chatId, type: "private" },
+    from: { id: chatId },
+    date: 1,
+    text,
+    ...(replyTo ? { reply_to_message: replyTo } : {}),
+  },
 });
 const press = (data: string, messageId = 7, text = "MyHQ : un item attend ta validation") => ({
   update_id: updateId++,
@@ -208,7 +215,54 @@ test("Refuser asks for the reason, then decides with the next message", async ()
   await fake.close();
 });
 
-test("À retravailler creates a task for the agent with the comment", async () => {
+test("replying to the alert of a pending item sends it back to its agent with the text as the note", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addApproval(db);
+  const alert = `MyHQ : un item attend ta validation (#${id})\ndemo / scout : community_reply\nReply to a thread`;
+  await handle(assistant, message("Plus court, et sans le dernier paragraphe.", Number(CHAT), { message_id: 55, text: alert }));
+  const row = approval(db, id);
+  assert.equal(row.status, "revise");
+  assert.equal(row.decision_note, "Plus court, et sans le dernier paragraphe.");
+  const task = db.prepare("SELECT * FROM tasks WHERE source = 'revise' AND ref_id = ?").get(id) as { text: string };
+  assert.match(task.text, /Plus court, et sans le dernier paragraphe\./);
+  // The alert shows the decision and loses its buttons; the user gets the usual confirmation.
+  const edit = callsOf(fake, "editMessageText")[0]!.params;
+  assert.equal(edit.message_id, 55);
+  assert.equal(edit.text, `${alert}\n\nDécision : À retravailler`);
+  assert.equal("reply_markup" in edit, false);
+  assert.equal(fake.sent()[0], `Item #${id} : À retravailler.`);
+  await fake.close();
+});
+
+test("a reply to an alert that carries a file reads its caption", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addApproval(db);
+  const caption = `MyHQ : un item attend ta validation (#${id})\nFichiers joints : clip.mp4`;
+  await handle(assistant, message("Recadre le plan 2.", Number(CHAT), { message_id: 56, caption }));
+  assert.equal(approval(db, id).status, "revise");
+  assert.equal(callsOf(fake, "editMessageCaption")[0]!.params.message_id, 56);
+  await fake.close();
+});
+
+test("a reply to an alert whose item is decided or informational is an ordinary message", async () => {
+  const chats: string[] = [];
+  const { db, fake, assistant } = await setup({
+    assistant: { ...EMPTY_ASSISTANT_CONFIG, chat: chatConfig() },
+    runChat: async (params) => (chats.push(params.input), { ok: true, text: "Noté", costUsd: 0 }),
+  });
+  const id = addApproval(db);
+  await handle(assistant, press(`hq:a:${id}`));
+  await handle(assistant, message("Finalement non", Number(CHAT), { message_id: 57, text: `MyHQ : un item attend ta validation (#${id})` }));
+  // Approved stays approved: the reply went to the chat, not to a revision.
+  assert.equal(approval(db, id).status, "approved");
+  assert.deepEqual(chats, ["Finalement non"]);
+  // A reply to a message without our tag is an ordinary message too.
+  await handle(assistant, message("Merci", Number(CHAT), { message_id: 58, text: "Bonjour" }));
+  assert.deepEqual(chats, ["Finalement non", "Merci"]);
+  await fake.close();
+});
+
+test("the old À retravailler button of an alert still on screen asks for the comment", async () => {
   const { db, fake, assistant } = await setup();
   const id = addApproval(db);
   await handle(assistant, press(`hq:v:${id}`));
@@ -509,7 +563,6 @@ test("pending-approval alerts carry buttons only when polling is on", async () =
       [
         { text: "Approuver", callback_data: `hq:a:${second}` },
         { text: "Refuser", callback_data: `hq:r:${second}` },
-        { text: "À retravailler", callback_data: `hq:v:${second}` },
       ],
     ],
   });

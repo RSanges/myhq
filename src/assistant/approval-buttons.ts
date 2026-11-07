@@ -1,6 +1,10 @@
 import { strings } from "../ui/strings";
 import type { InlineKeyboard } from "./telegram";
 
+/**
+ * `revise` is no longer on the keyboard (a revision is a reply to the alert),
+ * but alerts sent before that still show the old button: its code keeps being read.
+ */
 export type ButtonAction = "approve" | "reject" | "revise" | "seen";
 
 const CODES: Record<ButtonAction, string> = { approve: "a", reject: "r", revise: "v", seen: "w" };
@@ -10,14 +14,13 @@ const button = (action: ButtonAction, text: string, approvalId: number) => ({
   callback_data: `hq:${CODES[action]}:${approvalId}`,
 });
 
-/** The buttons of a pending-approval alert. */
+/** The buttons of a pending-approval alert: Approve and Reject. A revision is a reply to the alert (see `replyTarget`). */
 export function approvalKeyboard(approvalId: number): InlineKeyboard {
   return {
     inline_keyboard: [
       [
         button("approve", strings.desk.approve, approvalId),
         button("reject", strings.desk.reject, approvalId),
-        button("revise", strings.desk.revise, approvalId),
       ],
     ],
   };

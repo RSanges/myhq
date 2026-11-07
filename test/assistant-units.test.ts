@@ -8,10 +8,12 @@ import { askChat, buildChatArgs, chatEnv, parseChatOutput, type ChatRunner } fro
 import { parseApproveArgs, parseCommand, parseNoteArgs, parseRunArgs } from "../src/assistant/commands";
 import { loadAssistantConfig, type ChatConfig } from "../src/assistant/home-config";
 import { PendingQuestions } from "../src/assistant/pending";
+import { replyTarget } from "../src/assistant/replies";
 import { extensionEnv, readSettings } from "../src/assistant/settings";
 import { fillTemplate } from "../src/assistant/shell";
 import { parseUpdate } from "../src/assistant/telegram";
 import { splitMessage, stripMarkdown } from "../src/assistant/text";
+import { strings } from "../src/ui/strings";
 
 const EM = "\u2014";
 const EN = "\u2013";
@@ -98,13 +100,14 @@ test("parses the arguments of the core commands", () => {
 test("approval buttons round-trip through their callback data", () => {
   const keyboard = approvalKeyboard(7);
   const data = keyboard.inline_keyboard[0]!.map((b) => b.callback_data);
-  assert.deepEqual(data, ["hq:a:7", "hq:r:7", "hq:v:7"]);
+  assert.deepEqual(data, ["hq:a:7", "hq:r:7"]);
   assert.deepEqual(
     keyboard.inline_keyboard[0]!.map((b) => b.text),
-    ["Approuver", "Refuser", "À retravailler"],
+    ["Approuver", "Refuser"],
   );
   assert.deepEqual(parseButtonData("hq:a:7"), { action: "approve", approvalId: 7 });
   assert.deepEqual(parseButtonData("hq:r:7"), { action: "reject", approvalId: 7 });
+  // The old « À retravailler » button of an alert still on screen is read as before.
   assert.deepEqual(parseButtonData("hq:v:7"), { action: "revise", approvalId: 7 });
   assert.equal(parseButtonData("hq:x:7"), null);
   assert.equal(parseButtonData(undefined), null);
@@ -437,4 +440,15 @@ test("reads a stream-json chat turn: the full answer, the model, the usage and e
     usage: { inputTokens: 12, outputTokens: 340, cacheCreationInputTokens: 9000, cacheReadInputTokens: 21000 },
     tools: ["mcp__mail__mail_search", "Read"],
   });
+});
+
+// --- Replies to our messages ---------------------------------------------------
+
+test("a reply is traced back to its item through the tag of the first line of the message", () => {
+  const alert = strings.notify.approvalPending({ room: "demo", agent: "scout", type: "blog_post", title: "A title (#99)", id: 12 });
+  assert.deepEqual(replyTarget(alert), { approvalId: 12, question: null });
+  assert.deepEqual(replyTarget("MyHQ : question (#12, 2/3)\nShould it be short (#5)?"), { approvalId: 12, question: 1 });
+  // Only the first line counts: a title that looks like a tag does not hijack the reply.
+  assert.equal(replyTarget("Bonjour\nMyHQ : un item (#4)"), null);
+  assert.equal(replyTarget(undefined), null);
 });

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { AnnotatedBody } from "./annotated-body";
-import { stepGuard, type GuardAction, type GuardState } from "./approve-guard";
 import { Attachments, type PointFocus } from "./attachments";
 import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
@@ -11,6 +10,7 @@ import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
 import { excerpt } from "./excerpt";
 import { formatAge, formatDateTime } from "./format";
 import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, typeLabel, type Action, type TeamAgent } from "./model";
+import { primaryDecision } from "./primary-decision";
 import { chipStyle } from "./room-color";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
@@ -18,7 +18,6 @@ import { Badge, buttonClass, ErrorNote, fieldClass, Section } from "./ui";
 import type { DeepLinkTarget } from "./use-deep-link";
 
 type Dispatch = (action: Action) => void;
-type NoteMode = "rejected" | "revise";
 
 const decisionTone = {
   approved: "ok",
@@ -213,9 +212,9 @@ function PendingCard({
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
 }) {
-  const [mode, setMode] = useState<NoteMode | null>(null);
-  const [note, setNote] = useState("");
-  const [guard, setGuard] = useState<GuardState>("idle");
+  const [comment, setComment] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,7 +227,7 @@ function PendingCard({
       const handover = decided.status === "approved" && (payloadUrl(decided.payload) || branchHandover(decided) || claudeMdHandover(decided));
       if (!handover) item.fold();
       dispatch({ type: "approval", approval: decided });
-      // The remarks were sent with the decision, or dropped by it: no draft is left.
+      // The remarks were sent with the decision: no draft is left.
       onAnnotations([]);
       if (decided.status === "approved") onApproved(decided);
     } catch (failure) {
@@ -237,131 +236,102 @@ function PendingCard({
     }
   };
 
-  const runGuard = (action: GuardAction) => {
-    const step = stepGuard(guard, action, annotations.length);
-    setGuard(step.state);
-    if (step.effect === "approve") void send({ decision: "approved" });
-    if (step.effect === "revise") void send({ decision: "revise", annotations });
-  };
-
-  // The confirmation is moot once the last draft is removed; Escape cancels it.
-  const draftCount = annotations.length;
-  const settled = stepGuard(guard, "drafts", draftCount).state;
-  if (settled !== guard) setGuard(settled);
-  useEffect(() => {
-    if (guard !== "confirming") return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setGuard((state) => stepGuard(state, "escape", draftCount).state);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [guard, draftCount]);
-
-  const submitNote = () => {
-    if (mode === null) return;
-    // A revision may rest on its remarks alone; a refusal always has a reason.
-    if (note.trim() === "" && (mode === "rejected" || annotations.length === 0)) {
-      setError(strings.desk.noteRequired);
+  // One main button: it approves, or sends the item back once there is a comment or a remark.
+  const main = primaryDecision(comment, annotations.length);
+  const sendMain = () => {
+    if (main === "approved") {
+      void send({ decision: "approved" });
       return;
     }
     void send({
-      decision: mode,
-      ...(note.trim() !== "" ? { note: note.trim() } : {}),
+      decision: "revise",
+      ...(comment.trim() !== "" ? { note: comment.trim() } : {}),
       ...(annotations.length > 0 ? { annotations } : {}),
     });
   };
 
-  const chooseMode = (next: NoteMode) => {
-    setMode(next);
-    setError(null);
+  const sendReject = () => {
+    if (reason.trim() === "") {
+      setError(strings.desk.noteRequired);
+      return;
+    }
+    void send({
+      decision: "rejected",
+      note: reason.trim(),
+      ...(annotations.length > 0 ? { annotations } : {}),
+    });
   };
 
-  const noteOptional = mode === "revise" && annotations.length > 0;
-  const label =
-    mode === "rejected"
-      ? strings.desk.rejectLabel
-      : noteOptional
-        ? strings.desk.reviseLabelOptional
-        : strings.desk.reviseLabel;
-  const fieldId = `note-${approval.id}`;
+  const commentId = `comment-${approval.id}`;
+  const reasonId = `note-${approval.id}`;
 
   return (
     <DeskItem approval={approval} {...item}>
       <ApprovalHeader approval={approval} />
       <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
-      {mode === null ? (
-        <div className="flex flex-wrap gap-2">
+      <div className="space-y-1">
+        <label htmlFor={commentId} className="block text-sm font-medium">
+          {strings.desk.commentLabel}
+        </label>
+        <textarea
+          id={commentId}
+          className={fieldClass}
+          rows={2}
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          maxLength={5000}
+          disabled={busy}
+        />
+        {annotations.length > 0 && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
+        {main === "approved" && <p className="text-xs text-muted">{strings.desk.commentHint}</p>}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={buttonClass("primary")} disabled={busy} onClick={sendMain}>
+          {busy ? strings.desk.sending : main === "approved" ? strings.desk.approve : strings.desk.sendToRevise}
+        </button>
+        {!rejecting && (
           <button
             type="button"
-            className={buttonClass("primary")}
+            className="min-h-10 pointer-coarse:min-h-12 rounded-md px-3 py-2 text-sm text-muted underline-offset-2 hover:text-danger hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
             disabled={busy}
-            onClick={() => runGuard("approve")}
+            onClick={() => {
+              setRejecting(true);
+              setError(null);
+            }}
           >
-            {busy ? strings.desk.sending : strings.desk.approve}
-          </button>
-          <button type="button" className={buttonClass("danger")} disabled={busy} onClick={() => chooseMode("rejected")}>
             {strings.desk.reject}
           </button>
-          <button type="button" className={buttonClass()} disabled={busy} onClick={() => chooseMode("revise")}>
-            {strings.desk.revise}
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <label htmlFor={fieldId} className="block text-sm font-medium">
-            {label}
+        )}
+      </div>
+      {rejecting && (
+        <div className="space-y-2 border-t border-line pt-3">
+          <label htmlFor={reasonId} className="block text-sm font-medium">
+            {strings.desk.rejectLabel}
           </label>
           <textarea
-            id={fieldId}
+            id={reasonId}
             className={fieldClass}
             rows={3}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
             maxLength={5000}
-            required={!noteOptional}
+            required
             autoFocus
           />
-          {annotations.length > 0 && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={buttonClass(mode === "rejected" ? "danger" : "primary")}
-              disabled={busy}
-              onClick={submitNote}
-            >
-              {busy ? strings.desk.sending : mode === "rejected" ? strings.desk.confirmReject : strings.desk.confirmRevise}
+            <button type="button" className={buttonClass("danger")} disabled={busy} onClick={sendReject}>
+              {busy ? strings.desk.sending : strings.desk.confirmReject}
             </button>
             <button
               type="button"
               className={buttonClass()}
               disabled={busy}
               onClick={() => {
-                setMode(null);
+                setRejecting(false);
                 setError(null);
               }}
             >
               {strings.desk.cancel}
-            </button>
-          </div>
-        </div>
-      )}
-      {mode === null && guard === "confirming" && (
-        <div className="space-y-2 rounded-md border border-warn bg-soft p-3">
-          <p role="alert" className="text-sm">
-            {strings.desk.guard.pending(annotations.length)}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={buttonClass("primary")}
-              disabled={busy}
-              onClick={() => runGuard("revise")}
-              autoFocus
-            >
-              {strings.desk.guard.toRevise}
-            </button>
-            <button type="button" className={buttonClass()} disabled={busy} onClick={() => runGuard("approveAnyway")}>
-              {strings.desk.guard.approveAnyway}
             </button>
           </div>
         </div>
