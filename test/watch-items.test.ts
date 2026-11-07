@@ -325,10 +325,10 @@ test("Telegram: the alert has a single Vu button, and pressing it does what the 
     const alerts = callsOf(fake, "sendMessage").map((c) => c.params);
     const watch = alerts.filter((p) => String(p.text).includes(`(#${id})`) || String(p.text).includes("Une ligne du mail"));
     const last = watch.at(-1)!;
-    assert.match(String(last.text), new RegExp(`Ouvrir : http://hq\\.example:4242/bureau#approval-${id}$`), "the text and the deep link are kept");
+    assert.match(String(last.text), new RegExp(`…\\n\\nLire la suite : http://hq\\.example:4242/bureau#approval-${id}$`), "a long text is cut, the deep link is kept");
     assert.deepEqual((last.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard, [[{ text: "Vu", callback_data: `hq:w:${id}` }]]);
     assert.equal((last.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard.flat().length, 1, "a single button");
-    assert.equal("reply_markup" in alerts.find((p) => String(p.text).includes(`(#${pending})`))!, true, "the pending alert keeps its three buttons");
+    assert.equal("reply_markup" in alerts.find((p) => String(p.text).includes(`(#${pending})`))!, true, "the pending alert keeps its buttons");
 
     await handle(press(`hq:w:${id}`, 9, String(last.text)));
     assert.equal(row(db, id).status, "seen");

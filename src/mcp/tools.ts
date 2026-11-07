@@ -496,10 +496,10 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
     }
   }
   // An informational type (notifyTypes in myhq.json) is born 'unseen': the app
-  // sends it to Telegram in full and the desk keeps it under « À regarder »
-  // until the user marks it seen. It never waits for a decision, never
-  // triggers onApproval and never wakes an agent. Its agent already knows it,
-  // so it counts as read by the agent.
+  // sends it to Telegram as one message (cut, with a link, when long) and the
+  // desk keeps it under « À regarder » until the user marks it seen. It never
+  // waits for a decision, never triggers onApproval and never wakes an agent.
+  // Its agent already knows it, so it counts as read by the agent.
   const informational =
     supervisor ||
     (parsed.type !== ROOM_PROPOSAL &&

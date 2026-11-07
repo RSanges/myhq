@@ -123,6 +123,35 @@ test("at the end of the quiet hours the items held leave together in one message
   assert.deepEqual(sent[1]!.options, { seenId: day });
 });
 
+test("the items held are cut like a single one, each with its link, and still leave in one message when they can", async () => {
+  const config = quietHome();
+  const db = getDbAt(config.dbPath);
+  const long = (title: string) => `${title} begins here.\n\n${"A sentence that goes on and on and on. ".repeat(80)}`;
+  const ids = ["Un", "Deux", "Trois"].map((title, i) => insert(db, { title, createdAt: `2026-11-04T22:0${i}:00Z` }));
+  for (const id of ids) db.prepare("UPDATE approvals SET body = ? WHERE id = ?").run(long(`Item ${id}`), id);
+  const { send, sent } = recorder();
+  await notifyPendingApprovals(db, send, { HQ_PUBLIC_URL: "http://desk.example:4242" }, new Date("2026-11-05T07:01:00Z"));
+  assert.equal(sent.length, 1, "three long items, one message");
+  const text = sent[0]!.text;
+  assert.ok(text.length <= 4000, `${text.length} characters`);
+  for (const id of ids) {
+    assert.match(text, new RegExp(`Item ${id} begins here`));
+    assert.match(text, new RegExp(`…\n\nLire la suite : http://desk\.example:4242/bureau#approval-${id}`), "each one is cut and linked");
+  }
+  assert.equal(text.includes("Ouvrir :"), false);
+  assert.ok(ids.every((id) => notifiedAt(db, id)));
+
+  // Without an address, the mention of the item in MyHQ stands in for the link.
+  const other = quietHome();
+  const db2 = getDbAt(other.dbPath);
+  const pair = ["Un", "Deux"].map((title) => insert(db2, { title, createdAt: "2026-11-04T22:00:00Z" }));
+  for (const id of pair) db2.prepare("UPDATE approvals SET body = ? WHERE id = ?").run(long(`Item ${id}`), id);
+  const second = recorder();
+  await notifyPendingApprovals(db2, second.send, {}, new Date("2026-11-05T07:01:00Z"));
+  assert.equal(second.sent.length, 1);
+  for (const id of pair) assert.ok(second.sent[0]!.text.includes(`(suite dans MyHQ, item #${id})`));
+});
+
 test("a single item held is sent the usual way, and without quietHours nothing is held", async () => {
   const config = quietHome();
   const db = getDbAt(config.dbPath);

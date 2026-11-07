@@ -4,11 +4,11 @@ import { approvalKeyboard, rejectKeyboard, seenKeyboard } from "../assistant/app
 import { questionKeyboard } from "../assistant/question-buttons";
 import type { InlineKeyboard } from "../assistant/telegram";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
-import { splitMessage } from "../assistant/text";
+import { MESSAGE_LIMIT, splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
 import { parseQuestionPayload, QUESTION_TYPE, type QuestionPayload } from "./questions";
 import { NOTIFICATION_NOTE } from "./home-settings";
-import { appendLine, approvalLinkLine, withLine } from "./public-url";
+import { approvalLinkLine, withLine } from "./public-url";
 import { isQuiet, isUrgentPayload, lastQuietEnd, readQuietHours } from "./quiet-hours";
 import { readRuntimeOverrides } from "./runtime-settings";
 import { telegramMediaFor, type TelegramMedia } from "./telegram-media";
@@ -166,19 +166,24 @@ function quietHoursAt(db: Db, env: Env, at: Date): { quiet: boolean; lastEnd: Da
  * as approved before that status existed are swept the same way). Approvals are
  * created by the HQ MCP server, which runs without the Telegram variables, so
  * the app process sweeps them (during and after each run). A pending item gets
- * the short alert with the buttons; an informational one is sent in full, its
- * alert line then its body as is, cut in messages of 4000 characters, with a
- * single « Vu » button on the last one when it is still unseen. When
- * HQ_PUBLIC_URL is set (read from `env`), each one ends with the line
- * « Ouvrir : <url>/bureau#approval-<id> ». A pending item with files lists them, and
+ * the short alert with the buttons; an informational one is one message, its
+ * alert line then its body as is, with a single « Vu » button when it is still
+ * unseen. A text longer than `NOTIFICATION_TEXT_LIMIT` characters is cut
+ * cleanly (`cutAlertBody`) and ends with « … » and « Lire la suite : <url> »
+ * (« (suite dans MyHQ, item #<id>) » without HQ_PUBLIC_URL), since a long post
+ * is read on the desk; a shorter one ends with the line
+ * « Ouvrir : <url>/bureau#approval-<id> » when HQ_PUBLIC_URL is set (read from
+ * `env`). A pending item with files lists them, and
  * its alert carries the first video, image or sound Telegram takes (see
  * telegram-media.ts); otherwise it stays text, with its link.
  *
  * With `quietHours` in myhq.json, an informational item that is not marked
  * urgent (`"urgent": true` in its payload) is left unsent while the range
  * lasts; the first sweep after its end sends the items held together as one
- * text (several messages only past 4000 characters, without « Vu » buttons:
- * they stay under « À regarder »), or a single item the usual way. Pending
+ * text, each cut the same way with its link (the limit shrinks with their
+ * number so that the whole fits one message when it can; several messages only
+ * past 4000 characters; no « Vu » buttons: they stay under « À regarder »), or
+ * a single item the usual way. Pending
  * approvals are never held. The app process also sweeps every minute while
  * quiet hours are set (see `startQuietHours`), so that the held items leave
  * at the end of the range without waiting for a run.
@@ -240,15 +245,8 @@ ${strings.attachments.telegramLine(files.map((file) => file.name))}` : head;
       if (await send(text, { approvalId: row.id, ...(media ? { media } : {}) })) recordBotMessage(db, text, "alert");
       continue;
     }
-    const link = approvalLinkLine(row.id, env);
-    const full = `${strings.notify.notification(row)}\n\n${row.body}`;
-    let sent = false;
-    const parts = appendLine(splitMessage(full), link);
-    for (const [index, part] of parts.entries()) {
-      const last = index === parts.length - 1;
-      sent = (await send(part, row.status === "unseen" && last ? { seenId: row.id } : undefined)) || sent;
-    }
-    if (sent) recordBotMessage(db, withLine(full, link), "notification");
+    const text = informationText(row, env);
+    if (await send(text, row.status === "unseen" ? { seenId: row.id } : undefined)) recordBotMessage(db, text, "notification");
   }
   if (held.length > 0 && quiet) await sendHeld(db, held, quiet.range, send, env);
 }
@@ -291,17 +289,74 @@ async function sendQuestions(db: Db, row: SweptRow, asked: QuestionPayload, send
   }
 }
 
-/** The informational items held during the quiet hours, as one text: a heading, then each item in full with its link. */
+/**
+ * The most characters of an informational item in one Telegram message, its
+ * alert line and its body together: a longer text is cut and ends with a link
+ * to the rest on the desk. The link line comes on top.
+ */
+export const NOTIFICATION_TEXT_LIMIT = 1500;
+
+/** What the link line and the blank lines of an item take in the digest, for its share of a message. */
+const HELD_LINK_ROOM = 140;
+
+/** The least characters an item keeps in the digest of the quiet hours, however many items it holds. */
+const HELD_TEXT_MIN = 400;
+
+/** The least characters of a body kept when it is cut, whatever the length of the alert line. */
+const MIN_BODY_CHARS = 200;
+
+/**
+ * Cuts `body` to at most `max` characters, at the end of a paragraph or of a
+ * sentence when one falls in the second half of the window, else at a word,
+ * else (a text with no space) where the window ends. Never inside a surrogate
+ * pair. The cut text has no blank at its end and no « … »: the caller adds it.
+ */
+export function cutAlertBody(body: string, max: number): string {
+  if (body.length <= max) return body;
+  const window = body.slice(0, max);
+  const half = max / 2;
+  const paragraph = window.lastIndexOf("\n\n");
+  if (paragraph >= half) return window.slice(0, paragraph).trimEnd();
+  const sentence = Math.max(...[...window.matchAll(/[.!?…](?=\s)/g)].map((m) => m.index + 1), -1);
+  if (sentence >= half) return window.slice(0, sentence);
+  const word = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\n"));
+  if (word > 0) return window.slice(0, word).trimEnd();
+  const code = window.charCodeAt(max - 1);
+  return code >= 0xd800 && code <= 0xdbff ? window.slice(0, -1) : window;
+}
+
+/**
+ * The message of an informational item: its alert line, a blank line, its body.
+ * Within `limit` characters it ends with « Ouvrir : <url> » (when HQ_PUBLIC_URL
+ * is set); past it the body is cut (`cutAlertBody`), « … » closes it and the
+ * last line says where to read the rest: « Lire la suite : <url> », or
+ * « (suite dans MyHQ, item #<id>) » without an address.
+ */
+function informationText(found: SweptRow, env: Env, limit = NOTIFICATION_TEXT_LIMIT): string {
+  const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
+  const head = strings.notify.notification(row);
+  if (head.length + 2 + row.body.length <= limit) return withLine(`${head}\n\n${row.body}`, approvalLinkLine(row.id, env));
+  const cut = cutAlertBody(row.body, Math.max(limit - head.length - 2, MIN_BODY_CHARS));
+  const rest = approvalLinkLine(row.id, env, strings.notify.readMore) ?? strings.notify.continuesInHq(row.id);
+  return `${head}\n\n${cut}…\n\n${rest}`;
+}
+
+/**
+ * The informational items held during the quiet hours, as one text: a
+ * heading, then each item with its link, cut like a single one is. The limit
+ * of each shrinks with their number (down to HELD_TEXT_MIN) so that the whole
+ * is one message when it can be.
+ */
 async function sendHeld(db: Db, rows: SweptRow[], range: { start: string; end: string }, send: Send, env: Env): Promise<void> {
   const mark = db.prepare("UPDATE approvals SET notified_at = ? WHERE id = ? AND notified_at IS NULL");
   const at = new Date().toISOString();
   const mine = rows.filter((row) => mark.run(at, row.id).changes > 0);
   if (mine.length === 0) return;
-  const sections = mine.map((found) => {
-    const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
-    return withLine(`${strings.notify.notification(row)}\n\n${row.body}`, approvalLinkLine(row.id, env));
-  });
-  const full = [strings.notify.quietDigest({ count: mine.length, ...range }), ...sections].join("\n\n");
+  const heading = strings.notify.quietDigest({ count: mine.length, ...range });
+  // What each item may take of one message, its link line (about 100 characters) and the blank lines included.
+  const share = Math.floor((MESSAGE_LIMIT - heading.length) / mine.length) - HELD_LINK_ROOM;
+  const limit = Math.min(NOTIFICATION_TEXT_LIMIT, Math.max(share, HELD_TEXT_MIN));
+  const full = [heading, ...mine.map((found) => informationText(found, env, limit))].join("\n\n");
   let sent = false;
   for (const part of splitMessage(full)) sent = (await send(part)) || sent;
   if (sent) recordBotMessage(db, full, "notification");

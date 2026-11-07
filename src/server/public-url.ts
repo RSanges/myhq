@@ -22,10 +22,14 @@ export function publicUrl(env: Env = process.env): string | null {
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
-/** « Ouvrir : <url>/bureau#approval-<id> » (the item on the desk page), or null without HQ_PUBLIC_URL. */
-export function approvalLinkLine(id: number, env: Env = process.env): string | null {
+/**
+ * « Ouvrir : <url>/bureau#approval-<id> » (the item on the desk page), or null
+ * without HQ_PUBLIC_URL. `label` writes the line from the address: « Lire la
+ * suite : ... » for a text that was cut.
+ */
+export function approvalLinkLine(id: number, env: Env = process.env, label: (url: string) => string = strings.notify.open): string | null {
   const base = publicUrl(env);
-  return base ? strings.notify.open(`${base}${DESK_PATH}${approvalHash(id)}`) : null;
+  return base ? label(`${base}${DESK_PATH}${approvalHash(id)}`) : null;
 }
 
 /** « Ouvrir : <url>/bureau#run-<id> », or null without HQ_PUBLIC_URL. */

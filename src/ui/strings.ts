@@ -856,6 +856,10 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       `MyHQ : le tour #${p.runId} de ${p.room} / ${p.agent} a échoué\n${p.summary}`,
     /** Last line of an alert about an approval or a failed run, when HQ_PUBLIC_URL is set. */
     open: (url: string) => `Ouvrir : ${url}`,
+    /** Last line of an informational item whose text was cut, when HQ_PUBLIC_URL is set. */
+    readMore: (url: string) => `Lire la suite : ${url}`,
+    /** Last line of an informational item whose text was cut, without HQ_PUBLIC_URL. */
+    continuesInHq: (id: number) => `(suite dans MyHQ, item #${id})`,
     /** Last line of a brief or a summary, when HQ_PUBLIC_URL is set. */
     desk: (url: string) => `Bureau : ${url}`,
     /** Last line of the cap alert, when HQ_PUBLIC_URL is set. */

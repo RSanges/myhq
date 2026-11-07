@@ -1588,9 +1588,15 @@ of the home send text on their own, in both modes:
 
 - `notifyTypes` in `myhq.json`: informational items. `hq_submit` stores an
   item of a listed type `unseen` (and marked read by its agent); the app sends
-  it in full, an alert line then its body as is, cut in messages of 4000
-  characters, with a single **Vu** button on the last message (polling mode
-  only, like the decision buttons; callback `hq:w:<id>`) that does what the
+  it as one message, an alert line then its body as is, with a single **Vu**
+  button (polling mode only, like the decision buttons; callback `hq:w:<id>`).
+  A text (alert line and body) over `NOTIFICATION_TEXT_LIMIT` (1500
+  characters) is cut at the end of a paragraph or of a sentence when one falls
+  in the second half of the window, else at a word (`cutAlertBody`), and ends
+  with « … » then « Lire la suite : <url>/bureau#approval-<id> » (or
+  « (suite dans MyHQ, item #<id>) » without HQ_PUBLIC_URL): a long post is read
+  on the desk, not in four messages. A shorter one ends with « Ouvrir : ... ».
+  The button does what the
   desk's « Vu » does and edits the alert to add « Vu ». It stays on the desk
   under « À regarder » until seen, is never in the pending list, `/pending` or
   `hq_pending`, and never triggers `onApproval` nor wakes an agent. For a mail
@@ -1602,9 +1608,11 @@ of the home send text on their own, in both modes:
   items unsent and unmarked (`notified_at` stays null), except those whose
   payload says `"urgent": true`, which go at once. The first sweep after the
   end of the range sends the items created before that end as one text: a
-  heading (`strings.notify.quietDigest`), then each item in full with its link,
-  without « Vu » buttons, cut only past 4000 characters; a single item held
-  goes the usual way, with its button. Since the sweeps otherwise run only
+  heading (`strings.notify.quietDigest`), then each item with its link, cut like
+  a single one is (the limit shrinks with their number, down to 400 characters,
+  so that the whole is one message when it can be; several messages only past
+  4000 characters), without « Vu » buttons; a single item held goes the usual
+  way, with its button. Since the sweeps otherwise run only
   during and after runs, the app also sweeps every minute while the key is set
   (`startQuietHours`, started by `src/instrumentation.ts`, the key read again
   each time). The desk is not affected: an item held is under « À regarder »
