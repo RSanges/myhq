@@ -61,6 +61,7 @@ export const strings = {
       blog_post: "Article",
       room_proposal: "Salle",
       agent_proposal: "Agent",
+      question: "Question",
     } as Record<string, string>,
     age: {
       now: "à l'instant",
@@ -127,6 +128,26 @@ export const strings = {
     submittedOn: (date: string) => `Soumis le ${date}`,
     /** Title of a room proposal on the desk, whatever title the agent gave it. */
     roomProposalTitle: (room: string) => `Proposition de salle : ${room}`,
+  },
+  /** The questions an agent asks the owner (hq_ask): their text form and the desk card. */
+  question: {
+    headerTag: (header: string) => `[${header}]`,
+    multiple: "(plusieurs réponses possibles)",
+    otherOption: "Autre (texte libre)",
+    other: (text: string) => `Autre : ${text}`,
+    /** One line of the `decision_note` of an answered item. */
+    line: (question: string, answer: string) => `Q : ${question} / R : ${answer}`,
+    /** The card of the desk. */
+    desk: {
+      contextTitle: "Pourquoi l'agent demande",
+      choose: "Choisis une réponse",
+      chooseMany: "Choisis une ou plusieurs réponses",
+      otherLabel: "Autre",
+      otherField: (n: number) => `Autre réponse à la question ${n}`,
+      answer: "Répondre",
+      missing: (count: number) =>
+        count === 1 ? "Il reste 1 question sans réponse." : `Il reste ${count} questions sans réponse.`,
+    },
   },
   /** What the onboarding run asks its agent to write, per language of the home. */
   onboarding: {
@@ -766,6 +787,10 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       AGENT_BUSY: "Cet agent a déjà un tour en cours. Réessayez quand il aura fini.",
       APPROVAL_ALREADY_DECIDED: "Cet item a déjà été traité.",
       APPROVAL_NOT_DECIDABLE: "Cet item n'attend aucune décision : marque-le comme vu.",
+      INVALID_ANSWERS: "Les réponses ne correspondent pas aux questions : il en manque une, ou une option n'existe pas.",
+      ANSWERS_REQUIRED: "Cet item est une question : réponds-y (Approuver ne suffit pas), ou refuse-le.",
+      ANSWERS_NOT_EXPECTED: "Seul un item de questions prend des réponses.",
+      QUESTION_NOT_REVISABLE: "Une question ne se renvoie pas à retravailler : réponds-y ou refuse-la.",
       APPROVAL_NOT_WATCHABLE: "Cet item n'est pas à regarder : il attend une décision ou a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
       RESOURCE_BUSY: "Une ressource partagée de cet agent (le GPU par exemple) est prise par un autre tour. Réessayez quand il aura fini.",
@@ -795,6 +820,32 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
   notify: {
     approvalPending: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
       `MyHQ : un item attend ta validation (#${p.id})\n${p.room} / ${p.agent} : ${p.type}\n${p.title}`,
+    /** The first message of an item of questions (hq_ask): who asks, about what; one message per question follows. */
+    questionIntro: (p: { room: string; agent: string; title: string; id: number; count: number; context: string | null; polling: boolean }) =>
+      [
+        p.count === 1 ? `MyHQ : une question attend ta réponse (#${p.id})` : `MyHQ : ${p.count} questions attendent tes réponses (#${p.id})`,
+        `${p.room} / ${p.agent} : ${p.title}`,
+        ...(p.context ? ["", p.context] : []),
+        ...(p.polling ? ["", p.count === 1 ? "Réponds à la question ci-dessous." : "Réponds à chaque question ci-dessous."] : []),
+      ].join("\n"),
+    /** One question of an item of questions. The tag « (#12, 2/3) » of its first line is how a reply finds its question. */
+    questionMessage: (p: {
+      id: number;
+      index: number;
+      count: number;
+      header: string | undefined;
+      question: string;
+      options: { label: string; description: string | undefined }[];
+      multiSelect: boolean;
+      polling: boolean;
+    }) =>
+      [
+        `MyHQ : question (#${p.id}, ${p.index + 1}/${p.count})`,
+        `${p.header ? `[${p.header}] ` : ""}${p.question}`,
+        ...p.options.map((option, i) => `${i + 1}. ${option.label}${option.description ? ` : ${option.description}` : ""}`),
+        ...(p.multiSelect ? ["(plusieurs réponses possibles)"] : []),
+        p.polling ? "Autre réponse : réponds à ce message avec ton texte." : "Réponds sur le Bureau.",
+      ].join("\n"),
     /** First line of an informational item (notifyTypes), followed by its body. */
     notification: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
       `MyHQ : ${p.title} (#${p.id})\n${p.room} / ${p.agent} : ${p.type}`,
@@ -1130,6 +1181,15 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     alertSeen: (text: string, label: string) => `${text}\n\n${label}`,
     branchHandover: (branch: string, sha: string | null) =>
       `Branche ${branch}${sha ? ` (commit ${sha.slice(0, 10)})` : ""}. L'agent ne pousse pas : depuis le dépôt cible, lance les commandes du message suivant.`,
+    /** What the assistant says about the questions of an item (hq_ask) answered from Telegram. */
+    question: {
+      answered: (text: string, answer: string) => `${text}\n\nRéponse : ${answer}`,
+      saved: (done: number, total: number) => `Réponse enregistrée (${done}/${total}).`,
+      complete: (id: number) => `Item #${id} : toutes les questions ont une réponse, l'agent est prévenu.`,
+      pickOne: "Choisis au moins une réponse, ou réponds à ce message avec ton texte.",
+      replyToQuestion: "Réponds au message de la question elle-même (celui qui porte son numéro).",
+      gone: "Cette question n'existe plus.",
+    },
     askReject: (id: number) =>
       `Motif du refus de l'item #${id} ? Réponds par un message (la question reste valable une heure).`,
     askRevise: (id: number) =>

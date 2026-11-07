@@ -26,6 +26,11 @@ export function approvalKeyboard(approvalId: number): InlineKeyboard {
   };
 }
 
+/** The one button of the alert of an item of questions: « Refuser » (it has no place), the answers being the questions' own buttons. */
+export function rejectKeyboard(approvalId: number): InlineKeyboard {
+  return { inline_keyboard: [[button("reject", strings.desk.reject, approvalId)]] };
+}
+
 /** The one button of an informational alert (« À regarder »): « Vu », same as the desk's. */
 export function seenKeyboard(approvalId: number): InlineKeyboard {
   return { inline_keyboard: [[button("seen", strings.desk.seen, approvalId)]] };

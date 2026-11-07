@@ -26,6 +26,10 @@ Every error has the same shape and an HTTP status:
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
+| `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) without `answers`. |
+| `INVALID_ANSWERS` | 422 | The `answers` do not fit the questions: not one per question, an option that does not exist or is picked twice, nothing answered, or several answers to a single-select question. Nothing is decided. |
+| `ANSWERS_NOT_EXPECTED` | 400 | `answers` on an item that is not an item of questions. |
+| `QUESTION_NOT_REVISABLE` | 409 | `revise` on an item of questions: answer it or reject it. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs (or `maxRunsPerDay` of `myhq.json`, which wins) were already started today (local day, all agents). |
 | `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts until it is back. |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
@@ -224,6 +228,7 @@ Payloads the interface and the assistant act on:
 |---|---|---|
 | any | `{ "url": "https://..." }` | The body and the link are handed to the user (copy, open). |
 | `pull_request`, `blog_post` | `{ "branch": "hq/<agent>-<slug>", "sha": "...", "title": "...", "summary": "..." }` | The branch, the commit, and the `git push` and `gh pr create` commands are handed to the user. Nothing is pushed or merged. |
+| `question` | `{ "context"?: "...", "questions": [{ "question": "...", "header"?: "...", "options": [{ "label": "...", "description"?: "..." }], "multiSelect"?: true }], "answers"?: [{ "options": [1], "other"?: "..." }] }` (from `hq_ask`; `answers` once answered, one per question) | Answering it (`approved` with `answers`) wakes the agent with its questions and the answers; see `PATCH /api/approvals/[id]`. |
 | `room_proposal` | `{ "room": {room.json}, "roles": { "<agent>": { "template": "...", "content": "..." } }, "claudeMd": "..." }` (completed by `hq_submit`, see `architecture.md` section 3) | The room is written in the home (otherwise the approval fails with `ROOM_EXISTS`, `PROPOSAL_INVALID` or `WORKTREE_FAILED`), then the `CLAUDE.md` block is handed to the user. |
 
 ### Firing
@@ -754,6 +759,14 @@ Body:
 }
 ```
 
+An item of questions (`type: "question"`, created by the agent's `hq_ask`) is not approved but answered: `approved` takes `answers`, one per question in the order asked, each `{ "options": [index, ...], "other"?: "free text" }` (`options` are indexes in the question's `options`; `other` is the « Autre » answer MyHQ always offers). A single-select question takes exactly one of an option or `other`; a multi-select one (`multiSelect`) takes any mix, at least one answer. `answers` without `approved`, or on another type, and `approved` without `answers` on a question, are refused (`INVALID_INPUT`, `ANSWERS_NOT_EXPECTED`, `ANSWERS_REQUIRED`, `INVALID_ANSWERS`).
+
+```json
+{ "decision": "approved", "answers": [{ "options": [1] }, { "options": [0, 2], "other": "Podcast" }] }
+```
+
+The answers are kept in the item's `payload.answers` and, as `Q : ... / R : ...` lines, in its `decisionNote`. The agent is woken like for a revision (run `reason` `revise`, so `onRevise: "queue"` makes it wait for its next run) with a task that holds its questions and the answers; it also reads the decision with `hq_read_decisions`. `rejected` (with a reason) is how the owner says the question has no place; nothing wakes. `revise` is refused.
+
 `note` is optional for `approved` and required (non-blank, at most 5000
 characters) for `rejected` and `revise`. `revise` sends the item back to its
 agent as a new task carrying the note; the agent sees it at its next run, and
@@ -1263,7 +1276,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its sixteen tools write to the same
+for each run (see `architecture.md`). Its seventeen tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

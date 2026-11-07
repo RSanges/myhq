@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "../server/db";
 import {
+  hqAsk,
   hqBlocked,
   hqBlockedNote,
   hqItems,
@@ -72,6 +73,15 @@ async function main(): Promise<void> {
       inputSchema: inputs.hq_submit,
     },
     async (args) => respond(() => hqSubmit(db, ctx, args)),
+  );
+  server.registerTool(
+    "hq_ask",
+    {
+      description:
+        "Ask the owner questions when a decision of theirs is truly needed to go on: a choice between concrete options, not something you can find out or reasonably decide yourself. Each question has 2 to 6 options (MyHQ always adds an \"Other\" answer with free text: do not add one) and may allow several answers (`multiSelect`). It becomes an item of the approval queue; the owner answers on the desk or on Telegram. Do not wait: finish your turn after asking. The answers come back to you as a new task that holds your questions and each answer, and wakes you. Use it instead of guessing or of submitting a deliverable at random; do not overuse it, ask only what blocks you, all your questions at once.",
+      inputSchema: inputs.hq_ask,
+    },
+    async (args) => respond(() => hqAsk(db, ctx, args)),
   );
   server.registerTool(
     "hq_task_update",

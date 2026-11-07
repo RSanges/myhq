@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { approvalKeyboard, seenKeyboard } from "../assistant/approval-buttons";
+import { approvalKeyboard, rejectKeyboard, seenKeyboard } from "../assistant/approval-buttons";
+import { questionKeyboard } from "../assistant/question-buttons";
+import type { InlineKeyboard } from "../assistant/telegram";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
+import { parseQuestionPayload, QUESTION_TYPE, type QuestionPayload } from "./questions";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { appendLine, approvalLinkLine, withLine } from "./public-url";
 import { isQuiet, isUrgentPayload, lastQuietEnd, readQuietHours } from "./quiet-hours";
@@ -21,12 +24,17 @@ export type SendOptions = {
   approvalId?: number;
   /** The alert is about this informational item (« À regarder »): it gets the one « Vu » button. */
   seenId?: number;
+  /** The buttons of the alert, when none of the above fits (an item of questions). */
+  keyboard?: InlineKeyboard;
   /** A file the alert carries (a video, a photo, a sound), the text becoming its caption. */
   media?: TelegramMedia;
 };
 
 /** Sends an alert. Resolves to false when nothing was sent; never throws. */
 export type Send = (text: string, options?: SendOptions) => Promise<boolean>;
+
+/** The most characters of one question's message: past it the options lose their descriptions (the Bot API cuts at 4096). */
+const QUESTION_MESSAGE_LIMIT = 3_900;
 
 /** Longest caption of a photo, a video or a sound for the Bot API. */
 const CAPTION_LIMIT = 1024;
@@ -81,11 +89,13 @@ export async function notify(
   const apiBase = (env.HQ_TELEGRAM_API_BASE?.trim() || DEFAULT_TELEGRAM_API_BASE).replace(/\/+$/, "");
   const keyboard = !pollingEnabled(env)
     ? null
-    : options.approvalId !== undefined
-      ? approvalKeyboard(options.approvalId)
-      : options.seenId !== undefined
-        ? seenKeyboard(options.seenId)
-        : null;
+    : options.keyboard
+      ? options.keyboard
+      : options.approvalId !== undefined
+        ? approvalKeyboard(options.approvalId)
+        : options.seenId !== undefined
+          ? seenKeyboard(options.seenId)
+          : null;
   try {
     if (options.media) {
       try {
@@ -215,6 +225,11 @@ export async function notifyPendingApprovals(
     if (mark.run(new Date().toISOString(), found.id).changes === 0) continue;
     // A delivery of a shared room says where it goes: « creation pour planygo ».
     const row = { ...found, room: found.for_room ? strings.studio.forRoom(found.room, found.for_room) : found.room };
+    const asked = row.status === "pending" && row.type === QUESTION_TYPE ? parseQuestionPayload(JSON.parse(row.payload)) : null;
+    if (asked) {
+      await sendQuestions(db, row, asked, send, env);
+      continue;
+    }
     if (row.status === "pending") {
       const files = filesOf.all(row.id) as { id: number; name: string; mime: string; size: number }[];
       const head = strings.notify.approvalPending(row);
@@ -236,6 +251,44 @@ ${strings.attachments.telegramLine(files.map((file) => file.name))}` : head;
     if (sent) recordBotMessage(db, withLine(full, link), "notification");
   }
   if (held.length > 0 && quiet) await sendHeld(db, held, quiet.range, send, env);
+}
+
+/** The most characters of the agent's context shown in the first message of an item of questions. */
+const QUESTION_CONTEXT_LIMIT = 600;
+
+/**
+ * The alert of an item of questions (hq_ask): a first message that says who asks
+ * and why, with the link to the desk and a « Refuser » button, then one message
+ * per question with a button per option (« Autre » is a reply to its message).
+ * A question too long for one message loses the descriptions of its options.
+ * The buttons only exist when MyHQ reads the bot's updates (polling), as for
+ * every alert; without it the messages send the owner to the desk.
+ */
+async function sendQuestions(db: Db, row: SweptRow, asked: QuestionPayload, send: Send, env: Env): Promise<void> {
+  const polling = pollingEnabled(env);
+  const context = asked.context ? (asked.context.length > QUESTION_CONTEXT_LIMIT ? `${asked.context.slice(0, QUESTION_CONTEXT_LIMIT).trimEnd()}…` : asked.context) : null;
+  const intro = withLine(
+    strings.notify.questionIntro({ room: row.room, agent: row.agent, title: row.title, id: row.id, count: asked.questions.length, context, polling }),
+    approvalLinkLine(row.id, env),
+  );
+  if (await send(intro, { keyboard: rejectKeyboard(row.id) })) recordBotMessage(db, intro, "alert");
+  for (const [index, question] of asked.questions.entries()) {
+    const message = (descriptions: boolean) =>
+      strings.notify.questionMessage({
+        id: row.id,
+        index,
+        count: asked.questions.length,
+        header: question.header,
+        question: question.question,
+        options: question.options.map((option) => ({ label: option.label, description: descriptions ? option.description : undefined })),
+        multiSelect: question.multiSelect === true,
+        polling,
+      });
+    const full = message(true);
+    const text = full.length <= QUESTION_MESSAGE_LIMIT ? full : message(false);
+    const keyboard = questionKeyboard(row.id, index, question.options.map((option) => option.label), question.multiSelect === true);
+    if (await send(text, { keyboard })) recordBotMessage(db, text, "alert");
+  }
 }
 
 /** The informational items held during the quiet hours, as one text: a heading, then each item in full with its link. */

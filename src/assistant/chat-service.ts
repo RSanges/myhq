@@ -1,5 +1,6 @@
 import path from "node:path";
 import { decideApproval, decisionSchema } from "../server/approvals";
+import type { Answer } from "../server/questions";
 import { publishChat, type ChatTurnState } from "../server/chat-hub";
 import {
   chatTranscript,
@@ -424,11 +425,11 @@ export class ChatService {
   // --- Actions -----------------------------------------------------------------
 
   /** Same code path as PATCH /api/approvals/[id]. Throws HqError or ZodError. */
-  decide(id: number, decision: "approved" | "rejected" | "revise", note?: string): ApprovalDto {
+  decide(id: number, decision: "approved" | "rejected" | "revise", note?: string, answers?: Answer[]): ApprovalDto {
     return decideApproval(
       this.deps.db,
       id,
-      decisionSchema.parse({ decision, ...(note ? { note } : {}) }),
+      decisionSchema.parse({ decision, ...(note ? { note } : {}), ...(answers ? { answers } : {}) }),
       this.deps.config,
     );
   }

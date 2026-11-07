@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { liveConfig, type Env, type HqConfig } from "../server/config";
 import { markApprovalSeen } from "../server/approvals";
+import { answerSchema, answerText, parseQuestionPayload, QUESTION_TYPE, type Answer, type Question } from "../server/questions";
 import type { Db, RunRow } from "../server/db";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
@@ -30,6 +31,7 @@ import type { AssistantCommand, AssistantContext, LoadedExtension } from "./exte
 import type { AssistantConfig } from "./home-config";
 import { confirmationAnswer } from "./actions";
 import { PendingSelections, type PendingQuestions, type DecisionQuestion } from "./pending";
+import { parseQuestionData, questionKeyboard, type QuestionButton } from "./question-buttons";
 import { replyTarget } from "./replies";
 import { parseSelectionData, selectionKeyboard } from "./selection-buttons";
 import { extensionEnv } from "./settings";
@@ -41,6 +43,8 @@ import { splitMessage, toTelegramMessages } from "./text";
 export const FILE_LIMIT_BYTES = 20 * 1024 * 1024;
 const TRANSCRIBE_TIMEOUT_MS = 5 * 60_000;
 const TELEGRAM_COMMAND_LIMIT = 100;
+/** The most items of questions whose partial answers (given from Telegram) are kept at once. */
+const MAX_OPEN_QUESTIONS = 50;
 
 type Decision = "approved" | "rejected" | "revise";
 
@@ -109,6 +113,10 @@ export class Assistant {
   private readonly selections: PendingSelections;
   private readonly extEnv: Env;
   private readonly chat: ChatService;
+  /** The answers given from Telegram to the questions of items not answered yet (hq_ask), by item then question. */
+  private readonly questionAnswers = new Map<number, Map<number, Answer>>();
+  /** The options ticked on a multi-select question that is not validated yet, by "<item>:<question>". */
+  private readonly ticked = new Map<string, Set<number>>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: AssistantDeps) {
@@ -484,15 +492,145 @@ export class Assistant {
   private async handleReply(text: string, replied: RepliedMessage): Promise<boolean> {
     const target = replyTarget(replied.text ?? replied.caption);
     if (!target) return false;
-    const row = this.deps.db.prepare("SELECT status FROM approvals WHERE id = ?").get(target.approvalId) as
-      | { status: string }
+    const row = this.deps.db.prepare("SELECT status, type FROM approvals WHERE id = ?").get(target.approvalId) as
+      | { status: string; type: string }
       | undefined;
     if (row?.status !== "pending") return false;
+    if (row.type === QUESTION_TYPE) {
+      await this.answerByReply(target.approvalId, target.question, text, replied);
+      return true;
+    }
     const alert = replied.text === undefined && replied.caption !== undefined
       ? { messageId: replied.message_id, text: replied.caption, media: true }
       : { messageId: replied.message_id, text: replied.text ?? "" };
     await this.answerQuestion({ decision: "revise", approvalId: target.approvalId, alert }, text);
     return true;
+  }
+
+  // --- Questions of the agents (hq_ask) ---------------------------------------
+
+  /** The questions of an item of questions, null when the item is not one (or is gone). */
+  private loadQuestions(id: number): { status: string; questions: Question[] } | null {
+    const row = this.deps.db.prepare("SELECT status, type, payload FROM approvals WHERE id = ?").get(id) as
+      | { status: string; type: string; payload: string }
+      | undefined;
+    if (!row || row.type !== QUESTION_TYPE) return null;
+    const asked = parseQuestionPayload(JSON.parse(row.payload));
+    return asked ? { status: row.status, questions: asked.questions } : null;
+  }
+
+  /** The item is over (answered or decided elsewhere): what was kept for it goes. */
+  private forgetQuestions(id: number): void {
+    this.questionAnswers.delete(id);
+    for (const key of this.ticked.keys()) if (key.startsWith(`${id}:`)) this.ticked.delete(key);
+  }
+
+  /**
+   * Keeps the answer to one question, shows it on the question's message (the
+   * buttons go), and, once every question of the item has one, answers the
+   * item: the agent is woken with them. Returns how far the item is.
+   */
+  private async recordAnswer(
+    id: number,
+    questions: readonly Question[],
+    index: number,
+    answer: Answer,
+    message: { messageId: number; text: string },
+  ): Promise<{ done: number; complete: boolean }> {
+    const t = strings.assistant.question;
+    this.ticked.delete(`${id}:${index}`);
+    const mine = this.questionAnswers.get(id) ?? new Map<number, Answer>();
+    mine.set(index, answer);
+    this.questionAnswers.set(id, mine);
+    // A few items at most are kept open: the oldest goes first.
+    while (this.questionAnswers.size > MAX_OPEN_QUESTIONS) this.questionAnswers.delete(this.questionAnswers.keys().next().value!);
+    await this.editMessage(message.messageId, t.answered(message.text, answerText(questions[index]!, answer)));
+    if (mine.size < questions.length) return { done: mine.size, complete: false };
+    try {
+      this.chat.decide(id, "approved", undefined, questions.map((_, i) => mine.get(i)!));
+      await this.reply(t.complete(id));
+    } catch (error) {
+      await this.reply(this.errorText(error));
+    }
+    this.forgetQuestions(id);
+    return { done: mine.size, complete: true };
+  }
+
+  /** A press on the keyboard of a question: pick an option, or tick it and validate on a multi-select question. */
+  private async handleQuestionPress(query: CallbackQuery, press: QuestionButton): Promise<void> {
+    const tg = this.deps.telegram;
+    const t = strings.assistant.question;
+    const item = this.loadQuestions(press.approvalId);
+    if (!item) {
+      await tg.answerCallbackQuery(query.id, strings.errors.byCode.APPROVAL_NOT_FOUND);
+      return;
+    }
+    const message = query.message;
+    if (item.status !== "pending") {
+      // Decided elsewhere (the desk, a refusal): the question is shown as it was, without buttons.
+      this.forgetQuestions(press.approvalId);
+      await tg.answerCallbackQuery(query.id, strings.errors.byCode.APPROVAL_ALREADY_DECIDED);
+      if (message) await this.editMessage(message.message_id, message.text ?? "");
+      return;
+    }
+    const question = item.questions[press.question];
+    if (!question || !message) {
+      await tg.answerCallbackQuery(query.id, t.gone);
+      return;
+    }
+    const shown = message.text ?? "";
+    const key = `${press.approvalId}:${press.question}`;
+    let answer: Answer;
+    if (press.action === "option") {
+      if (press.option >= question.options.length) {
+        await tg.answerCallbackQuery(query.id);
+        return;
+      }
+      if (!question.multiSelect) {
+        answer = { options: [press.option] };
+      } else {
+        const selected = this.ticked.get(key) ?? new Set<number>();
+        if (!selected.delete(press.option)) selected.add(press.option);
+        this.ticked.set(key, selected);
+        await tg.answerCallbackQuery(query.id);
+        const labels = question.options.map((option) => option.label);
+        await this.editMessage(message.message_id, shown, questionKeyboard(press.approvalId, press.question, labels, true, selected));
+        return;
+      }
+    } else {
+      const selected = this.ticked.get(key);
+      if (!question.multiSelect || !selected || selected.size === 0) {
+        await tg.answerCallbackQuery(query.id, t.pickOne);
+        return;
+      }
+      answer = { options: [...selected].sort((a, b) => a - b) };
+    }
+    const progress = await this.recordAnswer(press.approvalId, item.questions, press.question, answer, {
+      messageId: message.message_id,
+      text: shown,
+    });
+    await tg.answerCallbackQuery(query.id, progress.complete ? undefined : t.saved(progress.done, item.questions.length));
+  }
+
+  /**
+   * « Autre »: a reply to the message of a question answers it with the text
+   * (on a multi-select question, together with the options ticked so far).
+   */
+  private async answerByReply(id: number, index: number | null, text: string, replied: RepliedMessage): Promise<void> {
+    const t = strings.assistant.question;
+    const item = this.loadQuestions(id);
+    if (!item) return;
+    if (index === null) return this.reply(t.replyToQuestion);
+    const question = item.questions[index];
+    if (!question) return this.reply(t.gone);
+    const ticked = question.multiSelect ? [...(this.ticked.get(`${id}:${index}`) ?? [])].sort((a, b) => a - b) : [];
+    const answer = answerSchema.safeParse({ options: ticked, other: text });
+    if (!answer.success) return this.reply(strings.errors.byCode.INVALID_INPUT ?? strings.errors.generic);
+    const progress = await this.recordAnswer(id, item.questions, index, answer.data, {
+      messageId: replied.message_id,
+      text: replied.text ?? "",
+    });
+    if (!progress.complete) await this.reply(t.saved(progress.done, item.questions.length));
   }
 
   private async answerQuestion(question: DecisionQuestion, note: string): Promise<void> {
@@ -532,6 +670,8 @@ export class Assistant {
     const tg = this.deps.telegram;
     const choice = parseSelectionData(query.data);
     if (choice) return this.handleSelection(query, choice);
+    const asked = parseQuestionData(query.data);
+    if (asked) return this.handleQuestionPress(query, asked);
     const button = parseButtonData(query.data);
     if (!button) {
       await tg.answerCallbackQuery(query.id);

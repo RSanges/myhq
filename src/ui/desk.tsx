@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
+import { parseQuestionPayload, QUESTION_TYPE, type Question } from "@/server/questions";
 import { AnnotatedBody } from "./annotated-body";
 import { Attachments, type PointFocus } from "./attachments";
 import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
@@ -11,6 +12,9 @@ import { excerpt } from "./excerpt";
 import { formatAge, formatDateTime } from "./format";
 import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, typeLabel, type Action, type TeamAgent } from "./model";
 import { primaryDecision } from "./primary-decision";
+import { QuestionForm } from "./question-form";
+import { draftAnswers, emptyDraft, unanswered, type QuestionDraft } from "./question-model";
+import { Markdown } from "./markdown-view";
 import { chipStyle } from "./room-color";
 import type { Approval } from "./schemas";
 import { strings } from "./strings";
@@ -196,6 +200,88 @@ function ApprovalContent({
   );
 }
 
+/**
+ * The row of buttons under a pending item: `lead` (the item's own main
+ * button), then a discreet « Refuser » that opens its field, « Motif du refus
+ * (obligatoire) ». The reason is checked here; what to do with it is the
+ * caller's.
+ */
+function RejectRow({
+  approvalId,
+  busy,
+  lead,
+  onReject,
+  onError,
+}: {
+  approvalId: number;
+  busy: boolean;
+  lead: ReactNode;
+  onReject: (reason: string) => void;
+  onError: (message: string | null) => void;
+}) {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+  const reasonId = `note-${approvalId}`;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        {lead}
+        {!rejecting && (
+          <button
+            type="button"
+            className="min-h-10 pointer-coarse:min-h-12 rounded-md px-3 py-2 text-sm text-muted underline-offset-2 hover:text-danger hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+            disabled={busy}
+            onClick={() => {
+              setRejecting(true);
+              onError(null);
+            }}
+          >
+            {strings.desk.reject}
+          </button>
+        )}
+      </div>
+      {rejecting && (
+        <div className="space-y-2 border-t border-line pt-3">
+          <label htmlFor={reasonId} className="block text-sm font-medium">
+            {strings.desk.rejectLabel}
+          </label>
+          <textarea
+            id={reasonId}
+            className={fieldClass}
+            rows={3}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            maxLength={5000}
+            required
+            autoFocus
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass("danger")}
+              disabled={busy}
+              onClick={() => (reason.trim() === "" ? onError(strings.desk.noteRequired) : onReject(reason.trim()))}
+            >
+              {busy ? strings.desk.sending : strings.desk.confirmReject}
+            </button>
+            <button
+              type="button"
+              className={buttonClass()}
+              disabled={busy}
+              onClick={() => {
+                setRejecting(false);
+                onError(null);
+              }}
+            >
+              {strings.desk.cancel}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function PendingCard({
   approval,
   dispatch,
@@ -213,8 +299,6 @@ function PendingCard({
   onAnnotations: (next: Annotation[]) => void;
 }) {
   const [comment, setComment] = useState("");
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -250,20 +334,7 @@ function PendingCard({
     });
   };
 
-  const sendReject = () => {
-    if (reason.trim() === "") {
-      setError(strings.desk.noteRequired);
-      return;
-    }
-    void send({
-      decision: "rejected",
-      note: reason.trim(),
-      ...(annotations.length > 0 ? { annotations } : {}),
-    });
-  };
-
   const commentId = `comment-${approval.id}`;
-  const reasonId = `note-${approval.id}`;
 
   return (
     <DeskItem approval={approval} {...item}>
@@ -285,57 +356,90 @@ function PendingCard({
         {annotations.length > 0 && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
         {main === "approved" && <p className="text-xs text-muted">{strings.desk.commentHint}</p>}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={buttonClass("primary")} disabled={busy} onClick={sendMain}>
-          {busy ? strings.desk.sending : main === "approved" ? strings.desk.approve : strings.desk.sendToRevise}
-        </button>
-        {!rejecting && (
+      <RejectRow
+        approvalId={approval.id}
+        busy={busy}
+        onError={setError}
+        onReject={(reason) =>
+          void send({ decision: "rejected", note: reason, ...(annotations.length > 0 ? { annotations } : {}) })
+        }
+        lead={
+          <button type="button" className={buttonClass("primary")} disabled={busy} onClick={sendMain}>
+            {busy ? strings.desk.sending : main === "approved" ? strings.desk.approve : strings.desk.sendToRevise}
+          </button>
+        }
+      />
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </DeskItem>
+  );
+}
+
+/**
+ * A pending item of questions (hq_ask): the context the agent gave, then each
+ * question with its options and « Autre ». « Répondre » is active once every
+ * question has an answer; « Refuser » stays for a question that has no place.
+ * The main button of the other items does not apply here: the answers are the
+ * decision.
+ */
+function QuestionCard({
+  approval,
+  dispatch,
+  item,
+  questions,
+  context,
+}: {
+  approval: Approval;
+  dispatch: Dispatch;
+  item: ItemProps;
+  questions: readonly Question[];
+  context: string | undefined;
+}) {
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => questions.map(emptyDraft));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const answers = draftAnswers(questions, drafts);
+
+  const send = async (decision: Parameters<typeof decideApproval>[1]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const decided = await decideApproval(approval.id, decision);
+      item.fold();
+      dispatch({ type: "approval", approval: decided });
+    } catch (failure) {
+      setError(errorText(failure));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <DeskItem approval={approval} {...item}>
+      <ApprovalHeader approval={approval} />
+      {context && <Markdown source={context} />}
+      <QuestionForm
+        itemId={approval.id}
+        questions={questions}
+        drafts={drafts}
+        disabled={busy}
+        onChange={(index, next) => setDrafts((all) => all.map((draft, i) => (i === index ? next : draft)))}
+      />
+      {answers === null && <p className="text-xs text-muted">{strings.question.desk.missing(unanswered(questions, drafts))}</p>}
+      <RejectRow
+        approvalId={approval.id}
+        busy={busy}
+        onError={setError}
+        onReject={(reason) => void send({ decision: "rejected", note: reason })}
+        lead={
           <button
             type="button"
-            className="min-h-10 pointer-coarse:min-h-12 rounded-md px-3 py-2 text-sm text-muted underline-offset-2 hover:text-danger hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
-            disabled={busy}
-            onClick={() => {
-              setRejecting(true);
-              setError(null);
-            }}
+            className={buttonClass("primary")}
+            disabled={busy || answers === null}
+            onClick={() => answers && void send({ decision: "approved", answers })}
           >
-            {strings.desk.reject}
+            {busy ? strings.desk.sending : strings.question.desk.answer}
           </button>
-        )}
-      </div>
-      {rejecting && (
-        <div className="space-y-2 border-t border-line pt-3">
-          <label htmlFor={reasonId} className="block text-sm font-medium">
-            {strings.desk.rejectLabel}
-          </label>
-          <textarea
-            id={reasonId}
-            className={fieldClass}
-            rows={3}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            maxLength={5000}
-            required
-            autoFocus
-          />
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={buttonClass("danger")} disabled={busy} onClick={sendReject}>
-              {busy ? strings.desk.sending : strings.desk.confirmReject}
-            </button>
-            <button
-              type="button"
-              className={buttonClass()}
-              disabled={busy}
-              onClick={() => {
-                setRejecting(false);
-                setError(null);
-              }}
-            >
-              {strings.desk.cancel}
-            </button>
-          </div>
-        </div>
-      )}
+        }
+      />
       {error && <ErrorNote>{error}</ErrorNote>}
     </DeskItem>
   );
@@ -448,7 +552,7 @@ function HistoryCard({
         </p>
       )}
       {approval.decisionNote && (
-        <p className="break-words rounded-md bg-soft px-3 py-2 text-sm">
+        <p className="whitespace-pre-line break-words rounded-md bg-soft px-3 py-2 text-sm">
           <span className="font-medium">{strings.desk.noteTitle} : </span>
           {approval.decisionNote}
         </p>
@@ -479,7 +583,7 @@ function HistoryCard({
         />
       ) : (
         <>
-          {!approval.informational && (
+          {!approval.informational && approval.type !== QUESTION_TYPE && (
             <button type="button" className={buttonClass()} onClick={() => setRevising(true)}>
               {strings.desk.requestRevision}
             </button>
@@ -775,17 +879,29 @@ export function Desk({
             <p className="text-sm text-muted">{strings.desk.emptyPending}</p>
           ) : (
             <ul className="space-y-2">
-              {pending.map((approval) => (
-                <PendingCard
-                  key={approval.id}
-                  approval={approval}
-                  dispatch={dispatch}
-                  onApproved={showHandover}
-                  annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
-                  onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
-                  item={itemProps(approval)}
-                />
-              ))}
+              {pending.map((approval) => {
+                const asked = approval.type === QUESTION_TYPE ? parseQuestionPayload(approval.payload) : null;
+                return asked ? (
+                  <QuestionCard
+                    key={approval.id}
+                    approval={approval}
+                    dispatch={dispatch}
+                    item={itemProps(approval)}
+                    questions={asked.questions}
+                    context={asked.context}
+                  />
+                ) : (
+                  <PendingCard
+                    key={approval.id}
+                    approval={approval}
+                    dispatch={dispatch}
+                    onApproved={showHandover}
+                    annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
+                    onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
+                    item={itemProps(approval)}
+                  />
+                );
+              })}
             </ul>
           )
         ) : history.length === 0 ? (

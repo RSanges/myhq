@@ -51,7 +51,7 @@ You never write a file, run a command, browse the web, or contact anyone.
   user arms them later, so never set `armed`.
 - **Exact tools.** `allowedTools` lists tools by exact name (for example
   `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `mcp__hq__hq_submit`,
-  `mcp__hq__hq_task_update`, `mcp__hq__hq_read_decisions`,
+  `mcp__hq__hq_ask`, `mcp__hq__hq_task_update`, `mcp__hq__hq_read_decisions`,
   `mcp__hq__hq_memory_read`, `mcp__hq__hq_memory_write`,
   `mcp__hq__hq_message`), with narrow `Bash(...)` patterns for a developer
   (git, the test, lint and type check commands of the project). No wildcard

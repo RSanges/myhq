@@ -121,12 +121,13 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Sixteen tools, all validated with zod:
+room) and writes directly to SQLite. Seventeen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). |
+| `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -352,6 +353,46 @@ which becomes the note of the `revise` (the item is found from the `(#id)` tag
 in the first line of the replied message, see `src/assistant/replies.ts`; a
 reply to an item that is no longer pending, or to a message without a tag, is
 an ordinary message to the chat).
+
+#### Questions from the agents
+
+`hq_ask` lets an agent ask the owner questions instead of guessing or
+submitting a deliverable at random. The role of the agent decides whether it has
+the tool (`mcp__hq__hq_ask` in `allowedTools`, or `mcp__hq__*`); the prompt of
+every run (`buildPrompt`) carries a short rule: ask only what blocks you,
+concrete options, all the questions at once, then finish the turn.
+
+An asked set of questions is one item of the approval queue (`src/server/questions.ts`):
+type `question`, status `pending`, the questions (and the agent's optional
+`context`) in the payload, a readable text of them in the body (for the history
+and the search). The same questions (title and text) still waiting, or answered
+in the last 24 hours, are not asked twice. The supervisor of the Standard and
+the receptionist cannot ask.
+
+- **On the desk** the card shows the context, then each question with its
+  options (radio buttons, check boxes for `multiSelect`) and « Autre » with a
+  text field. « Répondre » is enabled when every question has an answer
+  (`src/ui/question-model.ts`). The main button of the other items does not
+  apply. « Refuser » (with a reason) stays for a question that has no place.
+- **Answering** is approving the item with `answers` (`decisionSchema`,
+  `PATCH /api/approvals/[id]`, see `api.md`): checked against the questions,
+  kept in `payload.answers` and, as « Q : ... / R : ... » lines, in the
+  decision note, and it gives the agent a `revise` task holding its questions
+  and each answer, so the agent is woken exactly like for a revision (same
+  reason `revise`, same `onRevise: "queue"` opt-out, same lock and daily cap).
+  No approval task, command or relay runs. A question is never sent back
+  (`QUESTION_NOT_REVISABLE`).
+- **On Telegram** the alert is a first message (who asks, the title, the
+  context, the « Ouvrir » link, a « Refuser » button), then one message per
+  question: the numbered options, and a button per option (a multi-select
+  question ticks them, then « Valider la sélection »). Pressing an option answers
+  a single-select question and shows the answer on its message. « Autre » is a
+  reply to the question's message with a text (on a multi-select question,
+  together with the options ticked). The answers given are kept (in memory, for
+  the items still open) until the last question is answered, when the item is
+  answered as on the desk. A question message is found from the `(#12, 2/3)`
+  tag of its first line, so a reply works after a restart. Without
+  HQ_TELEGRAM_POLLING the messages carry no button and send the owner to the desk.
 
 #### Folded items on the desk
 
@@ -721,7 +762,7 @@ last run started, of source:
 
 | Task | Run reason | Wakes the agent |
 |---|---|---|
-| `revise` (a revise decision) | `revise` | unless `onRevise: "queue"` |
+| `revise` (a revise decision, or the answers to an item of questions) | `revise` | unless `onRevise: "queue"` |
 | `message` (`hq_message`) | `message` | unless `onMessage: "queue"` |
 | `approval` (an approved item) | `approval` | when `onApproval: "task"` (with `"queue"` the task waits; without the field there is no task) |
 | `chat` (a request of the chat) | `chat` | always |

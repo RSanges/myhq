@@ -745,3 +745,200 @@ test("a request for a busy agent leaves its task pending, and its own reason is 
   assert.ok(logs.some((l) => /waits for the agent's next run/.test(l)));
   assert.equal(processChatRequests(path.join(config.home, "missing"), { config, db, log: () => undefined }), 0);
 });
+
+// --- Questions of the agents (hq_ask) -------------------------------------------------
+
+const ASKED = {
+  context: "Two things block the launch post.",
+  questions: [
+    {
+      question: "Which tone?",
+      header: "Tone",
+      options: [{ label: "Playful", description: "Jokes allowed" }, { label: "Serious" }, { label: "Neutral" }],
+    },
+    { question: "Which channels?", multiSelect: true, options: [{ label: "Blog" }, { label: "Social" }, { label: "Mail" }] },
+  ],
+};
+
+function addQuestion(db: Db): number {
+  return Number(
+    db
+      .prepare(
+        "INSERT INTO approvals (room, agent_id, type, title, body, payload, status, created_at) VALUES ('demo', 'scout', 'question', 'Launch post', 'q', ?, 'pending', ?)",
+      )
+      .run(JSON.stringify(ASKED), new Date().toISOString()).lastInsertRowid,
+  );
+}
+
+const noteOf = (db: Db, id: number) => approval(db, id).decision_note;
+const questionText = (id: number, index: number, tail: string) => `MyHQ : question (#${id}, ${index + 1}/2)\n${tail}`;
+const keyboardTexts = (params: Record<string, unknown>) =>
+  (params.reply_markup as { inline_keyboard: { text: string }[][] }).inline_keyboard.map((row) => row[0]!.text);
+
+test("the alert of an item of questions is an intro with a Refuser button, then one message per question with its options", async () => {
+  const fake = await startFakeTelegram(TOKEN);
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  const id = addQuestion(db);
+  const env = {
+    HQ_TELEGRAM_BOT_TOKEN: TOKEN,
+    HQ_TELEGRAM_CHAT_ID: CHAT,
+    HQ_TELEGRAM_API_BASE: fake.url,
+    HQ_TELEGRAM_POLLING: "true",
+    HQ_PUBLIC_URL: "https://hq.example.net",
+  };
+  const { notify } = await import("../src/server/notify");
+  await notifyPendingApprovals(db, (text, options) => notify(text, env, fetch, options), env);
+  const sent = callsOf(fake, "sendMessage").map((c) => c.params);
+  assert.equal(sent.length, 3);
+  assert.equal(
+    sent[0]!.text,
+    [
+      `MyHQ : 2 questions attendent tes réponses (#${id})`,
+      "demo / Scout : Launch post",
+      "",
+      "Two things block the launch post.",
+      "",
+      "Réponds à chaque question ci-dessous.",
+      "",
+      `Ouvrir : https://hq.example.net/bureau#approval-${id}`,
+    ].join("\n"),
+  );
+  assert.deepEqual(sent[0]!.reply_markup, { inline_keyboard: [[{ text: "Refuser", callback_data: `hq:r:${id}` }]] });
+  assert.equal(
+    sent[1]!.text,
+    questionText(id, 0, "[Tone] Which tone?\n1. Playful : Jokes allowed\n2. Serious\n3. Neutral\nAutre réponse : réponds à ce message avec ton texte."),
+  );
+  assert.deepEqual(sent[1]!.reply_markup, {
+    inline_keyboard: [
+      [{ text: "1. Playful", callback_data: `hq:q:${id}:0:0` }],
+      [{ text: "2. Serious", callback_data: `hq:q:${id}:0:1` }],
+      [{ text: "3. Neutral", callback_data: `hq:q:${id}:0:2` }],
+    ],
+  });
+  assert.match(String(sent[2]!.text), /\(plusieurs réponses possibles\)/);
+  assert.deepEqual(keyboardTexts(sent[2]!), ["☐ 1. Blog", "☐ 2. Social", "☐ 3. Mail", "Valider la sélection"]);
+  await fake.close();
+});
+
+test("without polling the questions carry no button and send the owner to the desk", async () => {
+  const fake = await startFakeTelegram(TOKEN);
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  addQuestion(db);
+  const env = { HQ_TELEGRAM_BOT_TOKEN: TOKEN, HQ_TELEGRAM_CHAT_ID: CHAT, HQ_TELEGRAM_API_BASE: fake.url };
+  const { notify } = await import("../src/server/notify");
+  await notifyPendingApprovals(db, (text, options) => notify(text, env, fetch, options), env);
+  const sent = callsOf(fake, "sendMessage").map((c) => c.params);
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every((params) => !("reply_markup" in params)));
+  assert.match(String(sent[1]!.text), /Réponds sur le Bureau\.$/);
+  assert.doesNotMatch(String(sent[0]!.text), /ci-dessous/);
+  await fake.close();
+});
+
+test("each button answers its question; the item is answered when every question is", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  const first = questionText(id, 0, "[Tone] Which tone?");
+  const second = questionText(id, 1, "Which channels?");
+
+  // A single-select press is the answer: the message shows it and loses its buttons.
+  await handle(assistant, press(`hq:q:${id}:0:1`, 31, first));
+  assert.equal(approval(db, id).status, "pending", "one question out of two");
+  assert.equal(callsOf(fake, "answerCallbackQuery")[0]!.params.text, "Réponse enregistrée (1/2).");
+  let edit = callsOf(fake, "editMessageText")[0]!.params;
+  assert.equal(edit.message_id, 31);
+  assert.equal(edit.text, `${first}\n\nRéponse : Serious`);
+  assert.equal("reply_markup" in edit, false);
+
+  // A multi-select press ticks the option and redraws the keyboard.
+  await handle(assistant, press(`hq:q:${id}:1:0`, 32, second));
+  edit = callsOf(fake, "editMessageText")[1]!.params;
+  assert.equal(edit.text, second);
+  assert.deepEqual(keyboardTexts(edit), ["☑ 1. Blog", "☐ 2. Social", "☐ 3. Mail", "Valider la sélection"]);
+  await handle(assistant, press(`hq:q:${id}:1:2`, 32, second));
+  assert.equal(approval(db, id).status, "pending", "ticking is not answering");
+
+  // « Valider » closes the question, and the item with it: approved, with the answers.
+  await handle(assistant, press(`hq:q:${id}:1:ok`, 32, second));
+  const row = approval(db, id);
+  assert.equal(row.status, "approved");
+  assert.equal(row.decision_note, "Q : Which tone? / R : Serious\nQ : Which channels? / R : Blog, Mail");
+  assert.deepEqual((JSON.parse(row.payload) as { answers: unknown }).answers, [{ options: [1] }, { options: [0, 2] }]);
+  const task = db.prepare("SELECT text FROM tasks WHERE source = 'revise' AND ref_id = ?").get(id) as { text: string };
+  assert.match(task.text, /A1: Serious\nQ2: Which channels\?\nA2: Blog, Mail/);
+  assert.equal(fake.sent().at(-1), `Item #${id} : toutes les questions ont une réponse, l'agent est prévenu.`);
+  await fake.close();
+});
+
+test("« Valider » with nothing ticked asks to choose", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  await handle(assistant, press(`hq:q:${id}:1:ok`, 32, questionText(id, 1, "Which channels?")));
+  assert.equal(callsOf(fake, "answerCallbackQuery")[0]!.params.text, "Choisis au moins une réponse, ou réponds à ce message avec ton texte.");
+  assert.equal(approval(db, id).status, "pending");
+  await fake.close();
+});
+
+test("« Autre » is a reply to the message of the question, and partial answers are kept", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  const first = questionText(id, 0, "[Tone] Which tone?");
+  const second = questionText(id, 1, "Which channels?");
+
+  // The second question first, with an option ticked meanwhile: they go together.
+  await handle(assistant, press(`hq:q:${id}:1:1`, 32, second));
+  await handle(assistant, message("Podcast", Number(CHAT), { message_id: 32, text: second }));
+  assert.equal(approval(db, id).status, "pending");
+  assert.equal(fake.sent().at(-1), "Réponse enregistrée (1/2).");
+  const edit = callsOf(fake, "editMessageText").at(-1)!.params;
+  assert.equal(edit.text, `${second}\n\nRéponse : Social, Autre : Podcast`);
+
+  // The first one by reply too: the item is answered, and the agent told.
+  await handle(assistant, message("Dry and short", Number(CHAT), { message_id: 31, text: first }));
+  const row = approval(db, id);
+  assert.equal(row.status, "approved");
+  assert.equal(noteOf(db, id), "Q : Which tone? / R : Autre : Dry and short\nQ : Which channels? / R : Social, Autre : Podcast");
+  assert.deepEqual((JSON.parse(row.payload) as { answers: unknown }).answers, [
+    { options: [], other: "Dry and short" },
+    { options: [1], other: "Podcast" },
+  ]);
+  await fake.close();
+});
+
+test("a reply to the intro of an item of questions says which message to reply to", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  const intro = `MyHQ : 2 questions attendent tes réponses (#${id})\ndemo / scout : Launch post`;
+  await handle(assistant, message("Playful", Number(CHAT), { message_id: 30, text: intro }));
+  assert.equal(fake.sent()[0], "Réponds au message de la question elle-même (celui qui porte son numéro).");
+  assert.equal(approval(db, id).status, "pending");
+  await fake.close();
+});
+
+test("a press on a question already decided elsewhere says so and removes the buttons", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  db.prepare("UPDATE approvals SET status = 'rejected', decision_note = 'No need.' WHERE id = ?").run(id);
+  const text = questionText(id, 0, "[Tone] Which tone?");
+  await handle(assistant, press(`hq:q:${id}:0:0`, 31, text));
+  assert.equal(callsOf(fake, "answerCallbackQuery")[0]!.params.text, "Cet item a déjà été traité.");
+  const edit = callsOf(fake, "editMessageText")[0]!.params;
+  assert.equal(edit.text, text);
+  assert.equal("reply_markup" in edit, false);
+  assert.equal(noteOf(db, id), "No need.");
+  await fake.close();
+});
+
+test("the Refuser button of the intro rejects an item of questions with the next message as its reason", async () => {
+  const { db, fake, assistant } = await setup();
+  const id = addQuestion(db);
+  await handle(assistant, press(`hq:r:${id}`, 30, `MyHQ : 2 questions attendent tes réponses (#${id})`));
+  await handle(assistant, message("Go with playful."));
+  assert.equal(approval(db, id).status, "rejected");
+  assert.equal(noteOf(db, id), "Go with playful.");
+  await fake.close();
+});

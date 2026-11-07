@@ -6,7 +6,8 @@
 /** What a replied-to message is about: an item, and, for a question message, the question (0-based). */
 export type ReplyTarget = { approvalId: number; question: number | null };
 
-const TAG = /\(#(\d{1,9})(?:, (\d{1,2})\/\d{1,2})?\)/;
+/** The tag ends the line, so a title that looks like one does not take its place. */
+const TAG = /\(#(\d{1,9})(?:, (\d{1,2})\/\d{1,2})?\)\s*$/;
 
 /** Reads the tag of the first line of a bot message. Null when it has none. */
 export function replyTarget(text: string | undefined): ReplyTarget | null {

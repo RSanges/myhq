@@ -20,6 +20,7 @@ import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStat
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { MESSAGE_EXPECTS } from "../server/portier";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
+import { QUESTION_TYPE, questionsSchema, renderQuestionsBody } from "../server/questions";
 import { idSchema, loadHome, type Home } from "../server/rooms";
 import {
   isSupervisor,
@@ -101,7 +102,7 @@ const targetShape = {
 /** The run a supervisor checks: the run number of its « long run to check » task. */
 const runIdShape = z.number().int().positive().describe("The number of the run (#12 gives 12), as your task « Long run to check » names it.");
 
-/** Input shapes of the sixteen tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the seventeen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -163,6 +164,19 @@ export const inputs = {
       .describe(
         "Messages MyHQ delivers itself, in your name, the moment the owner approves the item (for example the order to a studio to produce the approved script): each one gets the item's title, body and files appended and wakes its recipient. You are not woken to relay them. The recipients are checked now, as hq_message checks them.",
       ),
+  },
+  hq_ask: {
+    title: z.string().trim().min(1).max(300).describe("Short title shown in the approval queue: what you need decided."),
+    context: z
+      .string()
+      .trim()
+      .min(1)
+      .max(20_000)
+      .optional()
+      .describe("Why you are asking, in Markdown: what you found, what depends on the answer."),
+    questions: questionsSchema.describe(
+      "The questions, as many as you need (at most 20), each with 2 to 6 concrete options. The owner answers all of them.",
+    ),
   },
   hq_task_update: {
     status: z.enum(["in_progress", "done", "blocked"]).describe("State of your current task."),
@@ -542,6 +556,58 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
     approvalId,
     ...(files.length > 0 ? { files: files.length } : {}),
     status: informational ? ("unseen" as const) : ("pending" as const),
+  };
+}
+
+/** What hq_ask answers: the id of the item that holds the questions, and what to do now. */
+export type AskResult = { approvalId: number; status: ApprovalRow["status"]; duplicate?: true; note: string };
+
+/**
+ * Asks the owner questions. They become one item of the approval queue (type
+ * `question`, pending): the questions in its payload, a readable text of them
+ * in its body. The owner answers on the desk or on Telegram; the answers wake
+ * the agent with a new task holding its questions and them (like a revision),
+ * so the agent finishes its turn after asking and does not wait. The same
+ * questions (title and text) still waiting, or answered in the last 24 hours,
+ * are not asked twice. Not for the supervisor of the Standard, nor the
+ * receptionist, whose wake-ups are their own.
+ */
+export function hqAsk(db: Db, ctx: HqContext, args: Args<"hq_ask">): AskResult {
+  const parsed = z.object(inputs.hq_ask).parse(args);
+  if (isSupervisor(db, ctx.room, ctx.agentId)) {
+    throw new ToolError("You are the supervisor of the Standard: you do not ask questions, you leave a note with hq_blocked_note.");
+  }
+  if (ctx.room === RECEPTION_ROOM) {
+    throw new ToolError("The receptionist does not ask questions: put what is missing in its proposal.");
+  }
+  const body = renderQuestionsBody(parsed.context, parsed.questions);
+  const payload = { ...(parsed.context ? { context: parsed.context } : {}), questions: parsed.questions };
+  const at = now();
+  const stored = db
+    .transaction((): { id: number; duplicate: ApprovalRow["status"] | null } => {
+      const twin = sameItem(db, ctx, QUESTION_TYPE, parsed.title, body);
+      if (twin) return { id: twin.id, duplicate: twin.status };
+      const result = db
+        .prepare(
+          `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        )
+        .run(ctx.room, ctx.agentId, ctx.runId, QUESTION_TYPE, parsed.title, body, JSON.stringify(payload), at);
+      return { id: Number(result.lastInsertRowid), duplicate: null };
+    })
+    .immediate();
+  if (stored.duplicate !== null) {
+    return {
+      approvalId: stored.id,
+      status: stored.duplicate,
+      duplicate: true,
+      note: `Questions #${stored.id} are these same questions, ${stored.duplicate}: nothing new was asked. Do not wait for them: finish your turn.`,
+    };
+  }
+  return {
+    approvalId: stored.id,
+    status: "pending",
+    note: "The owner will answer on the desk or on Telegram. Do not wait: finish your turn now. The answers come back to you as a new task, with your questions and each answer.",
   };
 }
 
