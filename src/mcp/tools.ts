@@ -37,7 +37,10 @@ import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 /** Context of the HQ MCP server, read from the environment of the run. */
 export const contextSchema = z.object({
   HQ_DB_PATH: z.string().min(1),
-  HQ_RUN_ID: z.coerce.number().int().positive(),
+  /** Left out only for a question to an agent (HQ_READ_ONLY), which is not a run. */
+  HQ_RUN_ID: z.coerce.number().int().positive().optional(),
+  /** "1": the server gives only its read tools (a question to an agent, see agent-questions.ts). */
+  HQ_READ_ONLY: z.literal("1").optional(),
   HQ_AGENT_ID: z.string().min(1),
   HQ_ROOM: z.string().min(1),
   /** The agent's working directory (its worktree when it has one): where attachments are read from. */
@@ -50,7 +53,10 @@ export const contextSchema = z.object({
 
 export type HqContext = {
   dbPath: string;
+  /** The run; 0 in read-only mode, where no tool that uses it is given. */
   runId: number;
+  /** Only the read tools are given (HQ_READ_ONLY). */
+  readOnly?: boolean;
   agentId: string;
   room: string;
   /** MyHQ's role templates, to instantiate the roles of a room proposal. */
@@ -72,14 +78,20 @@ function homeOf(dbPath: string): string | undefined {
 }
 
 export function readContext(env: Env): HqContext {
-  const parsed = contextSchema.safeParse(env);
+  const parsed = contextSchema
+    .refine((value) => value.HQ_RUN_ID !== undefined || value.HQ_READ_ONLY === "1", {
+      path: ["HQ_RUN_ID"],
+      message: "required unless HQ_READ_ONLY is 1",
+    })
+    .safeParse(env);
   if (!parsed.success) {
     const missing = parsed.error.issues.map((issue) => issue.path.join(".")).join(", ");
     throw new Error(`HQ MCP server: invalid or missing environment variables: ${missing}`);
   }
   return {
     dbPath: parsed.data.HQ_DB_PATH,
-    runId: parsed.data.HQ_RUN_ID,
+    runId: parsed.data.HQ_RUN_ID ?? 0,
+    ...(parsed.data.HQ_READ_ONLY === "1" ? { readOnly: true } : {}),
     agentId: parsed.data.HQ_AGENT_ID,
     room: parsed.data.HQ_ROOM,
     home: homeOf(parsed.data.HQ_DB_PATH),
