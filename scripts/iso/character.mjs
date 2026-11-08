@@ -88,19 +88,18 @@ function rounded(b, x0, y0, z0, w, d, h, r, pick) {
 }
 
 /**
- * The wing of a handlebar moustache, on the -x side (mirrored for the other):
- * [x, y, z above the base of the head], from the middle out. It leaves the
- * corner of the mouth, crosses the cheek rising, and its tip passes the edge
- * of the face and curls up, so that it reads from the front and in profile.
+ * The wing of a moustache, on the -x side (mirrored for the other): [x, y, z
+ * above the base of the head], from the middle (x -2 to 1) out. A plain one
+ * stops at the corner of the mouth; a handlebar's tip curls up inside the
+ * face, under the eye, the whole about two thirds of the face's width.
  */
-const HANDLEBAR = [
-  [-4, 5, 2],
-  [-5, 5, 3],
-  [-6, 5, 4],
-  [-7, 5, 5],
-  [-7, 5, 6],
-  [-6, 5, 7],
-];
+const WINGS = {
+  plain: [[-3, 5, 2]],
+  handlebar: [
+    [-3, 5, 2],
+    [-4, 5, 3],
+  ],
+};
 
 const looks = new Map();
 /** Materials of a look, created once. */
@@ -138,9 +137,9 @@ function lookMaterials(look) {
  * narrowed to a dash, the lips showing, in `lips`, a spec, the skin's ramp
  * two levels darker by default), `beard` (a spec: a full beard, sideburns to
  * the hair, a full jaw and chin under bare cheeks), `moustache` ({ style,
- * colour }: style "plain" or "handlebar", thin in the middle, its wings rising
- * up the cheeks past the face's edge so that it reads from the front and in
- * profile; colour a spec, the beard's or the hair's by default).
+ * colour }: style "plain" or "handlebar", thin in the middle, about two thirds
+ * of the face's width, a handlebar's tips curling up inside the face under the
+ * eyes; colour a spec, the beard's or the hair's by default).
  * `rig` lets a model hold things: `hand(pose, { side, k, shoulder, sz })`
  * returns a hand target (or null for the shared pose), `props(b, pose,
  * { sz, hipZ, H, hands })` draws what the hands hold, after the body.
@@ -196,8 +195,8 @@ export function human(look, rig = {}) {
     const isBeard = (x, y, z) => {
       if (M.beard === null || y < -2) return false;
       const side = Math.abs(x + 0.5);
-      // The sideburns at the back of the cheek only: its front stays bare, where a moustache's tip curls.
-      return z <= (side >= 4 && y <= 0 ? H + 5 : H);
+      // The sideburns at the back of the cheek only; in front, a row of skin under the mouth.
+      return z <= (side >= 4 && y <= 0 ? H + 5 : y >= 3 ? H - 1 : H);
     };
     rounded(b, -5, -5, H, 10, 10, 11, 2.2, (x, y, z) => (isHair(x, y, z) ? M.hair : isBeard(x, y, z) ? M.beard : M.skin));
     const empty = (m) => (x, y, z) => (b.has(x, y, z) ? null : m);
@@ -211,9 +210,9 @@ export function human(look, rig = {}) {
       rounded(b, -5, -5, H + 9, 10, 9, 3, 1.6, empty(M.hair)); // volume on top
     }
     if (M.beard) {
-      // Full: the jaw a little wider than the head, the chin down over the collar.
-      rounded(b, -6, -2, H - 1, 12, 7, 3, 1.4, empty(M.beard));
-      rounded(b, -4, 0, H - 3, 8, 6, 4, 1.8, (x, y, z) => (y >= 1 || !b.has(x, y, z) ? M.beard : null));
+      // Full: the jaw a little wider than the head at the back, the chin down over the collar.
+      rounded(b, -6, -2, H - 1, 12, 5, 2, 1, empty(M.beard));
+      rounded(b, -4, 0, H - 3, 8, 6, 3, 1.6, (x, y, z) => (y >= 1 || !b.has(x, y, z) ? M.beard : null));
     }
     if (look.expression === "smile") {
       // Eyes narrowed by the smile (a short dash each), and the lips under the moustache, a voxel in front of
@@ -226,10 +225,10 @@ export function human(look, rig = {}) {
     if (M.brows) for (const x of [-4, -3, 2, 3]) b.set(x, 5, H + 6, M.brows);
     if (M.moustache) {
       // Over the mouth, in front of the face, a voxel high: bare skin between it and the nose.
-      b.box(-3, 5, H + 2, 6, 1, 1, M.moustache);
+      b.box(-2, 5, H + 2, 4, 1, 1, M.moustache);
       b.box(-1, 6, H + 2, 2, 1, 1, M.moustache);
-      // Its wings, out from the middle (x towards -x, then mirrored): a handlebar sweeps up the cheek past the face's edge.
-      const wing = look.moustache.style === "handlebar" ? HANDLEBAR : [[-4, 5, 2]];
+      // Its wings, out from the middle (x towards -x, then mirrored).
+      const wing = WINGS[look.moustache.style === "handlebar" ? "handlebar" : "plain"];
       for (const side of [-1, 1]) {
         const x = (v) => (side < 0 ? v : -1 - v); // mirror about the head's centre (x = -0.5)
         for (const [wx, wy, wz] of wing) b.set(x(wx), wy, H + wz, M.moustache);

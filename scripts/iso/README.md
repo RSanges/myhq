@@ -305,15 +305,15 @@ swept to the +x side, a voxel more forehead), `brows` (`true` for the hair's
 colour, or a material), `eyes` (a material, ink by default),
 `expression: "smile"` (the eyes narrowed to a short dash, and the lips showing
 under the mouth's line, in `lips`, a material, by default the skin's ramp two
-levels darker), `beard` (a material: a full beard up to the mouth,
+levels darker), `beard` (a material: a full beard below the mouth,
 sideburns at the back of the cheeks up to the hair, a little wider than the
-head and down over the collar; the cheeks stay bare) and `moustache`
-(`{ style, colour }`: `"plain"`, or `"handlebar"`, a voxel high in the middle,
-bare skin between it and the nose, whose wings rise up the cheeks, past the
-edge of the face, and curl in at the top, so that it reads from the front, in
-profile and even from behind; `colour` defaults to the beard's, then the
-hair's: the bare cheeks are what makes it read). They stay within the frame
-of the other characters.
+head at the back and down over the collar; the cheeks and a row of skin under
+the mouth stay bare) and `moustache` (`{ style, colour }`: `"plain"`, or
+`"handlebar"`, a voxel high in the middle, bare skin between it and the nose,
+about two thirds of the face's width, its tips curling up inside the face
+under the eyes; `colour` defaults to the beard's, then the hair's; the same
+ramp with a lighter `top` lets the light catch it where it stands out). They
+stay within the frame of the other characters.
 
 ## Files
 
