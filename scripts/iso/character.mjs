@@ -139,7 +139,8 @@ function lookMaterials(look) {
  * the hair, a full jaw and chin under bare cheeks), `moustache` ({ style,
  * colour }: style "plain" or "handlebar", thin in the middle, about two thirds
  * of the face's width, a handlebar's tips curling up inside the face under the
- * eyes; colour a spec, the beard's or the hair's by default).
+ * eyes; colour a spec, the beard's or the hair's by default), `eyeLift`
+ * (whole voxels the eyes sit higher, 0 by default).
  * `rig` lets a model hold things: `hand(pose, { side, k, shoulder, sz })`
  * returns a hand target (or null for the shared pose), `props(b, pose,
  * { sz, hipZ, H, hands })` draws what the hands hold, after the body.
@@ -147,6 +148,7 @@ function lookMaterials(look) {
 export function human(look, rig = {}) {
   const M = lookMaterials(look);
   const eyes = material({ rim: false, ...(look.eyes ?? { ramp: "ink", top: 1, left: 1, right: 1 }) });
+  const eyeLift = look.eyeLift ?? 0;
   return (b, pose) => {
     const L1 = 10, L2 = 10; // thigh, shin
     const A1 = 7, A2 = 7; // upper arm, forearm
@@ -217,10 +219,10 @@ export function human(look, rig = {}) {
     if (look.expression === "smile") {
       // Eyes narrowed by the smile (a short dash each), and the lips under the moustache, a voxel in front of
       // the face so that they show.
-      for (const x of [-4, 2]) b.box(x, 4, H + 4, 2, 1, 1, eyes);
+      for (const x of [-4, 2]) b.box(x, 4, H + 4 + eyeLift, 2, 1, 1, eyes);
       b.box(-2, 5, H + 1, 4, 1, 1, M.lips);
     } else {
-      for (const x of [-3, 2]) for (const z of [H + 4, H + 5]) b.set(x, 4, z, eyes);
+      for (const x of [-3, 2]) for (const z of [H + 4, H + 5]) b.set(x, 4, z + eyeLift, eyes);
     }
     if (M.brows) for (const x of [-4, -3, 2, 3]) b.set(x, 5, H + 6, M.brows);
     if (M.moustache) {
