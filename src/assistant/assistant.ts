@@ -286,7 +286,9 @@ export class Assistant {
         return;
       }
     }
-    return this.converse(text);
+    // A reply to one of our messages that nothing above took: the chat gets the message it answers, or « C'est fait » means nothing.
+    const quoted = (replyTo?.text ?? replyTo?.caption)?.trim();
+    return this.converse(quoted ? strings.assistant.inReplyTo(quoted, text) : text);
   }
 
   private contextFor(name: string): AssistantContext {

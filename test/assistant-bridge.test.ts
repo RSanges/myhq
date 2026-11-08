@@ -253,12 +253,15 @@ test("a reply to an alert whose item is decided or informational is an ordinary 
   const id = addApproval(db);
   await handle(assistant, press(`hq:a:${id}`));
   await handle(assistant, message("Finalement non", Number(CHAT), { message_id: 57, text: `MyHQ : un item attend ta validation (#${id})` }));
-  // Approved stays approved: the reply went to the chat, not to a revision.
+  // Approved stays approved: the reply went to the chat, not to a revision, with the message it answers.
   assert.equal(approval(db, id).status, "approved");
-  assert.deepEqual(chats, ["Finalement non"]);
-  // A reply to a message without our tag is an ordinary message too.
+  assert.deepEqual(chats, [`En réponse à ton message : « MyHQ : un item attend ta validation (#${id}) »\n\nFinalement non`]);
+  // A reply to a message without our tag is an ordinary message too, quoted the same way.
   await handle(assistant, message("Merci", Number(CHAT), { message_id: 58, text: "Bonjour" }));
-  assert.deepEqual(chats, ["Finalement non", "Merci"]);
+  assert.equal(chats[1], "En réponse à ton message : « Bonjour »\n\nMerci");
+  // A long message is cut.
+  await handle(assistant, message("C'est fait", Number(CHAT), { message_id: 59, text: "x".repeat(2000) }));
+  assert.equal(chats[2], `En réponse à ton message : « ${"x".repeat(1500)}… »\n\nC'est fait`);
   await fake.close();
 });
 

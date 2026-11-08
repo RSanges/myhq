@@ -1315,6 +1315,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       failed: "Je n'ai pas réussi à transcrire ce vocal. Le détail est dans le journal.",
       empty: "Je n'ai rien entendu dans ce vocal. Réessaie ?",
     },
+    /** A chat message sent as a reply to one of the bot's messages: the quoted message comes first, cut at 1500 characters. */
+    inReplyTo: (quoted: string, text: string) =>
+      `En réponse à ton message : « ${quoted.length > 1500 ? `${quoted.slice(0, 1500).trimEnd()}…` : quoted} »\n\n${text}`,
     files: {
       notConfigured: "Je ne sais pas encore recevoir de fichiers (dropDir dans assistant.json).",
       tooLarge: "Ce fichier dépasse 20 Mo, la limite de Telegram pour les bots.",
