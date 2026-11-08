@@ -190,7 +190,15 @@ floor.json
   `broom-closet` (a tall cupboard with a spare broom, where the janitor of the
   single floor rests) 1 x 1, `rug` 3 x 2 (room colour border; `flat: true`: draw it right after the
   shadows, before sorting, so characters always walk over it),
-  `reception-counter` 3 x 1 (room colour band).
+  `reception-counter` 3 x 1 (room colour band). The library decor of a room
+  (`decor: "library"` of its `room.json`, see `src/ui/floor-plan.ts`):
+  `library-shelf`, `library-shelf-b`, `library-shelf-c` 1 x 1 (a tall shelf,
+  `LIBRARY_SHELF_TOP` voxels, five rows of books packed tight, three seeds so
+  a wall of them does not repeat; side by side they join into a wall of
+  books), `library-ladder` 1 x 1 (the same shelf with a ladder hooked to a
+  brass rail), `reading-table` 2 x 1 (an open book, a stack, a banker's
+  lamp), `armchair` 1 x 1 (four turns, a room colour cushion), `side-table`,
+  `floor-lamp` (the hub's), `globe` and `book-stacks` 1 x 1.
 - **Desk and chair**: a `workstation` at turn t takes a `desk-chair` at
   turn t in cell `corner + chair.cell`; the sitter faces the screen
   (`NE` at turn 0, `NW` at turn 1). With a sitter, draw the chair's `under`

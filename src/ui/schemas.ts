@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { annotationSchema } from "@/server/annotations";
 import { decisionRecordSchema } from "@/server/decision-history";
-import { DEFAULT_FLOOR_LAYOUT, FLOOR_LAYOUTS } from "./floor-mode";
+import { DEFAULT_FLOOR_LAYOUT, FLOOR_LAYOUTS, ROOM_DECORS } from "./floor-mode";
 
 // Shapes received from the HTTP API (docs/api.md), validated before use.
 
@@ -165,7 +165,14 @@ export const floorSchema = z.object({
 export const stateSchema = z.object({
   cursor: z.number().int(),
   rooms: z.array(
-    z.object({ name: z.string(), color: z.string().nullable().default(null), logo: z.string().nullish(), agents: z.array(agentSchema) }),
+    z.object({
+      name: z.string(),
+      color: z.string().nullable().default(null),
+      logo: z.string().nullish(),
+      /** How its suite is furnished; absent from an older server, or a decor this interface does not know: an office. */
+      decor: z.enum(ROOM_DECORS).nullish().catch(null),
+      agents: z.array(agentSchema),
+    }),
   ),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),

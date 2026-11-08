@@ -47,6 +47,20 @@ test("the state exposes the colour of each room, null when it has none", () => {
   assert.equal(getState(getDbAt(plain.dbPath), loadHome(plain.home), schedulerInfo(plain)).rooms[0]!.color, null);
 });
 
+test("a room may take a decor for its suite of the single floor; an unknown decor makes it invalid", () => {
+  assert.equal(loadHome(makeHome().home).rooms[0]!.decor, null);
+  const config = makeHome({}, { name: "demo", targetRepo: "../demo-project", decor: "library", agents: [agent] });
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  assert.equal(home.rooms[0]!.decor, "library");
+  assert.equal(getState(getDbAt(config.dbPath), home, schedulerInfo(config)).rooms[0]!.decor, "library");
+  for (const decor of ["kitchen", "", 3]) {
+    const invalid = loadHome(makeHome({}, { name: "demo", targetRepo: "x", decor, agents: [agent] }).home);
+    assert.equal(invalid.rooms.length, 0, String(decor));
+    assert.match(invalid.invalid[0]!.error, /decor/, String(decor));
+  }
+});
+
 test("an empty home has no rooms", () => {
   const config = makeHome();
   fs.rmSync(path.join(config.home, "rooms"), { recursive: true });

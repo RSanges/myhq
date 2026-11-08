@@ -8,7 +8,7 @@
 // One voxel is about 3 cm and furniture is life size: a desk top is at
 // z = 25 (75 cm), a seat at z = 14, a standing character about 52 voxels.
 import { LEFT, NX, NY, RIGHT, TOP, hash, material } from "./engine.mjs";
-import { leaf, plant as hubPlant } from "./props.mjs";
+import { floorLamp as hubFloorLamp, leaf, plant as hubPlant } from "./props.mjs";
 
 export const CELL = 16;
 export const WALL = { height: 64, thick: 4, rim: 6 };
@@ -608,6 +608,234 @@ export function receptionCounter(b) {
   for (let i = 0; i < 6; i++) leaf(b, [40, 12, 39], i * 1.05, 3.5, 1, 1.5, i % 2 ? leafA : leafB, leafB);
 }
 
+// ---------------------------------------------------------------- library
+
+/**
+ * Book spines of the library: deep leathers and cloths of the shared ramps,
+ * [ramp, level of the spine]. Every other one gets gilt bands (`gilt`).
+ */
+const BOOK_SPECS = [
+  ["pink", 1], ["wood", 1], ["blue", 1], ["leaf", 1], ["wood", 2], ["sage", 1], ["gold", 2], ["ink", 1],
+  ["paper", 3], ["blue", 2], ["pink", 2], ["wood", 3], ["leaf", 2], ["sage", 2], ["ink", 2], ["gold", 3],
+];
+/** Height between two shelf boards of a library shelf, and the top of its plinth (the first row). */
+const SHELF_PITCH = 10;
+const SHELF_PLINTH = 3;
+const SHELF_ROWS = 5;
+/** The top of a library shelf, in voxels (the wall is 64): taller than a person. */
+export const LIBRARY_SHELF_TOP = SHELF_PLINTH + SHELF_ROWS * SHELF_PITCH + 2;
+const bookMaterial = ([ramp, level], gilt) =>
+  material({
+    ramp, top: level + 1, left: level, right: Math.max(0, level - 1), rim: false,
+    paint(face, x, y, z, lvl) {
+      if (face !== LEFT || !gilt) return lvl;
+      // Gilt bands near the foot and the head of the spine, at the same height on every row.
+      const dz = (z - SHELF_PLINTH) % SHELF_PITCH;
+      return band(dz, 1.5, 0.5) || band(dz, 6.5, 0.5) ? { ramp: "gold", level: 3 } : lvl;
+    },
+  });
+const BOOKS = BOOK_SPECS.map((spec, i) => bookMaterial(spec, i % 2 === 0));
+const libraryWood = material({ ramp: "wood", top: 3, left: 2, right: 1 });
+const libraryBack = material({ ramp: "wood", top: 1, left: 1, right: 0, rim: false });
+const libraryTrim = material({ ramp: "wood", top: 4, left: 3, right: 2 });
+const brass = material({ ramp: "gold", top: 4, left: 3, right: 2 });
+
+/**
+ * One row of books standing on a board at height z, from x0 to x1, the
+ * fronts near y = 10: spines of one or two voxels (now and then a thick
+ * folio), heights and depths that vary, and here and there a book leaning on
+ * its neighbour, a small stack lying flat or a gap with a bookend.
+ */
+function bookRow(b, z, x0, x1, seed) {
+  let x = x0;
+  let k = 0;
+  const pick = () => BOOKS[Math.floor(hash(seed, k, 5) * BOOKS.length)];
+  while (x < x1) {
+    const roll = hash(seed, k, 1);
+    const room = x1 - x;
+    if (roll > 0.9 && room >= 5 && k > 0) {
+      // A small stack lying flat: three books, the longest at the bottom.
+      for (let s = 0; s < 3; s++) {
+        b.box(x + (s === 1 ? 1 : 0), 3 + (s % 2), z + s, s === 2 ? 3 : 4, 5, 1, pick());
+        k++;
+      }
+      x += 5;
+      continue;
+    }
+    if (roll > 0.84 && room >= 4 && k > 0) {
+      // A book leaning on its right neighbour, in the gap left by a borrowed one.
+      const m = pick();
+      for (let dz = 0; dz < 8; dz++) b.box(x + Math.min(2, Math.floor(dz / 3)), 3, z + dz, 1, 6, 1, m);
+      x += 3;
+      k++;
+      continue;
+    }
+    const w = roll < 0.06 && room >= 3 ? 3 : 1 + Math.floor(hash(seed, k, 2) * 2);
+    if (w > room) break;
+    const h = 6 + Math.floor(hash(seed, k, 3) * 4); // 6 to 9: the board above is at z + 9
+    const d = 5 + Math.floor(hash(seed, k, 4) * 3);
+    const front = hash(seed, k, 6) < 0.25 ? 8 : 9;
+    b.box(x, front - d, z, w, d, h, pick());
+    x += w;
+    k++;
+  }
+}
+
+/**
+ * A tall library shelf, 1 x 1 cell, against the wall, open towards +y: a dark
+ * oak carcass with a plinth and a cornice, five rows of books packed tight.
+ * Shelves side by side join into a wall of books. `seed` changes the books;
+ * `ladder` leans a library ladder on it, hooked to a brass rail.
+ */
+export function libraryShelf(b, { seed = 0, ladder = false } = {}) {
+  const H = LIBRARY_SHELF_TOP;
+  b.box(0, 1, 0, CELL, 1, H, libraryBack);
+  b.box(0, 1, 0, 1, 9, H, libraryWood);
+  b.box(CELL - 1, 1, 0, 1, 9, H, libraryWood);
+  b.box(0, 1, 0, CELL, 9, SHELF_PLINTH, libraryWood);
+  b.box(0, 1, H - 2, CELL, 10, 2, libraryWood); // cornice, a voxel proud
+  b.box(0, 10, H - 3, CELL, 1, 1, libraryTrim);
+  for (let row = 0; row < SHELF_ROWS; row++) {
+    const z = SHELF_PLINTH + row * SHELF_PITCH;
+    if (row > 0) {
+      b.box(1, 2, z - 1, CELL - 2, 7, 1, libraryWood);
+      b.box(1, 9, z - 1, CELL - 2, 1, 1, libraryTrim); // the lit front edge of the board
+    }
+    bookRow(b, z, 1, CELL - 1, seed * 31 + row);
+  }
+  if (!ladder) return;
+  // The brass rail along the cornice, and the ladder leaning on it, its feet towards +y.
+  b.box(0, 10, H - 6, CELL, 1, 1, brass);
+  const rail = material({ ramp: "wood", top: 5, left: 4, right: 3, crease: false });
+  const top = H - 5;
+  for (const x of [3, 12]) {
+    b.capsule([x + 0.5, 14.5, 0], [x + 0.5, 10.6, top], 0.7, rail);
+    b.set(x, 10, top + 1, brass); // the hook on the rail
+  }
+  for (let z = 6; z < top; z += 7) {
+    const y = Math.floor(14.5 - (3.9 * z) / top);
+    b.box(4, y, z, 8, 1, 1, rail);
+  }
+}
+
+/**
+ * A leather club armchair, 1 x 1 cell, facing +y: cognac leather, rolled arms,
+ * a seat cushion and a small cushion in the room colour.
+ */
+export function armchair(b) {
+  const leather = material({ ramp: "wood", top: 3, left: 2, right: 1 });
+  const seat = material({
+    ramp: "wood", top: 4, left: 3, right: 2, rim: false,
+    paint(face, x, y, z, level) {
+      return face === LEFT && band(z, 9) ? level - 1 : level; // the seam of the cushion
+    },
+  });
+  const feet = material({ ramp: "wood", top: 1, left: 1, right: 0 });
+  for (const [x, y] of [[2, 3], [13, 3], [2, 13], [13, 13]]) b.box(x, y, 0, 1, 1, 2, feet);
+  b.box(2, 3, 2, 12, 11, 6, leather); // the body
+  b.box(4, 5, 8, 8, 9, 3, seat); // the seat cushion
+  b.box(2, 2, 2, 12, 4, 19, leather); // the back
+  b.box(3, 2, 21, 10, 3, 1, leather); // its rounded top
+  for (const x of [1, 12]) {
+    b.box(x, 3, 2, 3, 12, 12, leather);
+    b.box(x, 4, 14, 3, 10, 1, leather); // the rolled top of the arm
+  }
+  const cushion = material({ ramp: "pink", top: 3, left: 2, right: 1, rim: false, tint: "room" });
+  b.box(5, 6, 11, 6, 2, 6, cushion);
+}
+
+/** A small round side table, 1 x 1 cell: a walnut top on a pedestal, two books and a cup of tea. */
+export function sideTable(b) {
+  const top = material({ ramp: "wood", top: 3, left: 2, right: 1, round: [8, 8] });
+  b.cylinder(8, 8, 0, 3.5, 1, walnut);
+  b.box(7, 7, 1, 2, 2, 16, walnut);
+  b.cylinder(8, 8, 17, 5.5, 2, top);
+  b.box(4, 5, 19, 6, 5, 1, BOOKS[2]);
+  b.box(5, 6, 20, 5, 4, 1, BOOKS[6]);
+  const cup = material({ ramp: "paper", top: 4, left: 3, right: 2, round: [11.5, 10.5] });
+  b.cylinder(11.5, 10.5, 19, 2.2, 1, white); // saucer
+  b.cylinder(11.5, 10.5, 20, 1.4, 2, cup);
+  b.set(11, 10, 21, material({ ramp: "wood", top: 2, left: 2, right: 1, rim: false }));
+}
+
+/** Piles of books on the floor, 1 x 1 cell: three stacks of uneven books, waiting to be shelved. */
+export function bookStacks(b) {
+  const piles = [
+    { x: 2, y: 3, count: 6 },
+    { x: 9, y: 2, count: 4 },
+    { x: 6, y: 9, count: 3 },
+  ];
+  let k = 0;
+  for (const { x, y, count } of piles) {
+    let z = 0;
+    for (let i = 0; i < count; i++, k++) {
+      const w = 5 + Math.floor(hash(k, 7) * 3);
+      const d = 4 + Math.floor(hash(k, 8) * 2);
+      const h = hash(k, 9) < 0.4 ? 2 : 1;
+      const dx = Math.floor(hash(k, 10) * 2), dy = Math.floor(hash(k, 11) * 2);
+      b.box(x + dx, y + dy, z, w, d, h, BOOKS[Math.floor(hash(k, 12) * BOOKS.length)]);
+      z += h;
+    }
+  }
+}
+
+/** A floor lamp (the hub's), centred in its cell, 1 x 1: a glowing drum shade. */
+export function floorLamp(b) {
+  hubFloorLamp(b.at(2, 2, 0));
+}
+
+/**
+ * A library globe, 1 x 1 cell: a walnut tripod, a brass meridian and the
+ * globe itself, blue seas and green and sandy lands.
+ */
+export function globe(b) {
+  const C = [8, 8, 25];
+  const R = 6;
+  const sphere = material({
+    ramp: "blue", top: 3, left: 2, right: 1, rim: false,
+    paint(face, x, y, z, level) {
+      const land = hash(Math.floor((x + 1) / 4), Math.floor((y + 1) / 4), Math.floor((z - 1) / 4), 4);
+      if (land > 0.66) return { ramp: "leaf", level: Math.min(3, level + 1) };
+      if (land > 0.58) return { ramp: "wood", level: Math.min(5, level + 2) };
+      return level;
+    },
+  });
+  for (const [x, y] of [[3, 4], [12, 5], [8, 13]]) b.line([8, 8, 10], [x, y, 0], walnut);
+  b.box(7, 7, 10, 2, 2, 5, walnut);
+  b.cylinder(8, 8, 15, 3, 1, walnut);
+  b.ellipsoid(C[0], C[1], C[2], R, R, R, sphere);
+  // The meridian: a brass half ring around the globe, in the plane x = 7 (seen edge on from the side).
+  for (let a = -Math.PI * 0.6; a <= Math.PI * 0.6; a += 0.03) {
+    const r = R + 1;
+    b.set(7, Math.floor(C[1] + 0.5 + Math.sin(a) * r), Math.floor(C[2] + 0.5 + Math.cos(a) * r), brass);
+  }
+}
+
+/**
+ * A long reading table, 2 x 1 cells: an oak top at desk height on turned
+ * legs, an open book, a stack of books and a green banker's lamp.
+ */
+export function readingTable(b) {
+  b.box(1, 2, 23, 30, 12, 2, oak);
+  for (const x of [2, 28]) for (const y of [3, 12]) b.box(x, y, 0, 2, 2, 23, walnut);
+  b.box(4, 3, 20, 24, 1, 3, walnut); // apron
+  // The open book: two pages, the spine between them a voxel lower.
+  b.box(6, 6, DESK_TOP, 5, 7, 1, white);
+  b.box(12, 6, DESK_TOP, 5, 7, 1, paper);
+  b.box(11, 6, DESK_TOP, 1, 7, 1, BOOKS[0]);
+  b.box(6, 5, DESK_TOP, 11, 1, 1, BOOKS[0]); // the cover showing under the pages
+  // A stack of three books.
+  b.box(19, 5, DESK_TOP, 6, 7, 2, BOOKS[3]);
+  b.box(19, 6, DESK_TOP + 2, 5, 6, 2, BOOKS[8]);
+  b.box(20, 5, DESK_TOP + 4, 5, 6, 1, BOOKS[1]);
+  // The banker's lamp: a brass foot and stem, a green glass shade lit from inside.
+  b.cylinder(28, 7, DESK_TOP, 2, 1, brass);
+  b.box(28, 7, DESK_TOP + 1, 1, 1, 6, brass);
+  const shade = material({ ramp: "leaf", top: 3, left: 2, right: 1, round: [28, 9] });
+  b.box(25, 8, DESK_TOP + 7, 6, 3, 2, shade);
+  b.box(25, 10, DESK_TOP + 6, 6, 1, 1, material({ ramp: "gold", top: 4, left: 4, right: 3, emissive: true, rim: false }));
+}
+
 // ---------------------------------------------------------------- signboard
 
 /**
@@ -666,4 +894,15 @@ export const FURNITURE = [
   { name: "broom-closet", build: broomCloset, cells: [1, 1], turns: [0, 1] },
   { name: "rug", build: rug, cells: [3, 2], turns: [0, 1], flat: true },
   { name: "reception-counter", build: receptionCounter, cells: [3, 1], turns: [0, 1], staff: [1, -1] },
+  // The library decor of a room (room.json `decor: "library"`): walls of books, a reading corner.
+  { name: "library-shelf", build: (b) => libraryShelf(b, { seed: 0 }), cells: [1, 1], turns: [0, 1] },
+  { name: "library-shelf-b", build: (b) => libraryShelf(b, { seed: 1 }), cells: [1, 1], turns: [0, 1] },
+  { name: "library-shelf-c", build: (b) => libraryShelf(b, { seed: 2 }), cells: [1, 1], turns: [0, 1] },
+  { name: "library-ladder", build: (b) => libraryShelf(b, { seed: 3, ladder: true }), cells: [1, 1], turns: [0, 1] },
+  { name: "armchair", build: armchair, cells: [1, 1], turns: [0, 1, 2, 3] },
+  { name: "side-table", build: sideTable, cells: [1, 1], turns: [0, 1] },
+  { name: "book-stacks", build: bookStacks, cells: [1, 1], turns: [0, 1] },
+  { name: "floor-lamp", build: floorLamp, cells: [1, 1], turns: [0, 1] },
+  { name: "globe", build: globe, cells: [1, 1], turns: [0, 1] },
+  { name: "reading-table", build: readingTable, cells: [2, 1], turns: [0, 1] },
 ];

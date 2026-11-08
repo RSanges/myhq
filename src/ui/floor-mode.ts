@@ -17,3 +17,11 @@ export function pileHref(objects: readonly { id: string; source: string }[] | nu
   const pile = objects?.find((object) => object.source.split("+").includes("approvals"));
   return pile ? `/bureau/${pile.id}?room=${encodeURIComponent(room)}` : "/bureau";
 }
+
+/**
+ * The decors a room of the single floor may take (room.json `decor`): its
+ * suite is furnished for that use instead of as an office. "library": walls of
+ * books, reading tables, a reading corner, a wooden floor.
+ */
+export const ROOM_DECORS = ["library"] as const;
+export type RoomDecor = (typeof ROOM_DECORS)[number];

@@ -2002,7 +2002,11 @@ facing the back wall (desk, chair, aisle, twice), two cells per desk, the
 column of the aisle to the opening with a tall plant at its top, a bookshelf,
 a whiteboard, plants or a printer in the places left, and for a team of six or
 more a coffee nook (the coffee corner, a sofa on a rug); its carpet takes its
-own colour. There is no desk for the user in a suite: what waits for the
+own colour. A room with `decor: "library"` (`home-layout.md`) keeps the same
+desks and aisles on a wooden floor, lines its walls with shelves of books (a
+ladder among them), puts reading tables in the places left and, instead of the
+nook, a reading wing of three cells beyond the aisle (an armchair, a floor lamp
+and a side table on a rug, piles of books). There is no desk for the user in a suite: what waits for the
 user's decision there is on its counter, next to its signboard (below), and
 its agents drop what they submit in its opening (`owners` of the layout, the
 cell inside the opening, facing the back wall). The lobby (eight by eight)

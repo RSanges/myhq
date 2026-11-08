@@ -1,3 +1,4 @@
+import type { RoomDecor } from "./floor-mode";
 import type { Cell, CellRect, DeskSpec, PieceSpec, RoomSpec, WallKind } from "./floor-templates";
 import { OWNER_KEY, RECEPTION_ROOM } from "./reception";
 import { assembleLayout, boundsOf, type BuildRoom, type Point, type RoomLayout } from "./room-layout";
@@ -35,7 +36,11 @@ import { assembleLayout, boundsOf, type BuildRoom, type Point, type RoomLayout }
 // back wall (0) to the front rim (ROOM_DEPTH). Two rows of desks face the back
 // wall (desk, chair, aisle; desk, chair, aisle), two cells per desk along `u`;
 // the column after them is the aisle to the opening, where agents drop what
-// they submit; a big team also gets a coffee nook beyond it.
+// they submit; a big team also gets a coffee nook beyond it. A room with a
+// `decor` keeps the same desks and aisles but is furnished for its use: a
+// library lines its walls with books, puts reading tables in the spare places
+// of the front row and a reading corner in a wing beyond the aisle (instead of
+// the nook), on a wooden floor.
 
 /** Depth of a suite, from its back wall to its front rim, in cells. */
 export const ROOM_DEPTH = 6;
@@ -63,15 +68,31 @@ export const MAX_ROOM_AGENTS = 12;
 /** A team of at least this many agents gets a coffee nook in its suite. */
 const NOOK_FROM = 6;
 const NOOK_LENGTH = 3;
+/** The reading wing of a library, beyond the aisle to the opening (instead of a big team's nook). */
+const WING_LENGTH = 3;
+/** The shelves of a library's walls (variants of the same shelf, so that a wall of them does not repeat), and its ladder. */
+const LIBRARY_SHELVES = ["library-shelf", "library-shelf-b", "library-shelf-c"];
+const LIBRARY_LADDER = "library-ladder";
 /** From one rib to the next: a row of suites, the rib, the shadow of the next row's back walls. */
 const RIB_STEP = ROOM_DEPTH + GAP;
 /** Where the lobby opens onto the main corridor, from its side wall. */
 const LOBBY_DOOR = 6;
 
 /** Furniture tall enough to hide a window, or hung on the wall (a window never stands behind one). */
-const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
+const TALL = new Set([
+  "bookshelf",
+  "whiteboard",
+  "filing-cabinet",
+  "water-cooler",
+  "plant-tall",
+  "coffee-corner",
+  ...LIBRARY_SHELVES,
+  LIBRARY_LADDER,
+  "globe",
+  "floor-lamp",
+]);
 /** Furniture two cells long at turn 0; the rest is one cell (rugs are flat and never matter here). */
-const LONG = new Set(["bookshelf", "whiteboard", "coffee-corner", "sofa", "workstation"]);
+const LONG = new Set(["bookshelf", "whiteboard", "coffee-corner", "sofa", "workstation", "reading-table"]);
 
 export type FloorRoomInput = {
   /** The room of the home. */
@@ -80,6 +101,8 @@ export type FloorRoomInput = {
   keys: string[];
   /** Its colour (a normalized hex), or null for the neutral look. */
   color: string | null;
+  /** How its suite is furnished (room.json `decor`), or null (left out) for an office. */
+  decor?: RoomDecor | null;
 };
 
 export type FloorPlanOptions = {
@@ -115,11 +138,13 @@ type SuitePlan = {
 /**
  * How many cells along its back wall the suite of a room of `agents` agents
  * takes: a column of two cells per two desks, at least two columns, the aisle
- * to the opening, and a nook for a big team.
+ * to the opening, and a nook for a big team (a library: its reading wing,
+ * whatever its team).
  */
-export function roomLength(agents: number): number {
+export function roomLength(agents: number, decor: RoomDecor | null = null): number {
   const seated = Math.min(MAX_ROOM_AGENTS, Math.max(0, agents));
-  return 2 * deskColumns(seated) + 1 + (seated >= NOOK_FROM ? NOOK_LENGTH : 0);
+  const beyond = decor === "library" ? WING_LENGTH : seated >= NOOK_FROM ? NOOK_LENGTH : 0;
+  return 2 * deskColumns(seated) + 1 + beyond;
 }
 
 /** Columns of two desks (one against the back wall, one in the front row) for `seated` agents, two at least. */
@@ -132,13 +157,14 @@ function wall(length: number, tall: Set<number>, skip: number | null): WallKind[
   return Array.from({ length }, (_, i) => (i % 2 === 1 && i !== skip && !tall.has(i) ? "window" : "plain"));
 }
 
-/** The suite of a room of the home with `agents` agents (at most MAX_ROOM_AGENTS seated). */
-function suitePlan(agents: number): SuitePlan {
+/** The suite of a room of the home with `agents` agents (at most MAX_ROOM_AGENTS seated), furnished per its decor. */
+function suitePlan(agents: number, decor: RoomDecor | null = null): SuitePlan {
   const seated = Math.min(MAX_ROOM_AGENTS, Math.max(0, agents));
-  const nook = seated >= NOOK_FROM;
+  const library = decor === "library";
+  const nook = !library && seated >= NOOK_FROM;
   const columns = deskColumns(seated);
   const door = 2 * columns;
-  const length = roomLength(seated);
+  const length = roomLength(seated, decor);
   const row = (v: number) => Array.from({ length: columns }, (_, k): LocalDesk => ({ u: 2 * k, v }));
   const back = row(0);
   const front = row(3);
@@ -150,11 +176,11 @@ function suitePlan(agents: number): SuitePlan {
   const free = new Set(furniture);
   const desks = [...back, ...front].filter((slot) => !free.has(slot));
 
-  // The top of the aisle's column, against the back wall, is free in every suite: a tall plant.
-  const pieces: LocalPiece[] = [{ name: "plant-tall", turn: 0, u: door, v: 0 }];
+  // The top of the aisle's column, against the back wall, is free in every suite: a tall plant (a library: a shelf).
+  const pieces: LocalPiece[] = library ? [] : [{ name: "plant-tall", turn: 0, u: door, v: 0 }];
   let backFurniture = 0;
   let frontFurniture = 0;
-  for (const slot of furniture) {
+  for (const slot of library ? [] : furniture) {
     if (slot.v === 0) {
       if (backFurniture === 0) pieces.push({ name: "bookshelf", turn: 0, u: slot.u, v: 0 });
       else pieces.push({ name: "plant-tall", turn: 0, u: slot.u, v: 0 }, { name: "plant-small", turn: 0, u: slot.u + 1, v: 0 });
@@ -198,8 +224,9 @@ function suitePlan(agents: number): SuitePlan {
     [door, backDesks.length > 0 ? 2 : 5],
     [door, ROOM_DEPTH],
   ]);
-  // A small plant at the far end of the front aisle, when the aisle leaves room for it.
-  if (frontFrom >= 2) pieces.push({ name: "plant-small", turn: 0, u: 0, v: 5 });
+  // A small plant at the far end of the front aisle, when the aisle leaves room for it (a library: a globe).
+  if (frontFrom >= 2) pieces.push({ name: library ? "globe" : "plant-small", turn: 0, u: 0, v: 5 });
+  if (library) pieces.push(...libraryPieces(length, door, desks, furniture));
 
   // What stands against each wall: the back wall (v = 0) and the side wall (u = 0).
   const tallBack = new Set<number>();
@@ -213,8 +240,37 @@ function suitePlan(agents: number): SuitePlan {
   return { length, pieces, desks, aisles, back: wall(length, tallBack, door), side: wall(ROOM_DEPTH, tallSide, null), door };
 }
 
+/**
+ * The furniture of a library's suite, around its desks: a shelf on every cell
+ * of the back wall that no desk takes (a ladder among them), two more on
+ * the side wall when no desk stands against it, a reading table in each spare
+ * place of the front row, and in the wing beyond the aisle a reading corner (a
+ * floor lamp, an armchair and a side table on a rug, a plant) and piles of
+ * books waiting to be shelved.
+ */
+function libraryPieces(length: number, door: number, desks: LocalDesk[], spare: LocalDesk[]): LocalPiece[] {
+  // A ladder in the middle of the wing's shelves, and on every fifth shelf of the rest.
+  const shelf = (index: number) =>
+    index === door + 2 || (index < door && index % 5 === 2) ? LIBRARY_LADDER : LIBRARY_SHELVES[index % LIBRARY_SHELVES.length]!;
+  const pieces: LocalPiece[] = [];
+  const atBack = new Set(desks.filter((slot) => slot.v === 0).flatMap((slot) => [slot.u, slot.u + 1]));
+  for (let u = 0; u < length; u += 1) if (!atBack.has(u)) pieces.push({ name: shelf(u), turn: 0, u, v: 0 });
+  if (!atBack.has(0)) for (const v of [1, 2]) pieces.push({ name: shelf(length + v), turn: 1, u: 0, v });
+  for (const slot of spare) if (slot.v === 3) pieces.push({ name: "reading-table", turn: 0, u: slot.u, v: 3 });
+  const wing = door + 1;
+  pieces.push(
+    { name: "rug", turn: 0, u: wing, v: 3 },
+    { name: "floor-lamp", turn: 0, u: wing, v: 3 },
+    { name: "armchair", turn: 0, u: wing + 1, v: 3 },
+    { name: "side-table", turn: 0, u: wing + 2, v: 3 },
+    { name: "plant-small", turn: 0, u: wing + 2, v: 5 },
+    { name: "book-stacks", turn: 0, u: wing + 2, v: 1 },
+  );
+  return pieces;
+}
+
 /** A suite placed with its back corner at (x, y), along x, opening downwards; agents drop their items in its opening. */
-function placeSuite(plan: SuitePlan, x: number, y: number): { spec: RoomSpec; drop: DropSpec; door: Cell } {
+function placeSuite(plan: SuitePlan, x: number, y: number, decor: RoomDecor | null = null): { spec: RoomSpec; drop: DropSpec; door: Cell } {
   const desk = (slot: LocalDesk): DeskSpec => ({ turn: 0, at: [slot.u, slot.v], stand: [slot.u, slot.v + 2] });
   const spec: RoomSpec = {
     kind: "office",
@@ -222,7 +278,7 @@ function placeSuite(plan: SuitePlan, x: number, y: number): { spec: RoomSpec; dr
     y,
     w: plan.length,
     d: ROOM_DEPTH,
-    floor: "carpet-room",
+    floor: decor === "library" ? "wood" : "carpet-room",
     back: { y: plan.back, x: plan.side },
     open: { y: [plan.door] },
     pieces: plan.pieces.map((piece) => ({ name: piece.name, turn: piece.turn, at: [piece.u, piece.v] })),
@@ -340,7 +396,7 @@ type Arrangement = {
   rows: FloorRoomInput[][];
 };
 
-const lengthOf = (room: FloorRoomInput): number => roomLength(room.keys.length);
+const lengthOf = (room: FloorRoomInput): number => roomLength(room.keys.length, room.decor ?? null);
 /** The front row starts with the lobby and the user's office beside it. */
 const rowWidth = (row: FloorRoomInput[], front: boolean): number =>
   row.reduce((total, room) => total + lengthOf(room) + BESIDE, front ? LOBBY_SIZE + BESIDE + OFFICE_LENGTH : -BESIDE);
@@ -402,7 +458,7 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
   const lanes: Cell[][] = [];
   const hall: CellRect[] = [];
   const suite = (room: FloorRoomInput, x: number, y: number): Cell => {
-    const placed = placeSuite(suitePlan(room.keys.length), x, y);
+    const placed = placeSuite(suitePlan(room.keys.length, room.decor ?? null), x, y, room.decor ?? null);
     built.push({ spec: placed.spec, project: room.name, color: room.color, keys: room.keys.slice(0, MAX_ROOM_AGENTS), drop: placed.drop, sign: true });
     return placed.door;
   };

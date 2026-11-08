@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { ROOM_DECORS, type RoomDecor } from "../ui/floor-mode";
 import { isInside } from "./config";
 import { cronError } from "./cron";
 import { now, type Db } from "./db";
@@ -180,6 +181,8 @@ export const roomFileSchema = z.strictObject({
     .min(1)
     .refine((value) => [".png", ".webp", ".svg"].includes(path.extname(value).toLowerCase()), "must be a .png, .webp or .svg file")
     .optional(),
+  /** How its suite of the single floor is furnished ("library"); left out, an office. */
+  decor: z.enum(ROOM_DECORS).optional(),
   targetRepo: z.string().min(1),
   agents: z.array(agentSchema).min(1),
 });
@@ -263,6 +266,8 @@ export type Room = {
   shared: boolean;
   /** Absolute path of the logo of its project, always inside the room directory, or null. */
   logo?: string | null;
+  /** How its suite of the single floor is furnished (room.json `decor`), or null for an office. */
+  decor?: RoomDecor | null;
   agents: Agent[];
 };
 
@@ -407,6 +412,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     color: room.color ?? null,
     shared: room.shared ?? false,
     logo,
+    decor: room.decor ?? null,
     agents,
   };
 }

@@ -82,6 +82,7 @@ export function createRoomStore(): RoomStore {
                 rooms: state.rooms.map((room) => ({
                   name: room.name,
                   color: room.color,
+                  decor: room.decor ?? null,
                   agents: room.agents.map((agent) => ({
                     id: agent.id,
                     name: agent.name,

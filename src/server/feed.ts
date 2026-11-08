@@ -20,7 +20,7 @@ import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, ownerSpriteUrl, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { logoUrl } from "./logos";
 import { HQ_STATUS_TOOL } from "../ui/activity";
-import type { FloorLayoutMode } from "../ui/floor-mode";
+import type { FloorLayoutMode, RoomDecor } from "../ui/floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
 // Shapes returned by the API (documented in docs/api.md).
@@ -233,6 +233,8 @@ export type StateDto = {
     color: string | null;
     /** URL of the logo of its project (room.json `logo`), or null. */
     logo: string | null;
+    /** How its suite of the single floor is furnished (room.json `decor`), or null for an office. */
+    decor: RoomDecor | null;
     agents: {
       id: string;
       name: string;
@@ -372,6 +374,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
       targetRepo: toPosix(path.relative(home.root, room.targetRepo)),
       color: room.color,
       logo: logoUrl(room),
+      decor: room.decor ?? null,
       agents: room.agents.map((agent) => {
         const row = lastRun.get(room.name, agent.id) as RunRow | undefined;
         const state: AgentState =

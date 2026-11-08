@@ -60,12 +60,22 @@ function floorHomes(): number[][] {
   return homes;
 }
 
-/** Single floors for every home of `floorHomes`, the reception on the first, third or no room, with and without the receptionist. */
+/** The same rooms, every third one a library (room.json `decor`). */
+const withLibraries = (rooms: FloorRoomInput[]): FloorRoomInput[] => rooms.map((room, i) => (i % 3 === 1 ? { ...room, decor: "library" } : room));
+
+/**
+ * Single floors for every home of `floorHomes`, the reception on the first, third or no room, with and without the
+ * receptionist, and with libraries among the rooms.
+ */
 const floorLayouts = (): RoomLayout[] =>
   floorHomes().flatMap((counts, index) => {
     const rooms = homeRooms(counts);
     const reception = index % 3 === 0 ? null : (rooms[Math.min(rooms.length - 1, index % 2 === 0 ? 0 : 2)]?.name ?? null);
-    return [layoutFloor(rooms, { reception, receptionist: true }), layoutFloor(rooms, { reception, receptionist: false })];
+    return [
+      layoutFloor(rooms, { reception, receptionist: true }),
+      layoutFloor(rooms, { reception, receptionist: false }),
+      layoutFloor(withLibraries(rooms), { reception, receptionist: true }),
+    ];
   });
 
 const layouts = (): RoomLayout[] => [
@@ -205,7 +215,20 @@ test("routes walk the aisles and lanes only: axis-aligned, through openings, aro
 });
 
 /** Furniture tall enough to stand in front of a window: it never does. */
-const TALL = new Set(["bookshelf", "whiteboard", "filing-cabinet", "water-cooler", "plant-tall", "coffee-corner"]);
+const TALL = new Set([
+  "bookshelf",
+  "whiteboard",
+  "filing-cabinet",
+  "water-cooler",
+  "plant-tall",
+  "coffee-corner",
+  "library-shelf",
+  "library-shelf-b",
+  "library-shelf-c",
+  "library-ladder",
+  "globe",
+  "floor-lamp",
+]);
 
 /**
  * The cells of a room's walls with what lies beyond each: the back walls (-y,
@@ -435,6 +458,47 @@ test("the single floor: separate suites around a spine and its ribs, packed, the
   assert.ok(roomLength(1) < roomLength(6) && roomLength(6) < roomLength(12), "a bigger team, a longer room");
   const crowded = layoutFloor(homeRooms([15]), { reception: null });
   assert.equal(crowded.offices.length, MAX_ROOM_AGENTS, "agents beyond the desks of a room have no office");
+});
+
+test("the single floor: a library keeps the desks and aisles of its suite, lines its walls with books, reads in a wing", () => {
+  const LIBRARY = new Set(["library-shelf", "library-shelf-b", "library-shelf-c", "library-ladder", "reading-table", "armchair", "side-table", "floor-lamp", "globe", "rug", "book-stacks", "plant-small"]);
+  for (let count = 1; count <= MAX_ROOM_AGENTS; count += 1) {
+    const office = layoutFloor([{ name: "lib", color: "#2e8b6e", keys: keys(count, "lib") }], { reception: null });
+    const layout = layoutFloor([{ name: "lib", color: "#2e8b6e", decor: "library", keys: keys(count, "lib") }], { reception: null });
+    const index = layout.rooms.findIndex((room) => room.project === "lib");
+    const room = layout.rooms[index]!;
+    const plain = office.rooms.find((each) => each.project === "lib")!;
+    const label = `a library of ${count}`;
+    assert.equal(room.floor, "wood", `${label}: a wooden floor`);
+    assert.equal(plain.floor, "carpet-room", `${label}: an office keeps its carpet`);
+    assert.equal(room.w, roomLength(count, "library"), `${label}: sized with its reading wing`);
+    // The reading wing takes the place of a big team's nook, and adds three cells to a smaller team's suite.
+    assert.equal(roomLength(count, "library"), roomLength(count) + (count >= 6 ? 0 : 3), `${label}: its length`);
+    const pieces = layout.pieces.filter((piece) => piece.room === index);
+    // The same desks as an office of the same team, at the same places in the suite.
+    const desks = (each: RoomLayout, at: number) =>
+      each.pieces.filter((piece) => piece.name === "workstation" && piece.room === at).map((piece) => `${piece.cell[0] - each.rooms[at]!.x},${piece.cell[1] - each.rooms[at]!.y}`);
+    assert.deepEqual(desks(layout, index), desks(office, office.rooms.indexOf(plain)), `${label}: its desks`);
+    for (const piece of pieces) {
+      if (piece.name === "workstation" || piece.name === "desk-chair") continue;
+      assert.ok(LIBRARY.has(piece.name), `${label}: a ${piece.name} in a library`);
+    }
+    // Walls of books: every cell of the back wall without a desk holds a shelf, a ladder among them.
+    const backDesks = new Set(pieces.filter((piece) => piece.name === "workstation" && piece.cell[1] === room.y).flatMap((piece) => [piece.cell[0], piece.cell[0] + 1]));
+    for (let cx = room.x; cx < room.x + room.w; cx += 1) {
+      if (backDesks.has(cx)) continue;
+      const here = pieces.find((piece) => piece.cell[0] === cx && piece.cell[1] === room.y);
+      assert.ok(here && here.name.startsWith("library-"), `${label}: a shelf against the back wall at ${cx - room.x}`);
+    }
+    assert.ok(pieces.some((piece) => piece.name === "library-ladder"), `${label}: a ladder`);
+    for (const name of ["armchair", "floor-lamp", "side-table", "rug", "book-stacks"]) assert.equal(pieces.filter((piece) => piece.name === name).length, 1, `${label}: its ${name}`);
+    assert.ok(!pieces.some((piece) => ["coffee-corner", "sofa", "water-cooler", "printer", "whiteboard", "bookshelf"].includes(piece.name)), `${label}: no office furniture`);
+  }
+  // A lone agent: the spare places of the front row take a reading table, the side wall its shelves, the corner a globe.
+  const lone = layoutFloor([{ name: "lib", color: null, decor: "library", keys: keys(1, "lib") }], { reception: null });
+  const names = lone.pieces.map((piece) => piece.name);
+  assert.ok(names.includes("reading-table") && names.includes("globe"));
+  assert.equal(lone.pieces.filter((piece) => piece.name.startsWith("library-") && piece.turn === 1).length, 2);
 });
 
 test("the single floor: the lobby is the entrance, at the front, where the main corridor starts", () => {

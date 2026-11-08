@@ -1,6 +1,7 @@
 import { ANNOUNCE_MS, bubbleText, currentActivity, HQ_STATUS_TOOL, normalizeStatus, toolActivity } from "./activity";
 import { agentKey, viewEvent } from "./model";
 import { OWNER_AGENT, OWNER_KEY, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
+import type { RoomDecor } from "./floor-mode";
 import type { Approval, HqEvent, Run } from "./schemas";
 import { layoutFloor } from "./floor-plan";
 import {
@@ -144,7 +145,7 @@ export type RoomInput =
    */
   | {
       type: "hydrate-floor";
-      rooms: { name: string; color: string | null; agents: AgentSeed[] }[];
+      rooms: { name: string; color: string | null; decor?: RoomDecor | null; agents: AgentSeed[] }[];
       approvals: ApprovalSeed[];
       reception: { room: string | null; agent: AgentSeed | null };
       /** The person seated in the user's own office (myhq.json `floor.owner`), or null for an empty office. */
@@ -574,9 +575,9 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
       shownAt: model.approvals[approval.id]?.shownAt ?? Number.NEGATIVE_INFINITY,
     };
   }
-  // The plan changes with the rooms, their agents, their colours and the reception: rebuilt only then.
+  // The plan changes with the rooms, their agents, their colours, their decors and the reception: rebuilt only then.
   const signature = JSON.stringify([
-    input.rooms.map((room) => [room.name, room.color, room.agents.map((agent) => [agent.id, agent.roam ?? false])]),
+    input.rooms.map((room) => [room.name, room.color, room.decor ?? null, room.agents.map((agent) => [agent.id, agent.roam ?? false])]),
     input.reception.room,
     receptionist !== null,
     owner !== null,
@@ -589,6 +590,7 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
           input.rooms.map((room) => ({
             name: room.name,
             color: room.color,
+            decor: room.decor ?? null,
             keys: room.agents.filter((agent) => !agent.roam).map((agent) => agentKey(room.name, agent.id)),
           })),
           {
