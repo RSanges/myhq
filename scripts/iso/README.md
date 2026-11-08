@@ -302,15 +302,18 @@ own model (a mascot) with the same rig and format by importing these files.
 `human(look)` also draws a few faces, none of them used by the shipped
 sheets: `hairStyle: "side-part"` (short at the back and sides, a quiff on top
 swept to the +x side, a voxel more forehead), `brows` (`true` for the hair's
-colour, or a material), `eyes` (a material, ink by default), `beard` (a
-material: a full beard, the chin under the mouth, the jaw higher towards the
-sides, sideburns at the back of the cheeks up to the hair, a little wider than
-the head and down over the collar; the front of the cheeks stays bare) and
-`moustache` (`{ style, colour }`: `"plain"`, or `"handlebar"`, whose wings
-sweep past the cheeks and curl up beside the eyes, so that it reads from the
-front, in profile and even from behind; `colour` defaults to the beard's, then
-the hair's; a shade darker than the beard reads best). They stay within the
-frame of the other characters.
+colour, or a material), `eyes` (a material, ink by default),
+`expression: "smile"` (the eyes narrowed to a short dash, and the lips showing
+under the mouth's line, in `lips`, a material, by default the skin's ramp two
+levels darker), `beard` (a material: a full beard up to the mouth,
+sideburns at the back of the cheeks up to the hair, a little wider than the
+head and down over the collar; the cheeks stay bare) and `moustache`
+(`{ style, colour }`: `"plain"`, or `"handlebar"`, a voxel high in the middle,
+bare skin between it and the nose, whose wings rise up the cheeks, past the
+edge of the face, and curl in at the top, so that it reads from the front, in
+profile and even from behind; `colour` defaults to the beard's, then the
+hair's: the bare cheeks are what makes it read). They stay within the frame
+of the other characters.
 
 ## Files
 
