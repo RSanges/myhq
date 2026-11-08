@@ -1,6 +1,6 @@
 import type { Cell, CellRect, DeskSpec, PieceSpec, RoomSpec, WallKind } from "./floor-templates";
-import { RECEPTION_ROOM } from "./reception";
-import { assembleLayout, boundsOf, type BuildRoom, type RoomLayout } from "./room-layout";
+import { OWNER_KEY, RECEPTION_ROOM } from "./reception";
+import { assembleLayout, boundsOf, type BuildRoom, type Point, type RoomLayout } from "./room-layout";
 
 // The single floor of the home (myhq.json `floor.layout: "room-per-project"`):
 // each room of the home is a suite of its own, sized from its number of
@@ -49,6 +49,13 @@ export const GAP = CORRIDOR_WIDTH + SHADOW;
 export const BESIDE = 4;
 /** The user's own office, a block beside the lobby: its length along the main corridor (its depth is a suite's). */
 export const OFFICE_LENGTH = 6;
+/**
+ * The seat of the chair of the user's own office, in voxels from its back
+ * corner: the centre of the hub chair's seat, pushed in to the desk in the
+ * office (`OFFICE_CHAIR_AT` of scripts/iso/build-floor.mjs). Its sitter faces
+ * the desk (`NE`).
+ */
+export const OFFICE_SEAT: Point = { x: 38, y: 37 };
 /** The lobby block, square. */
 export const LOBBY_SIZE = 8;
 /** Agents seated in one room at most; the others are listed under the floor without a desk. */
@@ -82,6 +89,8 @@ export type FloorPlanOptions = {
   receptionist?: boolean;
   /** Agents who roam the floor (`floor.behaviour: "roam"`, `room/agent` keys): no desk, a broom closet in the lobby. */
   roamers?: string[];
+  /** Seat someone (OWNER_KEY, `floor.owner` of myhq.json) in the chair of the user's own office. */
+  owner?: boolean;
 };
 
 type LocalPiece = { name: string; turn: 0 | 1; u: number; v: number };
@@ -295,10 +304,11 @@ function lobbyRoom(
  * The user's own office, OFFICE_LENGTH by ROOM_DEPTH: the hub's scene (the
  * desk scene of /bureau), drawn whole by the renderer from the floor set
  * (`office` of floor.json): its walls, window, furniture, pile and letter
- * tray. Nobody works there; a click opens the desk. It opens downwards (+y)
- * onto the main corridor.
+ * tray. Nobody works there, unless the home seats its owner in its chair
+ * (`owner`); a click opens the desk. It opens downwards (+y) onto the main
+ * corridor.
  */
-function ownerOffice(x: number, y: number): BuildRoom {
+function ownerOffice(x: number, y: number, owner: boolean): BuildRoom {
   const door = OFFICE_LENGTH - 1;
   const spec: RoomSpec = {
     kind: "owner",
@@ -321,7 +331,8 @@ function ownerOffice(x: number, y: number): BuildRoom {
       ],
     ],
   };
-  return { spec, project: null, color: null, keys: [], sign: true, office: true };
+  const seat = owner ? { key: OWNER_KEY, at: OFFICE_SEAT, faces: "NE" as const, stand: [door, 2] satisfies Cell } : undefined;
+  return { spec, project: null, color: null, keys: [], sign: true, office: true, seat };
 }
 
 type Arrangement = {
@@ -408,7 +419,7 @@ export function layoutFloor(rooms: FloorRoomInput[], options: FloorPlanOptions):
       const lobby = lobbyRoom(spine - LOBBY_SIZE, rib - LOBBY_SIZE, options.roamers ?? []);
       built.push({ spec: lobby.spec, project: RECEPTION_ROOM, color: null, keys: [], drop: lobby.drop, counter: lobby.counter, closet: lobby.closet, sign: true });
       right = spine - LOBBY_SIZE - BESIDE;
-      office = ownerOffice(right - OFFICE_LENGTH, rib - ROOM_DEPTH);
+      office = ownerOffice(right - OFFICE_LENGTH, rib - ROOM_DEPTH, options.owner ?? false);
       right -= OFFICE_LENGTH + BESIDE;
       leftmost = office.spec.x + (office.spec.open.y?.[0] ?? 0);
     }

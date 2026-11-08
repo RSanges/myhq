@@ -10,7 +10,7 @@ import { parseHash } from "./deep-link";
 import { pileHref } from "./floor-mode";
 import { JANITOR_SHEET, neutralPersonFor, RECEPTIONIST_SHEET } from "./iso-floor";
 import { pendingTitle, selectAgents, selectPending, selectUnseen } from "./model";
-import { RECEPTION_AGENT, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
+import { OWNER_KEY, RECEPTION_AGENT, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import { ReceptionSheet } from "./reception-sheet";
 import { RoomCanvas } from "./room-canvas";
 import { RoomSheet } from "./room-sheet";
@@ -23,6 +23,7 @@ import { createRoomStore, type RoomStore } from "./room-store";
 import { strings } from "./strings";
 import { SiteNav } from "./site-nav";
 import { buttonClass, ErrorNote } from "./ui";
+import { fetchChatTurn } from "./api";
 import { useDesk } from "./use-desk";
 import { useHq } from "./use-hq";
 import { useFlip } from "./use-flip";
@@ -140,6 +141,38 @@ export function RoomPage() {
   const receptionHere = model.reception.room !== null && (single || model.reception.room === room);
   const roomColor = single ? null : (chipStyle(room === null ? null : roomColors.get(room))?.["--room-color"] ?? null);
   const closeSheet = useCallback(() => setSelectedKey(null), []);
+  // The owner seated in the user's office of the single floor (myhq.json `floor.owner`): a click opens the chat.
+  const owner = single ? model.floorOwner : null;
+  const { open: chatOpen, toggle: toggleChat } = chat;
+  const selectOnFloor = useCallback(
+    (key: string) => {
+      if (key !== OWNER_KEY) setSelectedKey(key);
+      else if (!chatOpen) toggleChat();
+    },
+    [chatOpen, toggleChat],
+  );
+  // The owner types while a turn of the chat is in progress: the turn state at each (re)connection, then its events.
+  const hasOwner = owner !== null;
+  useEffect(() => {
+    if (!hasOwner) return;
+    let closed = false;
+    const load = () => {
+      fetchChatTurn()
+        .then((turn) => {
+          if (!closed) store.setOwnerBusy(turn.running, Date.now());
+        })
+        .catch(() => {});
+    };
+    const unsubscribe = subscribeChat((signal) => {
+      if (signal.type === "ready") load();
+      else if (signal.type === "turn") store.setOwnerBusy(signal.turn.running, Date.now());
+    });
+    load();
+    return () => {
+      closed = true;
+      unsubscribe();
+    };
+  }, [hasOwner, subscribeChat, store]);
   // The sheet of a room of the single floor (a click on the room or its button), under an agent's sheet opened from it.
   const [sheetRoom, setSheetRoom] = useState<string | null>(null);
   const openRoomSheet = useCallback((name: string | null) => {
@@ -172,8 +205,9 @@ export function RoomPage() {
         roomAgents.map((agent) => [agent.key, agent.isoSprite ?? (agent.roam ? JANITOR_SHEET : neutralPersonFor(agent.key))]),
       ),
       ...(receptionHere ? { [RECEPTION_KEY]: RECEPTIONIST_SHEET } : {}),
+      ...(owner ? { [OWNER_KEY]: owner.isoSprite ?? neutralPersonFor(OWNER_KEY) } : {}),
     }),
-    [roomAgents, receptionHere],
+    [roomAgents, receptionHere, owner],
   );
   const strides = useMemo(
     () =>
@@ -370,7 +404,7 @@ export function RoomPage() {
                     color={roomColor}
                     selected={selectedKey}
                     reduced={reduced}
-                    onSelect={setSelectedKey}
+                    onSelect={selectOnFloor}
                     onFailure={() => setCanvasFailed(true)}
                     onCounter={single ? openPile : undefined}
                     onOffice={openDesk}

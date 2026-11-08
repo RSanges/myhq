@@ -392,15 +392,22 @@ export function keyboard(b) {
 
 // --------------------------------------------------------------------- chair
 
-/** An office chair with cognac leather, seen from behind (faces -y). */
-export function chair(b) {
-  for (const [x, y] of [[1, 7], [14, 8], [7, 1], [8, 14]]) b.set(x, y, 0, ink);
-  b.box(2, 7, 1, 12, 2, 1, chrome);
-  b.box(7, 2, 1, 2, 12, 1, chrome);
-  b.box(7, 7, 2, 2, 2, 8, chrome);
-  b.box(3, 3, 10, 10, 10, 1, ink);
-  b.box(2, 2, 11, 12, 12, 3, leather);
-  for (const [x, y] of [[2, 2], [13, 2], [2, 13], [13, 13]]) b.clear(x, y, 11, 1, 1, 3);
+/**
+ * An office chair with cognac leather, seen from behind (faces -y). `part`:
+ * "seat" (base and cushion) or "back" (backrest and armrests), to draw a
+ * sitter between them (the user's office of the floor, build-floor.mjs).
+ */
+export function chair(b, { part = "all" } = {}) {
+  if (part !== "back") {
+    for (const [x, y] of [[1, 7], [14, 8], [7, 1], [8, 14]]) b.set(x, y, 0, ink);
+    b.box(2, 7, 1, 12, 2, 1, chrome);
+    b.box(7, 2, 1, 2, 12, 1, chrome);
+    b.box(7, 7, 2, 2, 2, 8, chrome);
+    b.box(3, 3, 10, 10, 10, 1, ink);
+    b.box(2, 2, 11, 12, 12, 3, leather);
+    for (const [x, y] of [[2, 2], [13, 2], [2, 13], [13, 13]]) b.clear(x, y, 11, 1, 1, 3);
+  }
+  if (part === "seat") return;
   b.box(7, 13, 11, 2, 2, 8, ink);
   const back = material({
     ramp: "wood", top: 4, left: 3, right: 2,

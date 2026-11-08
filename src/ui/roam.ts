@@ -19,7 +19,13 @@ import {
 // sweep, and every other room once more in the corridor before its
 // door; then it starts the round again, for as long as its run lasts. Pure:
 // the round is a function of the layout, and the place on it a function of
-// the time since the run began, so every client draws the same thing.
+// the time since the run began, so every client draws the same thing. An
+// agent whose round never stops (`floor.always`) counts that time from
+// ROAM_ORIGIN instead, a fixed origin: the same place on every client and
+// after every reload, run or not.
+
+/** Where the round of an agent that is always on it is counted from (epoch milliseconds). */
+export const ROAM_ORIGIN = 0;
 
 /** Walking speed of a round, in voxels per second: slower than an errand (a cell is 16 voxels). */
 export const ROAM_SPEED = 32;

@@ -1893,8 +1893,10 @@ bookshelf, the walnut desk with its screen, lamp, post-its, phone, newspaper,
 the calendar, the armchair on its rug. Its pile (one folder per item waiting
 for a decision, fourteen at most, each spine in its room's colour) and its
 letter tray (the letters of the desk's tray, five at most) are the hub's
-states, drawn over it as the counts change. Nobody works there; a click
-anywhere on it opens the desk, `/bureau`. On a floor of one room
+states, drawn over it as the counts change. Nobody works there, unless the
+home seats its owner in its chair (`floor.owner` of `myhq.json`, see
+`home-layout.md`: typing while a turn of the chat is in progress; a click on
+the owner opens the chat); a click anywhere else on it opens the desk, `/bureau`. On a floor of one room
 (`"floor-per-project"`), the user's desk and tray of the lobby (« Votre
 bureau ») play that part: a click on them opens `/bureau`.
 

@@ -1,5 +1,5 @@
 import { agentKey, viewEvent } from "./model";
-import { RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
+import { OWNER_AGENT, OWNER_KEY, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run } from "./schemas";
 import { layoutFloor } from "./floor-plan";
 import {
@@ -17,7 +17,7 @@ import {
   type Point,
   type RoomLayout,
 } from "./room-layout";
-import { buildTour, homeMs, tourPose, wayHome, type Tour } from "./roam";
+import { buildTour, homeMs, ROAM_ORIGIN, tourPose, wayHome, type Tour } from "./roam";
 
 // The animation model of the room: what each agent is doing, derived from the
 // entities of the SSE stream (docs/api.md). Pure and testable: no canvas, no
@@ -110,8 +110,11 @@ export type ApprovalSeed = Pick<Approval, "id" | "room" | "agentId" | "status"> 
  * shared room (`forRoom`), or the room of the agent that submitted it.
  */
 export const pileRoomOf = (approval: { room: string; forRoom?: string | null }): string => approval.forRoom ?? approval.room;
-/** `roam`: the agent roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`). */
-export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null; roam?: boolean };
+/**
+ * `roam`: the agent roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`);
+ * `roamAlways`: its round goes on between its runs too (`floor.always`).
+ */
+export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null; roam?: boolean; roamAlways?: boolean };
 
 export type RoomInput =
   /**
@@ -132,7 +135,11 @@ export type RoomInput =
       rooms: { name: string; color: string | null; agents: AgentSeed[] }[];
       approvals: ApprovalSeed[];
       reception: { room: string | null; agent: AgentSeed | null };
+      /** The person seated in the user's own office (myhq.json `floor.owner`), or null for an empty office. */
+      owner?: { name: string } | null;
     }
+  /** A turn of the chat (the owner's assistant) began or ended: the owner of the floor types at their desk meanwhile. */
+  | { type: "owner"; busy: boolean }
   | { type: "run"; run: RunSeed }
   | { type: "event"; event: HqEvent }
   | { type: "approval"; approval: ApprovalSeed };
@@ -170,6 +177,10 @@ type AgentRuntime = {
   roam: boolean;
   /** When the round of the current run began. */
   roamSince: number;
+  /** Its round goes on between its runs too, anchored on ROAM_ORIGIN. */
+  roamAlways: boolean;
+  /** The owner of the floor in the chair of the user's office (OWNER_KEY): `running` is a turn of the chat in progress. */
+  owner: boolean;
   /** The walk back to the closet after a run, from where the round was when the run ended. */
   homing: { start: number; path: Point[]; ms: number } | null;
 };
@@ -363,7 +374,8 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
       runId: run.id,
       lastActive: at,
       question: run.status === "failed" ? "failed" : agent.question,
-      homing: agent.roam && agent.running ? homingOf(model.layout, agent, at) : agent.homing,
+      // One whose round never stops does not walk home: it goes on.
+      homing: agent.roam && agent.running && !agent.roamAlways ? homingOf(model.layout, agent, at) : agent.homing,
     };
   });
 }
@@ -373,6 +385,9 @@ function roundStart(run: RunSeed, at: number): number {
   const started = parseTime(run.startedAt);
   return Number.isFinite(started) ? Math.min(started, at) : at;
 }
+
+/** Where the round of a roaming agent is counted from: ROAM_ORIGIN for one whose round never stops, else the start of its run. */
+const roundOrigin = (agent: AgentRuntime): number => (agent.roamAlways ? ROAM_ORIGIN : agent.roamSince);
 
 /** The rounds of each layout, by resting spot (built once: the layout object only changes with the floor). */
 const tours = new WeakMap<RoomLayout, Map<string, Tour>>();
@@ -465,11 +480,14 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
 /** A runtime for a seed, or the one the model already had for that key (its trips and bubbles go on). */
 function runtimeOf(model: RoomModel, key: string, seed: AgentSeed, at: number): AgentRuntime {
   const kept = model.agents.find((agent) => agent.key === key);
-  if (kept) return { ...kept, name: seed.name, roam: seed.roam ?? false };
+  const roamAlways = (seed.roam ?? false) && (seed.roamAlways ?? false);
+  if (kept) return { ...kept, name: seed.name, roam: seed.roam ?? false, roamAlways };
   const run = seed.lastRun;
   const running = run?.status === "running";
   return {
     roam: seed.roam ?? false,
+    roamAlways,
+    owner: key === OWNER_KEY,
     roamSince: run && running ? roundStart(run, at) : Number.NEGATIVE_INFINITY,
     homing: null,
     key,
@@ -490,6 +508,8 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
   const receptionist = names.length > 0 ? input.reception.agent : null;
   const seeded = input.rooms.flatMap((room) => room.agents.map((seed) => ({ key: agentKey(room.name, seed.id), seed })));
   if (receptionist) seeded.push({ key: RECEPTION_KEY, seed: receptionist });
+  const owner = names.length > 0 ? (input.owner ?? null) : null;
+  if (owner) seeded.push({ key: OWNER_KEY, seed: { id: OWNER_AGENT, name: owner.name, lastRun: null } });
   const agents = seeded.map(({ key, seed }) => runtimeOf(model, key, seed, at));
   const approvals: Record<number, ApprovalState> = {};
   for (const approval of input.approvals) {
@@ -507,6 +527,7 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
     input.rooms.map((room) => [room.name, room.color, room.agents.map((agent) => [agent.id, agent.roam ?? false])]),
     input.reception.room,
     receptionist !== null,
+    owner !== null,
   ]);
   // Roaming agents have no desk in their room's suite: they rest by the broom closet of the lobby.
   const layout =
@@ -522,6 +543,7 @@ function applyHydrateFloor(model: RoomModel, input: Extract<RoomInput, { type: "
             reception: input.reception.room,
             receptionist: receptionist !== null,
             roamers: input.rooms.flatMap((room) => room.agents.filter((agent) => agent.roam).map((agent) => agentKey(room.name, agent.id))),
+            owner: owner !== null,
           },
         );
   floorSignatures.set(layout, signature);
@@ -544,6 +566,8 @@ export function applyInput(model: RoomModel, input: RoomInput, at: number): Room
       return applyEvent(model, input.event, at);
     case "approval":
       return applyApproval(model, input.approval, at);
+    case "owner":
+      return replaceAgent(model, OWNER_KEY, (agent) => (agent.running === input.busy ? agent : { ...agent, running: input.busy, lastActive: at }));
   }
 }
 
@@ -566,7 +590,9 @@ export type AgentStatus =
   | { kind: "roaming" }
   | { kind: "sweeping" }
   | { kind: "stowing" }
-  | { kind: "closet" };
+  | { kind: "closet" }
+  /** One whose round never stops (`floor.always`), on it between its runs: no turn in progress. */
+  | { kind: "patrolling" };
 
 /** The coarse state announced to a screen reader: it changes far less often than `AgentStatus`. */
 export type Coarse =
@@ -574,7 +600,8 @@ export type Coarse =
   | { kind: "working" }
   | { kind: "visiting"; target: string }
   | { kind: "carrying" }
-  | { kind: "stuck" };
+  | { kind: "stuck" }
+  | { kind: "patrolling" };
 
 export type Bubble = { kind: "thought"; text: string } | { kind: "question" } | { kind: "talk" } | { kind: "zzz" };
 
@@ -704,6 +731,14 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
     };
   };
 
+  if (agent.owner) {
+    // The owner of the floor at their desk: typing while a turn of the chat is in progress, seated quietly
+    // otherwise, never asleep (no agent waiting for a run). Always "working" for a screen reader.
+    return agent.running
+      ? make("type", { kind: "typing" }, { kind: "working" }, null)
+      : make("sit", { kind: "seated" }, { kind: "working" }, null);
+  }
+
   if (agent.roam) {
     const thought = agent.thought && at < agent.thought.until ? agent.thought.text : null;
     const bubble: Bubble | null = agent.question ? { kind: "question" } : thought !== null ? { kind: "thought", text: thought } : null;
@@ -713,10 +748,16 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
     if (agent.running) {
       // With reduced motion there is no round: the agent stays by its closet, its status says it is on it.
       if (reduced) return make("stand", stuck ?? { kind: "roaming" }, coarse, bubble);
-      const pose = tourPose(tourOf(layout, spot), at - agent.roamSince, spot.faces);
+      const pose = tourPose(tourOf(layout, spot), at - roundOrigin(agent), spot.faces);
       return pose.sweeping
         ? make("sweep", stuck ?? { kind: "sweeping" }, coarse, bubble, pose, walking)
         : make("walk", stuck ?? { kind: "roaming" }, coarse, bubble, pose, walking);
+    }
+    if (agent.roamAlways && !reduced) {
+      // Between its runs the round goes on where the clock puts it: on its round, with no turn in progress.
+      const pose = tourPose(tourOf(layout, spot), at - ROAM_ORIGIN, spot.faces);
+      const idle: Coarse = stuck ? { kind: "stuck" } : { kind: "patrolling" };
+      return make(pose.sweeping ? "sweep" : "walk", stuck ?? { kind: "patrolling" }, idle, bubble, pose, walking);
     }
     const homing = agent.homing;
     if (homing && !reduced && at < homing.start + homing.ms) {
@@ -780,7 +821,10 @@ export function nextChangeAt(model: RoomModel, at: number): number {
     if (agent.roam) {
       // The round changes step (a walk, a sweep) by itself, and the walk home ends.
       const office = officeOf(model.layout, agent.key);
-      if (agent.running && office) consider(agent.roamSince + tourPose(tourOf(model.layout, office), at - agent.roamSince).stepEnd);
+      if ((agent.running || agent.roamAlways) && office) {
+        const origin = roundOrigin(agent);
+        consider(origin + tourPose(tourOf(model.layout, office), at - origin).stepEnd);
+      }
       if (agent.homing) consider(agent.homing.start + agent.homing.ms);
     }
     consider(agent.typingUntil);

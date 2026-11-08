@@ -176,6 +176,13 @@ export const OFFICE_CELLS = [6, 6];
 /** The states of the hub's dynamic objects drawn once and for all in the office; `pile` and `mail` follow the counts. */
 const OFFICE_FIXED = { postits: 3, newspaper: true, phone: false, calendar: -1 };
 const OFFICE_LIVE = ["pile", "mail"];
+/**
+ * The hub's chair, pushed in to the desk in the office so that someone seated
+ * in it (`floor.owner` of myhq.json) types on the keyboard: its seat centre is
+ * OFFICE_SEAT of src/ui/floor-plan.ts, 9 voxels from the desk like the floor's
+ * chairs, its seat one voxel above SEAT_TOP.
+ */
+const OFFICE_CHAIR_AT = [30, 29, 1];
 
 /**
  * The user's own office: the hub's scene (the same props, at the same places
@@ -185,6 +192,9 @@ const OFFICE_LIVE = ["pile", "mail"];
  * room with everything that does not change; `states.pile[n]` and
  * `states.mail[n]` are drawn over it for n items (null: nothing to add), with
  * the pile's masks (slot k: the spine of folder k, tinted with its room).
+ * `chair` is for someone seated in the office: `seat`, where a sitter's
+ * anchor goes (from the anchor, facing NE), and `over`, the chair's back and
+ * armrests as the scene shows them, drawn over the sitter.
  */
 function buildOffice() {
   const [w, d] = OFFICE_CELLS.map((c) => c * F.CELL);
@@ -198,10 +208,16 @@ function buildOffice() {
   };
   if (w !== d) throw new Error("the hub's room is square");
   const lights = hubLights();
-  const world = (extra = []) => {
+  const world = (extra = [], splitChair = false) => {
     const out = new World();
     const ids = {};
-    for (const [name, prop, at, options = {}, more = {}] of HUB_STATIC) {
+    for (const [name, prop, hubAt, options = {}, more = {}] of HUB_STATIC) {
+      const at = name === "chair" ? OFFICE_CHAIR_AT : hubAt;
+      if (name === "chair" && splitChair) {
+        ids.chair = out.add("chair", at, (b) => prop(b, { ...options, part: "seat" }), more).id;
+        ids["chair-back"] = out.add("chair-back", at, (b) => prop(b, { ...options, part: "back" }), more).id;
+        continue;
+      }
       ids[name] = out.add(name, at, name === "room" ? roomBuild : (b) => prop(b, options), more).id;
     }
     for (const object of HUB_DYNAMIC) {
@@ -219,6 +235,13 @@ function buildOffice() {
   };
   const whole = fromRender(base);
   const json = { cells: OFFICE_CELLS, sprite: addFrame(place(whole.sprite)), states: {} };
+  // The chair's back as the whole scene shows it (what is in front of it hides it), to draw over a sitter.
+  const split = world([], true);
+  const r = render(split.w, { ...lights, frame });
+  const back = fromRender(r, (i) => r.owner[i] === split.ids["chair-back"]);
+  // The seat centre on the ground, raised by the voxel its cushion stands above SEAT_TOP (2 px).
+  const [sx, sy] = [OFFICE_CHAIR_AT[0] + 8, OFFICE_CHAIR_AT[1] + 8];
+  json.chair = { seat: [2 * (sx - sy), sx + sy - 2], over: addFrame(place(back.sprite)) };
   for (const name of OFFICE_LIVE) {
     const object = HUB_DYNAMIC.find((each) => each.name === name);
     json.states[name] = Object.values(object.states).map((value) => {

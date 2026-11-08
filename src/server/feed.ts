@@ -13,11 +13,11 @@ import type {
   RunRow,
   RunStatus,
 } from "./db";
-import { NOTIFICATION_NOTE, readFloorLayout, readReceptionRoom } from "./home-settings";
+import { NOTIFICATION_NOTE, readFloorLayout, readFloorOwner, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, toRoutineDto, type FiringDto, type RoutineDto } from "./routines";
 import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
-import { isoSpriteUrl, isoStrideOf, receptionSpriteUrl, spriteUrl } from "./sprites";
+import { isoSpriteUrl, isoStrideOf, ownerSpriteUrl, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { logoUrl } from "./logos";
 import type { FloorLayoutMode } from "../ui/floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
@@ -246,6 +246,8 @@ export type StateDto = {
       isoStride: number | null;
       /** It roams the single floor with a broom instead of sitting at a desk (room.json `floor.behaviour`). */
       roam: boolean;
+      /** Its round goes on between its runs too (room.json `floor.always`). */
+      roamAlways: boolean;
       /** Armed state of the routines (the database value, or room.json's until changed). */
       armed: boolean;
       routines: RoutineDto[];
@@ -265,7 +267,14 @@ export type StateDto = {
    */
   reception: { room: string | null; sprite: string | null; runs: RunDto[] };
   /** How the floor draws the home (myhq.json `floor.layout`): a floor per room, or one floor with a room per project. */
-  floor: { layout: FloorLayoutMode };
+  floor: {
+    layout: FloorLayoutMode;
+    /**
+     * The person seated in the user's own office of the single floor (myhq.json `floor.owner`): their name, and
+     * the URL of their iso sheet, or null for a neutral person. Null: the office stays empty.
+     */
+    owner: { name: string; isoSprite: string | null } | null;
+  };
   scheduler: SchedulerInfo;
   firings: FiringDto[];
   /** `pending` waits for a decision, `unseen` (« À regarder ») for a look, `history` is the rest. */
@@ -289,6 +298,16 @@ function floorLayoutOf(home: string): FloorLayoutMode {
   if (error !== null && error !== floorError) console.error(`[floor] ${error}, using ${layout}`);
   floorError = error;
   return layout;
+}
+
+/** The last reason `floor.owner` of myhq.json was refused, logged once. */
+let ownerError: string | null = null;
+
+function floorOwnerOf(home: string): StateDto["floor"]["owner"] {
+  const { owner, error } = readFloorOwner(home);
+  if (error !== null && error !== ownerError) console.error(`[floor] ${error}, the office stays empty`);
+  ownerError = error;
+  return owner ? { name: owner.name, isoSprite: ownerSpriteUrl(owner) } : null;
 }
 
 /**
@@ -332,6 +351,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           isoSprite: isoSpriteUrl(room.name, agent),
           isoStride: isoStrideOf(agent),
           roam: agent.roam ?? false,
+          roamAlways: agent.roamAlways ?? false,
           armed: isArmed(db, room.name, agent),
           routines: agent.routines.map((routine) => toRoutineDto(routine, at, scheduler.timeZone)),
           state,
@@ -354,7 +374,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           .all(RECEPTION_ROOM, RECEPTION_AGENT, RECEPTION_RUNS) as RunRow[]
       ).map(toRun),
     },
-    floor: { layout: floorLayoutOf(home.root) },
+    floor: { layout: floorLayoutOf(home.root), owner: floorOwnerOf(home.root) },
     scheduler,
     firings: listFirings(db, 50),
     approvals: {

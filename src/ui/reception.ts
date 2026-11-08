@@ -10,6 +10,13 @@ export const RECEPTION_ROOM = "_hq";
 export const RECEPTION_AGENT = "onboarding";
 /** Key (`room/agent`) of the receptionist in the room model, the strip and the canvas. */
 export const RECEPTION_KEY = `${RECEPTION_ROOM}/${RECEPTION_AGENT}`;
+/**
+ * The owner of the floor seated in the user's own office (`floor.owner` of
+ * myhq.json): no agent, it belongs to the reserved room too, so no room of the
+ * home can take its key nor its sheet's URL.
+ */
+export const OWNER_AGENT = "owner";
+export const OWNER_KEY = `${RECEPTION_ROOM}/${OWNER_AGENT}`;
 /** The room that gets the reception when the home does not say, if it exists. */
 export const DEFAULT_RECEPTION_ROOM = "assistant";
 

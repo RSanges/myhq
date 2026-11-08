@@ -338,7 +338,8 @@ character of the same set. MyHQ ships four neutral people
 (`public/sprites/iso-person-blue.png`, `-green`, `-mustard`, `-grey`, one
 picked per agent from its key) and the receptionist
 (`public/sprites/iso-receptionist.png`); a home can give an agent its own
-with `isoSprite`. The sheet is served by
+with `isoSprite`, and seat someone of its own in the user's office with
+`floor.owner` of `myhq.json` (see "The owner of the floor" below). The sheet is served by
 `GET /api/sprites/<room>/<agent>?sheet=iso`, from the path in the validated
 `room.json` only. The format is the one of `scripts/iso/README.md`
 (section "Characters"), which also builds the shipped sheets and can draw a
@@ -393,6 +394,17 @@ for typing (`scripts/iso/README.md`, "Characters"); a home that gives it its
 own sheet draws that row so. The round only exists on the single floor: the
 floor of one room (`floor-per-project`) has no closet, so a roaming agent is
 listed in the strip without being drawn there.
+
+With `"floor": { "behaviour": "roam", "always": true }` (`always` only goes with
+`roam`) the round never stops: between its runs too the agent walks it, and
+the place on it is a pure function of the clock, counted from a fixed origin
+(the epoch), so every client and every reload draws it at the same spot, run
+or not. A run changes its status, never where it is, and its end sends it
+nowhere: there is no walk back to the closet. Between its runs its status
+says « fait sa ronde, hors tour » and the strip lists it with the agents at
+rest (no turn is in progress; it is drawn on its round all the same). With
+reduced motion nothing changes from the plain `roam`: it stays by the closet,
+then falls asleep.
 
 #### Run options: `effort`, `modelFor`, `prepare` and `cacheTtl`
 
@@ -899,7 +911,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
   "language": "fr",
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
   "reception": { "room": "assistant" },
-  "floor": { "layout": "room-per-project" },
+  "floor": { "layout": "room-per-project", "owner": { "name": "Ada", "isoSprite": "sprites/iso-ada.png" } },
   "scheduler": true,
   "timeZone": "Europe/Paris",
   "maxRunsPerDay": 12,
@@ -924,6 +936,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
 | `reception.room` | no | The floor (`/`) that draws the reception desk and the receptionist, the onboarding agent (see `architecture.md`, section 7). Only that floor has the counter in its lobby, the receptionist's chip in the strip under the floor and its sheet (with the « Ajouter une salle » form and the recent onboarding runs); the others keep a plain lobby. Default: the room called `assistant` when the home has one, otherwise the first room. A name that is not a room of the home falls back to the default. |
 | `floor.layout` | no | How the floor, the home page `/`, draws the home (see `architecture.md`, section 7). `"floor-per-project"` (the default): a floor per room of the home, chosen with the buttons at the top, each a template of offices, a lobby with your desk and the tray, a meeting room and a kitchen. `"room-per-project"`: one floor for the whole home, where each room is a suite of its own (its walls, its workstations sized from its number of agents, a coffee nook for a big team, a counter beside its name of what that room waits for: a click opens « À signer » filtered to the room), around corridors that start at the lobby, the entrance at the front (a main corridor, a spine, ribs branching off it), your own office beside the lobby, the desk's scene itself (a click opens the desk, `/bureau`), a signboard with its name (and its `logo`) on each room, a garden between the rooms; the floor pans and zooms by whole steps, and a click on a room or its button at the top flies the view to it. Read apart from the rest of the file: a missing or invalid `floor` (an unknown layout) falls back to the default, with the reason in the log, and leaves every other setting as it is. |
+| `floor.owner` | no | Someone seated in the user's own office of the single floor: `{ "name", "isoSprite" }` (see "The owner of the floor" below). Read apart from the rest of the file and from `floor.layout`: an invalid owner leaves the office empty, with the reason in the log. Default: none, the office stays empty. |
 | `catalog.dirs` | no | Extra read-only folders of the technology catalogue the receptionist bases an agent proposal on (`architecture.md`, "Proposing a missing agent"), relative to the home or absolute, 20 at most. Besides the target repositories of the rooms, which are always in it, each folder is summarized in the run prompt (its own `package.json`, `pyproject.toml` and README, then each top-level Markdown note with its YAML frontmatter, for example notes whose `stack:` lists the technologies you use) and given to the run as `--add-dir`, read-only. A folder that does not exist is named as missing. Read apart from the rest of the file: an invalid `catalog` gives no extra folder, with the reason in the log, and leaves every other setting as it is. Default: none. |
 | `projectsRoot` | no | The folder the explorer behind « Parcourir » of the « Ajouter une salle » form is limited to (`GET /api/fs/dirs`, see `api.md`), relative to the home or absolute. Nothing outside it can be listed (`..`, an absolute path or a link that leaves it is refused), and it only shows folders. Default: the parent folder of the home, where the repositories are usually kept next to it. Read apart from the rest of the file: an invalid value (not a non-empty string) falls back to the default, with the reason in the log, and leaves every other setting as it is; a folder that does not exist makes the explorer answer `ROOT_NOT_FOUND`, and the form still takes a typed path. |
 | `scheduler` | no | `true` or `false`: whether the routines of `room.json` start runs on their own. When the key is set it wins over `HQ_SCHEDULER`; without it the variable applies (default off). See "Settings that also exist as environment variables" below. |
@@ -939,6 +952,31 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
 log (and every item keeps the pending flow).
+
+### The owner of the floor (`floor.owner`)
+
+```json
+{ "floor": { "layout": "room-per-project", "owner": { "name": "Ada", "isoSprite": "sprites/iso-ada.png" } } }
+```
+
+The single floor (`room-per-project`) draws the user's own office, the hub's
+scene, empty by default. With `floor.owner` a character sits in its chair,
+facing the desk, its `name` (1 to 40 characters) over its head like the
+agents'. `isoSprite` is an iso character sheet in the format of "Character
+sheets" above, relative to the home (`.png` or `.webp`); left out, or a file
+that does not exist, a neutral person is drawn. It is served by
+`GET /api/sprites/_hq/owner?sheet=iso`, from this setting only, with the
+guards of the agents' sheets (inside the home once links are resolved, 2 MiB at
+most, really a PNG or a WebP; a sheet of the wrong size is drawn as a neutral
+person).
+
+The owner is no agent: no runs, no strip entry, no sheet of its own. It types
+on the keyboard (the `type` row) while a turn of the chat (the assistant's
+conversation, `assistant.json`) is in progress, from any channel, and sits
+quietly otherwise, held on the first typing frame like an agent seated between
+two tool calls; it never falls asleep. A click on it opens the « Discuter »
+panel. The floor of one room (`floor-per-project`) has no such office: its
+desk in the lobby stays empty.
 
 ### Settings that also exist as environment variables
 

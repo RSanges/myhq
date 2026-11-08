@@ -55,6 +55,9 @@ export const screenOf = (x: number, y: number, z = 0): Point => ({ x: 2 * (x - y
 /** The centre of a cell, in voxels. */
 export const centreOf = ([cx, cy]: Cell): Point => ({ x: (cx + 0.5) * CELL, y: (cy + 0.5) * CELL });
 
+/** The `chair` of an office whose chair is the one of the user's own office (`office.chair` of floor.json), not a piece. */
+export const OFFICE_CHAIR = -1;
+
 /** A piece of furniture placed on the floor: its name in floor.json, its turn, its first cell (absolute). */
 export type Piece = { name: string; turn: number; cell: Cell; room: number };
 
@@ -99,7 +102,10 @@ export type Office = {
   key: string;
   /** Index of its room in `rooms`. */
   room: number;
-  /** Index in `pieces` of the desk chair the agent sits in, or null for a spot where it stands (the receptionist). */
+  /**
+   * Index in `pieces` of the desk chair the agent sits in, OFFICE_CHAIR for the chair of the user's own office
+   * (part of its scene, not a piece), or null for a spot where it stands (the receptionist).
+   */
   chair: number | null;
   /** Where the character is when at its desk: the centre of its chair's cell (voxels). */
   seat: Point;
@@ -301,6 +307,11 @@ export type BuildRoom = {
   closet?: { at: Cell; turn: 0 | 1; rest: Cell[]; faces: Direction; keys: string[] };
   /** A signboard on its back wall (single floor). */
   sign?: boolean;
+  /**
+   * Someone seated in the chair of the user's own office (single floor, `floor.owner` of myhq.json): their key,
+   * the seat in voxels from the room's back corner, the way they face, and the aisle cell they would get up to.
+   */
+  seat?: { key: string; at: Point; faces: Direction; stand: Cell };
 };
 
 /** A floor to assemble: its rooms, the hall around them (cells) and the lanes of the hall (absolute cells). */
@@ -393,6 +404,12 @@ export function assembleLayout(floor: BuildFloor, options: LayoutOptions = {}): 
     }
     if (build.counter && options.reception) placeCounter(spec, index, build.counter);
     if (build.office) office = { room: index };
+    if (build.seat) {
+      const { key, at, faces } = build.seat;
+      const stand = centreOf(add(spec, build.seat.stand));
+      stands.push(stand);
+      offices.push({ key, room: index, chair: OFFICE_CHAIR, seat: { x: spec.x * CELL + at.x, y: spec.y * CELL + at.y }, faces, stand });
+    }
     if (spec.lobby) {
       const { user: own, tray, reception: counter, instead } = spec.lobby;
       const desk = placeDesk(spec, index, own);

@@ -117,6 +117,8 @@ export const agentSchema = z.object({
   isoStride: z.number().int().positive().nullable().optional(),
   /** It roams the single floor (room.json `floor.behaviour: "roam"`); absent from an older server: false. */
   roam: z.boolean().optional(),
+  /** Its round goes on between its runs too (room.json `floor.always`); absent from an older server: false. */
+  roamAlways: z.boolean().optional(),
   armed: z.boolean().default(false),
   routines: z.array(routineSchema).default([]),
   /** Shared resources its runs hold (room.json `resources`). */
@@ -146,7 +148,11 @@ const schedulerOff = { enabled: false, running: false, timeZone: "UTC" };
 export const receptionSchema = z.object({ room: z.string().nullable(), sprite: z.string().nullable(), runs: z.array(runSchema) });
 
 /** How /room draws the home; an unknown layout (a newer server) falls back to the default. */
-export const floorSchema = z.object({ layout: z.enum(FLOOR_LAYOUTS).catch(DEFAULT_FLOOR_LAYOUT) });
+export const floorSchema = z.object({
+  layout: z.enum(FLOOR_LAYOUTS).catch(DEFAULT_FLOOR_LAYOUT),
+  /** The person seated in the user's own office (myhq.json `floor.owner`); absent from an older server: none. */
+  owner: z.object({ name: z.string(), isoSprite: z.string().nullable() }).nullable().default(null),
+});
 
 export const stateSchema = z.object({
   cursor: z.number().int(),
@@ -155,7 +161,7 @@ export const stateSchema = z.object({
   ),
   invalidRooms: z.array(z.object({ room: z.string(), error: z.string() })),
   reception: receptionSchema.default({ room: null, sprite: null, runs: [] }),
-  floor: floorSchema.default({ layout: DEFAULT_FLOOR_LAYOUT }),
+  floor: floorSchema.default({ layout: DEFAULT_FLOOR_LAYOUT, owner: null }),
   scheduler: schedulerSchema.default(schedulerOff),
   firings: z.array(firingSchema).default([]),
   approvals: z.object({

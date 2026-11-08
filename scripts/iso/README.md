@@ -162,7 +162,7 @@ floor.json
   }
   sign: { end, segment, post, bottom, top, period: [dx, dy], left, middle, right }
   font: { height, spacing, glyphs: { <char>: [rows of "#" and "."] } }
-  office: { cells: [w, d], sprite, states: { pile: [state], mail: [state] } }
+  office: { cells: [w, d], sprite, states: { pile: [state], mail: [state] }, chair: { seat: [dx, dy], over } }
     state: { sprite, masks: [{ frame, mode, slot }] } | null
 ```
 
@@ -206,7 +206,8 @@ floor.json
 
 - **The user's own office** (`office`): the hub's scene (`build-hub.mjs`
   exports its `STATIC` and `DYNAMIC` props and its `lights()`; the same props
-  at the same places from the back corner) rendered in a room of `cells`
+  at the same places from the back corner, but the chair pushed in to the desk,
+  `OFFICE_CHAIR_AT`) rendered in a room of `cells`
   (6 x 6, the office of the single floor) with the floor's wall height, its
   floor a voxel thick and ending at the room's edges. `sprite` is the whole
   room (floor, back walls, window, furniture, post-its, phone, newspaper,
@@ -215,7 +216,12 @@ floor.json
   post-its (3), the newspaper and the calendar are drawn once and for all;
   `states.pile[n]` (n from 0 to 14, a folder per item, mask slot k: folder k)
   and `states.mail[n]` (0 to 5 letters) are the hub's states, the pixels that
-  change over `sprite`, drawn over it.
+  change over `sprite`, drawn over it. `chair` seats someone (`floor.owner`
+  of a home's `myhq.json`): `seat` is where the sitter's anchor goes, from the
+  same corner (the seat centre on the ground, raised 2 px since the hub chair's
+  cushion is a voxel above `seatTop`; the sitter faces `NE`, the desk), and
+  `over` the chair's back and armrests as the scene shows them, drawn over the
+  sitter.
 
 ## Signboards and their font (in `floor.json`)
 
@@ -292,6 +298,19 @@ rig)` takes a `rig` to place the hands and draw what they hold (the
 janitor's broom and bucket); `poseOf()` gives the shared poses, `renderSheet()` turns the model per direction and
 packs the sheet, `sheetFormat()` gives the JSON. A private home can draw its
 own model (a mascot) with the same rig and format by importing these files.
+
+`human(look)` also draws a few faces, none of them used by the shipped
+sheets: `hairStyle: "side-part"` (short at the back and sides, a quiff on top
+swept to the +x side, a voxel more forehead), `brows` (`true` for the hair's
+colour, or a material), `eyes` (a material, ink by default), `beard` (a
+material: a full beard, the chin under the mouth, the jaw higher towards the
+sides, sideburns at the back of the cheeks up to the hair, a little wider than
+the head and down over the collar; the front of the cheeks stays bare) and
+`moustache` (`{ style, colour }`: `"plain"`, or `"handlebar"`, whose wings
+sweep past the cheeks and curl up beside the eyes, so that it reads from the
+front, in profile and even from behind; `colour` defaults to the beard's, then
+the hair's; a shade darker than the beard reads best). They stay within the
+frame of the other characters.
 
 ## Files
 

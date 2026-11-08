@@ -67,12 +67,15 @@ export type OfficeState = z.infer<typeof officeStateSchema>;
 /**
  * The user's own office of the single floor: the hub's scene as one sprite
  * from the room's back corner, and the states of its pile and letter tray
- * (index n: n items), drawn over it.
+ * (index n: n items), drawn over it. `chair`: where a sitter's anchor goes
+ * (the ground under its seat, from the room's back corner, facing `NE`) and
+ * the chair's back, drawn over the sitter.
  */
 const officeSchema = z.object({
   cells: z.tuple([z.number().int().positive(), z.number().int().positive()]),
   sprite: refSchema,
   states: z.object({ pile: z.array(officeStateSchema).min(1), mail: z.array(officeStateSchema).min(1) }),
+  chair: z.object({ seat: z.tuple([z.number(), z.number()]), over: refSchema }),
 });
 export type OfficeArt = z.infer<typeof officeSchema>;
 

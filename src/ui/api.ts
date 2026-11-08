@@ -24,6 +24,7 @@ import {
   usageSchema,
   type Approval,
   type ChatReply,
+  type ChatTurn,
   type Desk,
   type DirListing,
   type Run,
@@ -137,6 +138,9 @@ export const fetchDirs = (path: string): Promise<DirListing> =>
   request(`/api/fs/dirs?path=${encodeURIComponent(path)}`, dirListingSchema);
 
 export const fetchChatHistory = () => request("/api/chat/history?limit=50", chatHistorySchema);
+
+/** Whether a turn of the chat is in progress (the floor's owner types meanwhile), with the least of the history. */
+export const fetchChatTurn = async (): Promise<ChatTurn> => (await request("/api/chat/history?limit=1", chatHistorySchema)).turn;
 
 /** Says something to the chat, or, with `to`, gives a task to an agent. */
 export const sendChat = (text: string, to?: { room: string; agent: string }): Promise<ChatReply> =>

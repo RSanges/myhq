@@ -110,8 +110,59 @@ export function readReceptionSprite(home: string): string | null {
   }
 }
 
-/** The `floor` block of myhq.json: how /room draws the home. */
-export const floorSettingsSchema = z.strictObject({ layout: z.enum(FLOOR_LAYOUTS).default(DEFAULT_FLOOR_LAYOUT) });
+/**
+ * The `floor` block of myhq.json: how /room draws the home. `owner` is read
+ * apart (`readFloorOwner`), so that a wrong one never changes the layout.
+ */
+export const floorSettingsSchema = z.strictObject({
+  layout: z.enum(FLOOR_LAYOUTS).default(DEFAULT_FLOOR_LAYOUT),
+  owner: z.unknown().optional(),
+});
+
+/**
+ * `floor.owner` of myhq.json: the person seated in the user's own office of
+ * the single floor, their name over the head and their iso character sheet
+ * (relative to the home, .png or .webp; a neutral person when left out).
+ */
+export const floorOwnerSchema = z.strictObject({
+  name: z.string().trim().min(1).max(40),
+  isoSprite: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => !path.posix.isAbsolute(value) && !path.win32.isAbsolute(value), "must be relative to the home")
+    .refine((value) => [".png", ".webp"].includes(path.extname(value).toLowerCase()), "must be a .png or .webp file")
+    .optional(),
+});
+
+/** The owner of the floor, `isoSprite` resolved against the home (absolute), null for none. */
+export type FloorOwner = { name: string; isoSprite: string | null };
+
+/**
+ * `floor.owner` of myhq.json, null when the file, the block or the key is
+ * absent. Read apart from the rest of the file and from `floor.layout`: an
+ * invalid owner leaves the office empty, with the reason. Never throws.
+ */
+export function readFloorOwner(home: string): { owner: FloorOwner | null; error: string | null } {
+  const file = path.join(home, "myhq.json");
+  let raw: unknown;
+  try {
+    if (!fs.existsSync(file)) return { owner: null, error: null };
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    return { owner: null, error: `myhq.json is not valid JSON: ${(error as Error).message}` };
+  }
+  const floor = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).floor : undefined;
+  const block = typeof floor === "object" && floor !== null ? (floor as Record<string, unknown>).owner : undefined;
+  if (block === undefined) return { owner: null, error: null };
+  const parsed = floorOwnerSchema.safeParse(block);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `floor.owner.${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return { owner: null, error: `myhq.json: ${details}` };
+  }
+  const { name, isoSprite } = parsed.data;
+  return { owner: { name, isoSprite: isoSprite ? path.resolve(home, isoSprite) : null }, error: null };
+}
 
 /**
  * The `floor.layout` of myhq.json, the default when the file or the key is

@@ -469,7 +469,7 @@ test("the desk model keeps the three lists apart, and an SSE update moves an ite
     createdAt: "2026-11-04T08:00:00.000Z", ...over,
   });
   const state = {
-    cursor: 1, rooms: [], invalidRooms: [], reception: { room: null, sprite: null, runs: [] }, floor: { layout: "floor-per-project" as const },
+    cursor: 1, rooms: [], invalidRooms: [], reception: { room: null, sprite: null, runs: [] }, floor: { layout: "floor-per-project" as const, owner: null },
     scheduler: { enabled: false, running: false, timeZone: "UTC" }, firings: [],
     approvals: {
       pending: [base({ id: 3, type: "mail_reply", status: "pending", informational: false })],

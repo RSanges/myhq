@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { isInside, type HqConfig } from "./config";
 import { HqError } from "./errors";
-import { readReceptionSprite } from "./home-settings";
+import { readFloorOwner, readReceptionSprite, type FloorOwner } from "./home-settings";
 import { loadHome, SPRITE_EXTENSIONS, type Agent } from "./rooms";
-import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
+import { OWNER_AGENT, RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** A character sheet is a few tens of kilobytes; anything bigger is not one. */
 export const SPRITE_MAX_BYTES = 2 * 1024 * 1024;
@@ -78,6 +78,11 @@ export function receptionSpriteUrl(home: string): string | null {
   return `/api/sprites/${RECEPTION_ROOM}/${RECEPTION_AGENT}`;
 }
 
+/** URL of the iso sheet of the owner of the floor (`floor.owner.isoSprite` of myhq.json) when it is set and the file exists, otherwise null (a neutral person). */
+export function ownerSpriteUrl(owner: FloorOwner | null): string | null {
+  return isFile(owner?.isoSprite ?? null) ? `/api/sprites/${RECEPTION_ROOM}/${OWNER_AGENT}?sheet=iso` : null;
+}
+
 function notFound(message: string): HqError {
   return new HqError("SPRITE_NOT_FOUND", 404, message);
 }
@@ -102,6 +107,9 @@ export function spriteResponse(
   if (roomName === RECEPTION_ROOM && agentId === RECEPTION_AGENT && kind === "sprite") {
     // The receptionist belongs to no room: its sheet is declared in myhq.json.
     declared = readReceptionSprite(config.home);
+  } else if (roomName === RECEPTION_ROOM && agentId === OWNER_AGENT && kind === "iso") {
+    // The owner of the floor belongs to no room either: `floor.owner` of myhq.json.
+    declared = readFloorOwner(config.home).owner?.isoSprite ?? null;
   } else {
     const room = home.rooms.find((candidate) => candidate.name === roomName);
     if (!room) {

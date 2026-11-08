@@ -20,7 +20,19 @@ import {
 } from "./iso-floor";
 import { focusZoom } from "./floor-view";
 import type { LabelLayer } from "./room-labels";
-import { CELL, COUNTER_FROM, COUNTER_SEGMENTS, roomOfKey, screenOf, SIGN_TOP, WALL_HEIGHT, type Point, type RoomLayout } from "./room-layout";
+import {
+  CELL,
+  COUNTER_FROM,
+  COUNTER_SEGMENTS,
+  OFFICE_CHAIR,
+  officeOf,
+  roomOfKey,
+  screenOf,
+  SIGN_TOP,
+  WALL_HEIGHT,
+  type Point,
+  type RoomLayout,
+} from "./room-layout";
 import { faceColumns, faceWidth, inkFor, LOGO_MARGIN, paintFace, placeSign, planSign, shrinkLogo, textWidth, type Pixels } from "./room-signs";
 import { VOXELS_PER_STEP, walkFrame, type AgentView, type RoomView } from "./room-model";
 import { RECEPTION_KEY } from "./reception";
@@ -524,7 +536,16 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       const mail = new Container();
       officeItem.node.addChild(pile, mail);
       const room = next.rooms[next.office.room]!;
-      officeLive = { pile, mail, corner: screenOf(room.x * CELL, room.y * CELL), drawn: { pile: "", mail: "" } };
+      const corner = screenOf(room.x * CELL, room.y * CELL);
+      officeLive = { pile, mail, corner, drawn: { pile: "", mail: "" } };
+      if (next.offices.some((office) => office.chair === OFFICE_CHAIR)) {
+        // Someone sits in the office's chair (`floor.owner`): over the scene and its desk, under the chair's back.
+        const { seat, over: back } = floorSet.office.chair;
+        const slot = new Container();
+        const over = [spriteOf({ frame: back[0], x: corner.x + back[1], y: corner.y + back[2], tint: null, room: -1 })];
+        officeItem.node.addChild(slot, ...over);
+        chairs.set(OFFICE_CHAIR, { group: officeItem.node, empty: [], under: [], over, slot, seat: { x: corner.x + seat[0], y: corner.y + seat[1] } });
+      }
     }
     // The depth order of the walls and furniture, once for this floor: characters are slotted in between (moverDepths).
     staticRanks = new Array<number>(staticItems.length);
@@ -941,7 +962,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       const occupied = new Map<number, AgentView>();
       for (const agent of view.agents) {
         if (!agent.seated) continue;
-        const office = agent.key === RECEPTION_KEY ? current.reception?.office : current.offices.find((spot) => spot.key === agent.key);
+        const office = officeOf(current, agent.key);
         if (office && office.chair !== null) occupied.set(office.chair, agent);
       }
       for (const [index, chair] of chairs) {
@@ -954,7 +975,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       for (const agent of view.agents) {
         const node = nodeFor(agent.key);
         const sheet = sheetFor(agent.key);
-        const office = agent.key === RECEPTION_KEY ? current.reception?.office : current.offices.find((spot) => spot.key === agent.key);
+        const office = officeOf(current, agent.key);
         const chair = agent.seated && office && office.chair !== null ? chairs.get(office.chair) : undefined;
         const feet = chair ? chair.seat : screenOf(agent.x, agent.y);
         node.feet = { x: Math.round(feet.x), y: Math.round(feet.y) };

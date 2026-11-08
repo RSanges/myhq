@@ -571,6 +571,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       sweeping: "balaie",
       stowing: "retourne au placard",
       closet: "au placard",
+      patrolling: "fait sa ronde, hors tour",
     },
     /** Said by the screen reader when the coarse state of an agent changes. */
     announce: {
@@ -579,6 +580,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       visiting: (name: string, target: string) => `${name} va voir ${target}.`,
       carrying: (name: string) => `${name} apporte un item à valider.`,
       stuck: (name: string) => `${name} est bloqué.`,
+      patrolling: (name: string) => `${name} fait sa ronde.`,
     },
     /** The user's own desk on the floor (the tag over it, the signboard of the user's office): it opens the desk. */
     userDesk: "Votre bureau",

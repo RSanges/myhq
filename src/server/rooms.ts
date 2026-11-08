@@ -101,9 +101,16 @@ export const agentSchema = z.strictObject({
   /**
    * How the agent lives on the single floor: "desk" (the default) sits at a desk of its room; "roam" has no
    * desk: during its runs it walks the corridors and the rooms and stops to sweep, otherwise it rests by the
-   * broom closet of the lobby (the janitor).
+   * broom closet of the lobby (the janitor). `always` (with "roam" only) keeps the round going between its
+   * runs too.
    */
-  floor: z.strictObject({ behaviour: z.enum(["desk", "roam"]) }).optional(),
+  floor: z
+    .strictObject({ behaviour: z.enum(["desk", "roam"]), always: z.boolean().optional() })
+    .refine((floor) => floor.always !== true || floor.behaviour === "roam", {
+      message: 'always only applies to behaviour "roam"',
+      path: ["always"],
+    })
+    .optional(),
   /**
    * "task": approving one of its items gives the agent a task to execute it, and wakes it
    * (the default: left out, an approval gives it no task). "queue": the task is created
@@ -211,6 +218,8 @@ export type Agent = {
   isoSprite: string | null;
   /** It roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`); false for most agents. */
   roam?: boolean;
+  /** Its round goes on between its runs too (room.json `floor.always`, with `behaviour: "roam"`). */
+  roamAlways?: boolean;
   /**
    * "task": an approved item becomes a task for the agent, and wakes it; "queue": the task waits; "command":
    * MyHQ runs `approvalCommand` (see approvals.ts); null: no task (see wakeAgents).
@@ -370,6 +379,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       sprite,
       isoSprite,
       roam: agent.floor?.behaviour === "roam",
+      roamAlways: agent.floor?.behaviour === "roam" && agent.floor.always === true,
       onApproval: agent.onApproval ?? null,
       onMessage: agent.onMessage ?? null,
       onRevise: agent.onRevise ?? null,

@@ -7,9 +7,10 @@ import { getState } from "../src/server/feed";
 import { loadHome } from "../src/server/rooms";
 import { layoutFloor } from "../src/ui/floor-plan";
 import { floorSetSchema, JANITOR_SHEET } from "../src/ui/iso-floor";
-import { buildTour, HALL_SWEEP_MS, ROOM_SWEEP_MS, tourPose } from "../src/ui/roam";
+import { groupOf } from "../src/ui/agent-groups";
+import { buildTour, HALL_SWEEP_MS, ROAM_ORIGIN, ROOM_SWEEP_MS, tourPose } from "../src/ui/roam";
 import { CELL, officeOf, type Point, type RoomLayout } from "../src/ui/room-layout";
-import { applyInput, createRoomModel, FLOOR_MODEL, snapshotRoom, type AgentSeed, type RoomInput, type RunSeed } from "../src/ui/room-model";
+import { applyInput, ASLEEP_AFTER_MS, createRoomModel, FLOOR_MODEL, snapshotRoom, type AgentSeed, type RoomInput, type RoomModel, type RunSeed } from "../src/ui/room-model";
 import type { HqEvent } from "../src/ui/schemas";
 import { makeHome } from "./helpers";
 
@@ -193,4 +194,67 @@ test("a roaming agent runs no errands: a message or an item it sends is not walk
   assert.deepEqual(janitor.trips, []);
   const view = snapshotRoom(model, T0 + 30, false).agents.find((agent) => agent.key === JANITOR)!;
   assert.ok(view.status.kind === "roaming" || view.status.kind === "sweeping");
+});
+
+// `floor.always`: the round goes on between the runs too, on a clock anchored at ROAM_ORIGIN.
+const hydrateAlways = (lastRun: RunSeed | null = null): RoomInput => {
+  const input = hydrate(lastRun);
+  if (input.type !== "hydrate-floor") throw new Error("hydrate-floor expected");
+  return {
+    ...input,
+    rooms: input.rooms.map((room) => ({ ...room, agents: room.agents.map((agent) => (agent.roam ? { ...agent, roamAlways: true } : agent)) })),
+  };
+};
+
+test("room.json floor.always: roam only, and the state says which agents are always on their round", () => {
+  const agent = { id: "janitor", name: "Janitor", role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] };
+  const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [{ ...agent, floor: { behaviour: "roam", always: true } }, { ...agent, id: "dev", name: "Dev", floor: { behaviour: "roam" } }] });
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  assert.deepEqual(home.rooms[0]!.agents.map((each) => each.roamAlways), [true, false]);
+  const state = getState(getDbAt(config.dbPath), home, { enabled: false, running: false, timeZone: "Europe/Paris" });
+  assert.deepEqual(state.rooms[0]!.agents.map((each) => each.roamAlways), [true, false]);
+  const bad = makeHome({}, { name: "demo", targetRepo: "x", agents: [{ ...agent, floor: { behaviour: "desk", always: true } }] });
+  assert.match(loadHome(bad.home).invalid[0]!.error, /always/);
+});
+
+test("always on its round: between its runs too, the same place for every client, its status patrolling; reduced motion keeps it by the closet", () => {
+  // Two clients that loaded the floor at different times draw it at the same place.
+  const a = applyInput(createRoomModel(FLOOR_MODEL), hydrateAlways(), T0);
+  const b = applyInput(createRoomModel(FLOOR_MODEL), hydrateAlways(), T0 + 3_600_000);
+  const spot = officeOf(a.layout, JANITOR)!;
+  const tour = buildTour(a.layout, spot);
+  const view = (model: RoomModel, at: number, reduced = false) => snapshotRoom(model, at, reduced).agents.find((agent) => agent.key === JANITOR)!;
+  let moved = false;
+  for (let t = 0; t < tour.loopMs; t += 500) {
+    const at = T0 + 7_200_000 + t;
+    const one = view(a, at);
+    const other = view(b, at);
+    assert.deepEqual([one.x, one.y, one.direction, one.pose], [other.x, other.y, other.direction, other.pose]);
+    const { x, y, sweeping } = tourPose(tour, at - ROAM_ORIGIN, spot.faces);
+    assert.deepEqual([one.x, one.y, one.pose], [x, y, sweeping ? "sweep" : "walk"], "a pure function of the clock");
+    assert.equal(one.status.kind, "patrolling");
+    assert.equal(one.coarse.kind, "patrolling");
+    assert.equal(groupOf(one.status), "resting", "no turn in progress");
+    assert.ok(onGraph(a.layout, one));
+    if (one.x !== spot.seat.x || one.y !== spot.seat.y) moved = true;
+  }
+  assert.ok(moved);
+  assert.ok(Number.isFinite(snapshotRoom(a, T0).nextChangeAt), "the next step is scheduled");
+
+  // A run changes the status, not the place; its end sends nobody home.
+  let model = applyInput(a, { type: "run", run: run(7, "running", T0 + 100) }, T0 + 100);
+  const at = T0 + 200_000;
+  const running = view(model, at);
+  assert.ok(running.status.kind === "roaming" || running.status.kind === "sweeping");
+  assert.deepEqual([running.x, running.y], [view(a, at).x, view(a, at).y]);
+  model = applyInput(model, { type: "run", run: run(7, "done", T0 + 100) }, at);
+  const after = view(model, at + 100);
+  assert.equal(after.status.kind, "patrolling");
+  assert.deepEqual([after.x, after.y], [view(a, at + 100).x, view(a, at + 100).y]);
+
+  // Reduced motion: by the closet as before, standing after its run, then asleep.
+  const still = view(model, at + 100, true);
+  assert.deepEqual([still.x, still.y, still.pose, still.status.kind], [spot.seat.x, spot.seat.y, "stand", "closet"]);
+  assert.equal(view(model, at + ASLEEP_AFTER_MS + 1000, true).status.kind, "asleep");
 });

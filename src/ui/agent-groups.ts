@@ -14,7 +14,8 @@ export const AGENT_GROUPS: readonly AgentGroup[] = ["working", "waiting", "resti
  * The group of an agent from what it is doing. Working is everything that
  * belongs to a turn in progress (a bubble, a walk for a visit or a delivery,
  * or the agent still at its desk after the turn); waiting is a turn that ended
- * badly or a question that holds the agent; resting is the sleep.
+ * badly or a question that holds the agent; resting is the sleep (or the round
+ * of an agent always on it, between its runs).
  */
 export function groupOf(status: AgentStatus | null): AgentGroup {
   if (status === null) return "resting";
@@ -36,6 +37,8 @@ export function groupOf(status: AgentStatus | null): AgentGroup {
     case "failed":
       return "waiting";
     case "asleep":
+    // Always on its round (floor.always) between its runs: drawn walking, but no turn in progress.
+    case "patrolling":
       return "resting";
   }
 }

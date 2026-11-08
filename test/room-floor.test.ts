@@ -71,7 +71,7 @@ test("the state carries the layout, and the interface reads it (an unknown one f
   const config = makeHome();
   const db = getDbAt(config.dbPath);
   const stateOf = () => getState(db, loadHome(config.home), schedulerInfo(config));
-  assert.deepEqual(stateOf().floor, { layout: "floor-per-project" });
+  assert.deepEqual(stateOf().floor, { layout: "floor-per-project", owner: null });
   fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ floor: { layout: "room-per-project" } }));
   const state = stateSchema.parse(JSON.parse(JSON.stringify(stateOf())));
   assert.equal(state.floor.layout, "room-per-project");

@@ -22,6 +22,8 @@ export type Model = {
   reception: Reception;
   /** How /room draws the home (myhq.json `floor.layout`). */
   floorLayout: FloorLayoutMode;
+  /** The person seated in the user's own office of the single floor (myhq.json `floor.owner`), or null. */
+  floorOwner: State["floor"]["owner"];
   latestRuns: Record<string, Run>;
   approvals: Record<number, Approval>;
   events: HqEvent[];
@@ -49,6 +51,7 @@ export const initialModel: Model = {
   invalidRooms: [],
   reception: { room: null, sprite: null, runs: [] },
   floorLayout: DEFAULT_FLOOR_LAYOUT,
+  floorOwner: null,
   latestRuns: {},
   approvals: {},
   events: [],
@@ -96,6 +99,7 @@ export function reducer(model: Model, action: Action): Model {
         invalidRooms: state.invalidRooms,
         reception: state.reception,
         floorLayout: state.floor.layout,
+        floorOwner: state.floor.owner,
         latestRuns,
         approvals: indexApprovals([state.approvals.pending, state.approvals.unseen, state.approvals.history]),
         events: state.recent.events,

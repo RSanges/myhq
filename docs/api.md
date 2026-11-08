@@ -280,6 +280,7 @@ restart.
           "isoSprite": "/api/sprites/demo/scout?sheet=iso",
           "isoStride": null,
           "roam": false,
+          "roamAlways": false,
           "armed": false,
           "routines": [
             {
@@ -299,7 +300,7 @@ restart.
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
   "reception": { "room": "demo", "sprite": null, "runs": [] },
-  "floor": { "layout": "floor-per-project" },
+  "floor": { "layout": "floor-per-project", "owner": null },
   "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
   "firings": [],
   "approvals": { "pending": [], "unseen": [], "history": [] },
@@ -320,7 +321,9 @@ restart.
   floor then walks at 3 voxels per frame).
 - `roam`: `true` for an agent with `floor.behaviour: "roam"` in `room.json` (no
   desk: it does its round of the floor during its runs and rests by the broom
-  closet of the lobby, see `home-layout.md`), `false` otherwise.
+  closet of the lobby, see `home-layout.md`), `false` otherwise. `roamAlways`:
+  `true` when it also has `floor.always: true` (its round goes on between its
+  runs, on a clock anchored at a fixed origin), `false` otherwise.
 - `sprite`: `/api/sprites/<room>/<agent>` when the agent declares an old
   top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
   no longer draws it.
@@ -341,6 +344,12 @@ restart.
   for the repository <path>. »), newest first. The reserved room `_hq` is not
   in `rooms`; its runs, events and approvals still arrive on the stream like
   any other.
+- `floor.owner`: the person seated in the user's own office of the single
+  floor, `floor.owner` of `myhq.json` (see `home-layout.md`): `{ "name",
+  "isoSprite" }`, `isoSprite` being `/api/sprites/_hq/owner?sheet=iso` when the
+  setting names a sheet and the file exists, `null` otherwise (a neutral
+  person). `null` without the setting, or with an invalid one (the office stays
+  empty, the reason is in the log).
 - `floor.layout`: how the floor (`/`) draws the home, `floor.layout` of `myhq.json`:
   `"floor-per-project"` (the default, also when the block is missing or
   invalid) or `"room-per-project"` (one floor for the whole home). An
@@ -683,6 +692,8 @@ declared in the agent's `isoSprite` field of the validated `room.json` (the
 isometric sheet the floor draws); without it, its `sprite` field (the old
 top-down sheet, still served, no longer drawn; for the receptionist,
 `/api/sprites/_hq/onboarding`: the `onboarding.sprite` of `myhq.json`). The
+owner of the floor belongs to no room either: `/api/sprites/_hq/owner?sheet=iso`
+serves `floor.owner.isoSprite` of `myhq.json`. The
 path is never read from the URL, must stay inside the home (symbolic links are resolved), must end
 in `.png` or `.webp`, must not exceed 2 MiB and must really start like a PNG
 or a WebP. `ETag` follows the modification time and `Cache-Control: no-cache`

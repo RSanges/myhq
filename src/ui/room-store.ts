@@ -21,6 +21,8 @@ export type RoomStore = {
   get(room: string): RoomModel;
   /** Applies a change received at `at` (epoch milliseconds). */
   ingest(change: HqChange, at: number): void;
+  /** A turn of the chat began or ended (`running` of its turn state): the owner of the single floor types meanwhile. */
+  setOwnerBusy(busy: boolean, at: number): void;
   /** Called after every change; returns the function that stops it. */
   subscribe(listener: () => void): () => void;
 };
@@ -32,6 +34,8 @@ export function createRoomStore(): RoomStore {
   let receptionRoom: string | null = null;
   /** The home is drawn as one floor: every entity goes to its model. */
   let single = false;
+  /** A turn of the chat is in progress, kept for the next snapshot of the floor. */
+  let ownerBusy = false;
   const notify = () => listeners.forEach((listener) => listener());
 
   const update = (room: string, change: (model: RoomModel) => RoomModel) => {
@@ -46,6 +50,16 @@ export function createRoomStore(): RoomStore {
 
   return {
     get: (room) => models.get(room) ?? createRoomModel(room),
+    setOwnerBusy(busy, at) {
+      ownerBusy = busy;
+      const model = models.get(FLOOR_MODEL);
+      if (!model) return;
+      const next = applyInput(model, { type: "owner", busy }, at);
+      if (next !== model) {
+        models.set(FLOOR_MODEL, next);
+        notify();
+      }
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -61,26 +75,31 @@ export function createRoomStore(): RoomStore {
           if (single) {
             const model = models.get(FLOOR_MODEL) ?? createRoomModel(FLOOR_MODEL);
             models.clear();
-            models.set(
-              FLOOR_MODEL,
-              applyInput(
-                model,
-                {
-                  type: "hydrate-floor",
-                  rooms: state.rooms.map((room) => ({
-                    name: room.name,
-                    color: room.color,
-                    agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun, roam: agent.roam ?? false })),
+            const hydrated = applyInput(
+              model,
+              {
+                type: "hydrate-floor",
+                rooms: state.rooms.map((room) => ({
+                  name: room.name,
+                  color: room.color,
+                  agents: room.agents.map((agent) => ({
+                    id: agent.id,
+                    name: agent.name,
+                    lastRun: agent.lastRun,
+                    roam: agent.roam ?? false,
+                    roamAlways: agent.roamAlways ?? false,
                   })),
-                  approvals: state.approvals.pending,
-                  reception: {
-                    room: receptionRoom,
-                    agent: { id: RECEPTION_AGENT, name: strings.room.reception.name, lastRun: state.reception.runs[0] ?? null },
-                  },
+                })),
+                approvals: state.approvals.pending,
+                reception: {
+                  room: receptionRoom,
+                  agent: { id: RECEPTION_AGENT, name: strings.room.reception.name, lastRun: state.reception.runs[0] ?? null },
                 },
-                at,
-              ),
+                owner: state.floor.owner ? { name: state.floor.owner.name } : null,
+              },
+              at,
             );
+            models.set(FLOOR_MODEL, applyInput(hydrated, { type: "owner", busy: ownerBusy }, at));
             notify();
             return;
           }

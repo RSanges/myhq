@@ -113,7 +113,7 @@ const baseState = (over: Partial<State> = {}): State => ({
   ],
   invalidRooms: [],
   reception: { room: null, sprite: null, runs: [] },
-  floor: { layout: "floor-per-project" },
+  floor: { layout: "floor-per-project", owner: null },
   scheduler: { enabled: true, running: true, timeZone: "Europe/Paris" },
   firings: [],
   approvals: {
