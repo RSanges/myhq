@@ -28,7 +28,7 @@ function AddRoom({ dispatch }: { dispatch: (action: Action) => void }) {
 }
 
 /** The agent's routines, with their next fire, and the switch that arms them. */
-function Routines({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
+export function Routines({ agent, dispatch }: { agent: TeamAgent; dispatch: (action: Action) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const switchId = `armed-${agent.key}`;

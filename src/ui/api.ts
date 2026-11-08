@@ -17,13 +17,13 @@ import {
   deskSeenSchema,
   dirListingSchema,
   discussionClearedSchema,
-  discussionSchema,
   errorBodySchema,
   itemAskResponseSchema,
   relaunchResponseSchema,
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
+  threadSchema,
   usageSchema,
   type AgentQuestion,
   type Approval,
@@ -31,9 +31,9 @@ import {
   type ChatTurn,
   type Desk,
   type DirListing,
-  type Discussion,
   type Run,
   type State,
+  type Thread,
   type Usage,
 } from "./schemas";
 
@@ -137,8 +137,9 @@ export async function startRun(room: string, agent: string, task: string): Promi
 const askUrl = (room: string, agent: string) =>
   `/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}/ask`;
 
-/** The discussion of the owner with an agent (questions, not runs). */
-export const fetchDiscussion = (room: string, agent: string): Promise<Discussion> => request(askUrl(room, agent), discussionSchema);
+/** The thread of an agent's sheet: the discussion, its runs and its items, oldest first. */
+export const fetchThread = (room: string, agent: string): Promise<Thread> =>
+  request(`/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}/thread`, threadSchema);
 
 /** Asks an agent a question: it answers in the background, the discussion shows it. */
 export async function askAgent(room: string, agent: string, question: string): Promise<AgentQuestion> {

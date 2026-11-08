@@ -1184,6 +1184,39 @@ Response `200`: `{ "cleared": 2 }`, how many questions were cleared. Errors:
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_BUSY` (a
 question is in progress: wait for its answer).
 
+### `GET /api/rooms/[room]/agents/[agent]/thread`
+
+The thread of the agent's sheet, oldest first (`architecture.md`, "The sheet
+of an agent"): the current discussion (since the last reset, the latest 50
+questions), the latest 15 runs of the agent and the latest 20 items it
+submitted, read from their own tables. At the same time, a question comes
+before a run, a run before an item.
+
+```json
+{
+  "agent": { "room": "demo", "id": "scout", "name": "Scout" },
+  "entries": [
+    { "kind": "question", "at": "2026-11-08T10:00:00.000Z", "question": { "...": "question shape" } },
+    {
+      "kind": "run",
+      "at": "2026-11-08T10:01:00.000Z",
+      "run": { "id": 12, "status": "done", "task": "...", "reason": null, "costUsd": 0.21, "startedAt": "...", "endedAt": "...", "summary": "..." }
+    },
+    {
+      "kind": "item",
+      "at": "2026-11-08T10:04:00.000Z",
+      "item": { "id": 31, "type": "report", "title": "...", "status": "pending", "question": false, "createdAt": "..." }
+    }
+  ],
+  "busy": false
+}
+```
+
+`at` is when the question was asked, the run started or the item was
+submitted. `item.question`: an item of questions (`hq_ask`, type `question`).
+`busy`: a question waits for its answer. Errors: `ROOM_NOT_FOUND`,
+`ROOM_INVALID`, `AGENT_NOT_FOUND`.
+
 ### `GET /api/routines`
 
 The scheduler's state, the journal of routine firings, newest first, and the

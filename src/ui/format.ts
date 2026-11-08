@@ -137,3 +137,13 @@ export function formatHour(iso: string): string {
   const minutes = date.getMinutes();
   return minutes === 0 ? `${date.getHours()} h` : `${date.getHours()} h ${String(minutes).padStart(2, "0")}`;
 }
+
+/** A duration in words: « 45 s » under a minute, « 3 min » under an hour, then « 1 h 05 ». */
+export function formatDuration(ms: number): string {
+  const d = strings.room.sheet.thread.duration;
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return d.seconds(seconds);
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return d.minutes(minutes);
+  return d.hours(Math.floor(minutes / 60), minutes % 60);
+}

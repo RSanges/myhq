@@ -1136,9 +1136,9 @@ carry it as a bearer token (`api.md`); the desk sends no reason.
 A run is how an agent works: it costs a full turn, takes the agent's lock,
 counts in the daily cap and answers with an item in the queue. To ask an agent
 something (how it makes its videos, where it stands, what it would do), the
-owner asks it a question instead, from « Poser une question » on the agent's
-sheet (`POST /api/rooms/<room>/agents/<agent>/ask`). The agent answers itself,
-in the background, and the answer shows under the question in Markdown.
+owner writes to it instead, from the field of the agent's sheet (every message
+is a question, `POST /api/rooms/<room>/agents/<agent>/ask`). The agent answers
+itself, in the background, and the answer shows in the thread in Markdown.
 
 `askAgent` (`src/server/agent-questions.ts`) starts one `claude -p` through the
 same engine as a run (`ClaudeEngine`, `buildClaudeArgs`), with the agent's own
@@ -1197,9 +1197,9 @@ meter lists them as « Questions aux agents ». The raw output is kept as
 **The discussion.** One per agent: its questions since the last « Nouvelle
 discussion » (`DELETE` on the same route), oldest first. A reset only sets
 `cleared_at`: the rows stay, so their cost stays in the meter, and a reset is
-refused while a question is in progress. The sheet reads the discussion again
+refused while a question is in progress. The sheet reads its thread again
 every 2 seconds while a question waits, and shows « <agent> réfléchit à ta
-question... »; the floor does not animate it.
+question… »; the floor does not animate it.
 
 A question measured on Sonnet costs a few cents: the role, the question-mode
 block and the CLI's own system prompt are written to the cache the first
@@ -2151,13 +2151,42 @@ mounted: a compact band (the board figures, the tray count, one agent per
 line) and a "Voir la pièce" button that mounts it on demand, most of the
 screen high, the floor fitted (offices first) and draggable.
 
-**The sheet of an agent** (click on a character, or its list button): the team
-card (role, model, tools, routines and their arming switch, last run, run
-button: `AgentCard` of `team.tsx`), « Poser une question » (a question answered
-without a run, see "Questions to an agent": `agent-ask.tsx`) and its recent runs with their journal
-(`FeedRow` of `feed.tsx`), rebuilt from the events the page holds since the
-API has no list of old runs. A side panel on a wide screen, the whole screen on
-a phone; Escape closes it and focus returns to what opened it.
+**The sheet of an agent** (click on a character, or its chip under the
+floor; `agent-sheet.tsx`) is a conversation with it, laid out like a
+messaging app:
+
+- **The header**: the agent's name, its room and its state in one line
+  (« Au travail », « Réfléchit à ta question… », « Dort », « Disponible »,
+  a failed last run, a shared resource it waits for: `sheetState` of
+  `agent-thread-model.ts`, pure).
+- **One thread**, oldest first: the owner's messages and the agent's answers
+  (questions to the agent, see "Questions to an agent"), its runs in one line
+  each (time, status, duration, cost and the end of its summary; unfolded,
+  the whole summary, its task and a link to the run on the desk), the items it
+  submitted (title, status, a link to the desk) and its questions (`hq_ask`)
+  that wait for the owner, with « Répondre ». A day line separates the days.
+  The server aggregates it (`readThread` of `src/server/agent-thread.ts`,
+  `GET /api/rooms/<room>/agents/<agent>/thread`) from the tables that hold
+  each of them, without copying anything: the discussion since its last
+  reset, the latest 15 runs and the latest 20 items. The interface turns it
+  into lines (`threadLines`, pure). It is read again when the agent's last run
+  starts or ends, when one of its items comes or is decided, and every 2
+  seconds while a question waits for its answer.
+- **One field at the bottom**, « Écris à <agent> », and a send button: Enter
+  sends, Shift+Enter goes to the next line. Each message is a question to the
+  agent. « Nouvelle discussion » takes the messages and answers out of the
+  thread (`cleared_at`); its runs and items stay.
+- **The gear** opens the technical side instead of the thread: a run without
+  a task (« Lancer un tour », the role's usual work), the role file, model,
+  tools and resources, the routines and their arming switch, and the journal
+  of the recent runs (`FeedRow` of `feed.tsx`, rebuilt from the events the
+  page holds).
+
+A side panel on a wide screen; under 48 rem the whole screen, the field at the
+bottom and a visible « Retour » in the header. Escape closes the gear, then
+the sheet, and focus returns to what opened it. On a wide screen the field has
+the focus when it opens; on a phone the way back has it, so that the keyboard
+does not cover the thread.
 
 **The sheet of a room** (single floor: a click on a room, or its button at
 the top; `room-sheet.tsx`, the figures in `room-sheet-model.ts`, pure): the

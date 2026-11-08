@@ -284,6 +284,19 @@ export function RoomPage() {
     };
   }, [single, sheetRoom, model.reception, model.rooms, model.events, model.usage, roomNames, roomAgents, roomColors, snapshot, pendingApprovals, deskObjects]);
 
+  // The items of the agent whose sheet is open, by id and status: its thread is read again when one comes or is decided.
+  const selectedItems = useMemo(
+    () =>
+      selected === null
+        ? ""
+        : Object.values(model.approvals)
+            .filter((approval) => approval.room === selected.room && approval.agentId === selected.id)
+            .map((approval) => `${approval.id}:${approval.status}`)
+            .sort()
+            .join(","),
+    [selected, model.approvals],
+  );
+
   const title = room === null || single ? t.title : t.floorTitle(room);
 
   return (
@@ -485,7 +498,17 @@ export function RoomPage() {
           onClose={closeRoomSheet}
         />
       )}
-      {selected && <AgentSheet key={selected.key} agent={selected} events={model.events} dispatch={dispatch} onClose={closeSheet} />}
+      {selected && (
+        <AgentSheet
+          key={selected.key}
+          agent={selected}
+          events={model.events}
+          dispatch={dispatch}
+          onClose={closeSheet}
+          asleep={statusOf.get(selected.key)?.status.kind === "asleep"}
+          refreshKey={selectedItems}
+        />
+      )}
       {receptionHere && selectedKey === RECEPTION_KEY && (
         <ReceptionSheet key={RECEPTION_KEY} runs={model.reception.runs} dispatch={dispatch} onClose={closeSheet} />
       )}

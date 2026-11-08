@@ -304,6 +304,41 @@ export const askResponseSchema = z.object({ question: agentQuestionSchema });
 
 export const discussionClearedSchema = z.object({ cleared: z.number().int() });
 
+/** A run in the thread of an agent's sheet. */
+export const threadRunSchema = z.object({
+  id: z.number().int(),
+  status: runStatusSchema,
+  task: z.string(),
+  reason: z.string().nullable(),
+  costUsd: z.number(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  summary: z.string().nullable(),
+});
+
+/** An item the agent submitted, in its thread; `question`: an item of questions (hq_ask). */
+export const threadItemSchema = z.object({
+  id: z.number().int(),
+  type: z.string(),
+  title: z.string(),
+  status: approvalStatusSchema,
+  question: z.boolean(),
+  createdAt: z.string(),
+});
+
+export const threadEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("question"), at: z.string(), question: agentQuestionSchema }),
+  z.object({ kind: z.literal("run"), at: z.string(), run: threadRunSchema }),
+  z.object({ kind: z.literal("item"), at: z.string(), item: threadItemSchema }),
+]);
+
+/** `GET /api/rooms/[room]/agents/[agent]/thread`: the thread of an agent's sheet, oldest first. */
+export const threadSchema = z.object({
+  agent: z.object({ room: z.string(), id: z.string(), name: z.string() }),
+  entries: z.array(threadEntrySchema),
+  busy: z.boolean(),
+});
+
 export const readySchema = z.object({ cursor: z.number().int() });
 
 /** An object of the desk (GET /api/desk). */
@@ -404,6 +439,10 @@ export type State = z.infer<typeof stateSchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type AgentQuestion = z.infer<typeof agentQuestionSchema>;
 export type Discussion = z.infer<typeof discussionSchema>;
+export type ThreadRun = z.infer<typeof threadRunSchema>;
+export type ThreadItem = z.infer<typeof threadItemSchema>;
+export type ThreadEntry = z.infer<typeof threadEntrySchema>;
+export type Thread = z.infer<typeof threadSchema>;
 export type DirListing = z.infer<typeof dirListingSchema>;
 export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;
