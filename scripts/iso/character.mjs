@@ -103,6 +103,9 @@ function lookMaterials(look) {
     leg: m(look.bottom, { crease: false, top: look.bottom.left }),
     shoes: m(look.shoes ?? { ramp: "ink", top: 2, left: 1, right: 1 }),
     extra: look.extra ? m(look.extra) : null,
+    beard: look.beard ? m(look.beard) : null,
+    moustache: look.moustache ? m(look.moustache.colour ?? look.beard ?? look.hair) : null,
+    brows: look.brows ? m(look.brows === true ? look.hair : look.brows) : null,
   };
   looks.set(key, out);
   return out;
@@ -111,15 +114,22 @@ function lookMaterials(look) {
 /**
  * A human, about 51 voxels tall, facing +y, feet centre at (0, 0, 0).
  * `look`: { skin, hair, top, bottom, shoes, trim, extra } material specs
- * ({ ramp, top, left, right }), `hairStyle` (short, bun, long), `headset`,
- * `cap` (a cap with a peak towards +y, in the `extra` material).
+ * ({ ramp, top, left, right }), `hairStyle` (short, bun, long, or
+ * side-part: short sides and back, a quiff on top swept to the +x side),
+ * `headset`, `cap` (a cap with a peak towards +y, in the `extra` material).
+ * Face, all optional: `eyes` (a material spec, ink by default), `brows`
+ * (true for the hair's colour, or a spec), `beard` (a spec: a full beard,
+ * sideburns to the hair, a full jaw and chin), `moustache` ({ style, colour }:
+ * style "plain" or "handlebar", its tips curled up past the cheeks so that it
+ * reads from the front and in profile; colour a spec, the beard's or the
+ * hair's by default).
  * `rig` lets a model hold things: `hand(pose, { side, k, shoulder, sz })`
  * returns a hand target (or null for the shared pose), `props(b, pose,
  * { sz, hipZ, H, hands })` draws what the hands hold, after the body.
  */
 export function human(look, rig = {}) {
   const M = lookMaterials(look);
-  const eyes = material({ ramp: "ink", top: 1, left: 1, right: 1, rim: false });
+  const eyes = material({ rim: false, ...(look.eyes ?? { ramp: "ink", top: 1, left: 1, right: 1 }) });
   return (b, pose) => {
     const L1 = 10, L2 = 10; // thigh, shin
     const A1 = 7, A2 = 7; // upper arm, forearm
@@ -160,11 +170,53 @@ export function human(look, rig = {}) {
     // Head: a rounded block, eyes on the +y face; the hair covers the top,
     // the back and the temples, with a little volume on top and behind.
     const H = Math.round(top + 1);
-    const isHair = (x, y, z) => z >= H + 8 || (y <= -2 && z >= H + 3) || (Math.abs(x + 0.5) >= 4 && y <= 1 && z >= H + 5);
-    rounded(b, -5, -5, H, 10, 10, 11, 2.2, (x, y, z) => (isHair(x, y, z) ? M.hair : M.skin));
-    rounded(b, -5, -6, H + 4, 10, 6, 8, 2.2, (x, y, z) => (b.has(x, y, z) ? null : M.hair)); // volume at the back
-    rounded(b, -5, -5, H + 9, 10, 9, 3, 1.6, (x, y, z) => (b.has(x, y, z) ? null : M.hair)); // volume on top
+    // A side parting shows more forehead: the hairline is a voxel higher in front.
+    const hairline = look.hairStyle === "side-part" ? (y) => (y >= 3 ? H + 9 : H + 8) : () => H + 8;
+    const isHair = (x, y, z) => z >= hairline(y) || (y <= -2 && z >= H + 3) || (Math.abs(x + 0.5) >= 4 && y <= 1 && z >= H + 5);
+    // A full beard: the chin under the mouth, the jaw higher towards the sides, the sideburns up to the hair; the
+    // cheeks stay bare, so a moustache reads against them.
+    const isBeard = (x, y, z) => {
+      if (M.beard === null || y < -2) return false;
+      const side = Math.abs(x + 0.5);
+      // The sideburns at the back of the cheek only: its front stays bare, where a moustache's tip curls.
+      return z <= (side >= 4 && y <= 0 ? H + 5 : side >= 3 ? H + 2 : side >= 2 ? H + 1 : H);
+    };
+    rounded(b, -5, -5, H, 10, 10, 11, 2.2, (x, y, z) => (isHair(x, y, z) ? M.hair : isBeard(x, y, z) ? M.beard : M.skin));
+    const empty = (m) => (x, y, z) => (b.has(x, y, z) ? null : m);
+    if (look.hairStyle === "side-part") {
+      // Short at the back and sides: no volume behind; on top a quiff, higher at the front and on the +x side.
+      rounded(b, -5, -5, H + 9, 10, 10, 3, 1.6, empty(M.hair));
+      rounded(b, -3, -3, H + 11, 8, 9, 2, 1, empty(M.hair));
+      rounded(b, -4, 1, H + 10, 9, 5, 3, 1.2, empty(M.hair));
+    } else {
+      rounded(b, -5, -6, H + 4, 10, 6, 8, 2.2, empty(M.hair)); // volume at the back
+      rounded(b, -5, -5, H + 9, 10, 9, 3, 1.6, empty(M.hair)); // volume on top
+    }
+    if (M.beard) {
+      // Full: the jaw a little wider than the head, the chin down over the collar.
+      rounded(b, -6, -2, H - 1, 12, 7, 3, 1.4, empty(M.beard));
+      rounded(b, -4, 0, H - 3, 8, 6, 4, 1.8, (x, y, z) => (y >= 1 || !b.has(x, y, z) ? M.beard : null));
+    }
     for (const x of [-3, 2]) for (const z of [H + 4, H + 5]) b.set(x, 4, z, eyes);
+    if (M.brows) for (const x of [-4, -3, 2, 3]) b.set(x, 5, H + 6, M.brows);
+    if (M.moustache) {
+      // Over the mouth, in front of the face, thick in the middle.
+      b.box(-3, 5, H + 2, 6, 1, 2, M.moustache);
+      b.box(-2, 6, H + 2, 4, 1, 1, M.moustache);
+      if (look.moustache.style === "handlebar") {
+        // Each wing sweeps out past the cheek, then its tip curls up and back towards the ear.
+        for (const side of [-1, 1]) {
+          const x = (v) => (side < 0 ? v : -1 - v); // mirror about the head's centre (x = -0.5)
+          b.box(Math.min(x(-5), x(-4)), 5, H + 2, 2, 1, 1, M.moustache);
+          b.line([x(-6), 5, H + 2], [x(-7), 5, H + 3], M.moustache);
+          b.line([x(-8), 4, H + 3], [x(-8), 4, H + 5], M.moustache);
+          b.set(x(-7), 4, H + 6, M.moustache);
+          b.set(x(-7), 5, H + 3, M.moustache);
+        }
+      } else {
+        for (const v of [-4, 3]) b.set(v, 5, H + 2, M.moustache);
+      }
+    }
     if (look.hairStyle === "bun") b.ellipsoid(0, -5, H + 11, 2.8, 2.8, 2.8, M.hair);
     if (look.hairStyle === "long") rounded(b, -4, -6, H - 2, 8, 3, 9, 1.4, (x, y, z) => (b.has(x, y, z) ? null : M.hair));
     if (look.cap) {
