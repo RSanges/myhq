@@ -1,3 +1,4 @@
+import { ANNOUNCE_MS, bubbleText, currentActivity, HQ_STATUS_TOOL, normalizeStatus, toolActivity } from "./activity";
 import { agentKey, viewEvent } from "./model";
 import { OWNER_AGENT, OWNER_KEY, RECEPTION_KEY, RECEPTION_ROOM } from "./reception";
 import type { Approval, HqEvent, Run } from "./schemas";
@@ -114,7 +115,18 @@ export const pileRoomOf = (approval: { room: string; forRoom?: string | null }):
  * `roam`: the agent roams the single floor instead of sitting at a desk (room.json `floor.behaviour: "roam"`);
  * `roamAlways`: its round goes on between its runs too (`floor.always`).
  */
-export type AgentSeed = { id: string; name: string; lastRun: RunSeed | null; roam?: boolean; roamAlways?: boolean };
+export type AgentSeed = {
+  id: string;
+  name: string;
+  lastRun: RunSeed | null;
+  roam?: boolean;
+  roamAlways?: boolean;
+  /** Its run in progress: its latest status (hq_status) and its latest other tool call, as /api/state gives them. */
+  activity?: {
+    status: { text: string; at: string } | null;
+    tool: { name: string; input: unknown; at: string } | null;
+  } | null;
+};
 
 export type RoomInput =
   /**
@@ -172,6 +184,9 @@ type AgentRuntime = {
   question: "failed" | "blocked" | null;
   typingUntil: number;
   thought: { text: string; until: number } | null;
+  /** What it last said it does in its run (hq_status), and what its last other tool says (activity.ts). */
+  announced: { text: string; at: number } | null;
+  lastTool: { text: string; at: number } | null;
   trips: Trip[];
   /** It roams the floor (no desk, no errands): during a run it does its round (roam.ts), otherwise it rests by the closet. */
   roam: boolean;
@@ -321,21 +336,28 @@ function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
         return { ...active, thought: { text: thoughtText(view.text), until: at + THOUGHT_MS }, typingUntil: 0 };
       case "tool_call": {
         const input = toolInput(view.input);
-        const typing = { ...active, typingUntil: at + TYPING_MS, thought: null };
+        if (view.name === HQ_STATUS_TOOL) {
+          // Saying what it does is not work at the desk: the bubble says it, nothing else moves.
+          const text = normalizeStatus(input.text);
+          return text === null ? active : { ...active, announced: { text, at }, thought: null };
+        }
+        const said = toolActivity(view.name, input);
+        const traced = said === null ? active : { ...active, lastTool: { text: said, at } };
+        const typing = { ...traced, typingUntil: at + TYPING_MS, thought: null };
         // A roaming agent runs no errands: it goes on with its round (or stays by its closet).
         if (view.name === HQ_MESSAGE_TOOL && !agent.roam) {
           // A message to nobody in this room is just a tool call.
           const room = typeof input.room === "string" && input.room !== "" ? input.room : null;
-          const trip = startVisit(model, active, typeof input.to === "string" ? input.to : "", room, at);
-          return trip === active ? typing : { ...trip, thought: null };
+          const trip = startVisit(model, traced, typeof input.to === "string" ? input.to : "", room, at);
+          return trip === traced ? typing : { ...trip, thought: null };
         }
         if (view.name === HQ_SUBMIT_TOOL && !agent.roam) {
           const forRoom = typeof input.forRoom === "string" && input.forRoom !== "" ? input.forRoom : null;
-          const trip = startSubmit(model, active, forRoom, at);
-          return trip === active ? typing : { ...trip, thought: null };
+          const trip = startSubmit(model, traced, forRoom, at);
+          return trip === traced ? typing : { ...trip, thought: null };
         }
         if (view.name === HQ_TASK_UPDATE_TOOL && input.status === "blocked") {
-          return { ...active, question: "blocked", thought: null };
+          return { ...traced, question: "blocked", thought: null };
         }
         return typing;
       }
@@ -361,6 +383,8 @@ function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
           lastActive: at,
           question: null,
           thought: null,
+          announced: null,
+          lastTool: null,
           typingUntil: 0,
           roamSince: roundStart(run, at),
           homing: null,
@@ -477,11 +501,38 @@ function applyHydrate(model: RoomModel, input: Extract<RoomInput, { type: "hydra
   };
 }
 
+/** The activity of a run in progress as a snapshot gives it, in the model's terms. */
+function seededActivity(seed: AgentSeed): Pick<AgentRuntime, "announced" | "lastTool"> {
+  const status = seed.activity?.status ?? null;
+  const tool = seed.activity?.tool ?? null;
+  const text = status ? normalizeStatus(status.text) : null;
+  const input = tool?.input && typeof tool.input === "object" ? (tool.input as Record<string, unknown>) : {};
+  const said = tool ? toolActivity(tool.name, input) : null;
+  return {
+    announced: status && text !== null && Number.isFinite(parseTime(status.at)) ? { text, at: parseTime(status.at) } : null,
+    lastTool: tool && said !== null && Number.isFinite(parseTime(tool.at)) ? { text: said, at: parseTime(tool.at) } : null,
+  };
+}
+
+/** The more recent of two activities. */
+const newer = <T extends { at: number }>(a: T | null, b: T | null): T | null => (a === null ? b : b === null || a.at >= b.at ? a : b);
+
 /** A runtime for a seed, or the one the model already had for that key (its trips and bubbles go on). */
 function runtimeOf(model: RoomModel, key: string, seed: AgentSeed, at: number): AgentRuntime {
   const kept = model.agents.find((agent) => agent.key === key);
   const roamAlways = (seed.roam ?? false) && (seed.roamAlways ?? false);
-  if (kept) return { ...kept, name: seed.name, roam: seed.roam ?? false, roamAlways };
+  const seeded = seededActivity(seed);
+  if (kept) {
+    // A snapshot of the same run may know a status this page missed (a reconnection).
+    const sameRun = seed.lastRun?.status === "running" && seed.lastRun.id === kept.runId;
+    return {
+      ...kept,
+      name: seed.name,
+      roam: seed.roam ?? false,
+      roamAlways,
+      ...(sameRun ? { announced: newer(kept.announced, seeded.announced), lastTool: newer(kept.lastTool, seeded.lastTool) } : {}),
+    };
+  }
   const run = seed.lastRun;
   const running = run?.status === "running";
   return {
@@ -499,6 +550,7 @@ function runtimeOf(model: RoomModel, key: string, seed: AgentSeed, at: number): 
     question: run?.status === "failed" ? "failed" : null,
     typingUntil: 0,
     thought: null,
+    ...(running ? seeded : { announced: null, lastTool: null }),
     trips: [],
   };
 }
@@ -603,7 +655,13 @@ export type Coarse =
   | { kind: "stuck" }
   | { kind: "patrolling" };
 
-export type Bubble = { kind: "thought"; text: string } | { kind: "question" } | { kind: "talk" } | { kind: "zzz" };
+/** `activity`: what an agent at work is doing (activity.ts), cut for the bubble. */
+export type Bubble =
+  | { kind: "thought"; text: string }
+  | { kind: "activity"; text: string }
+  | { kind: "question" }
+  | { kind: "talk" }
+  | { kind: "zzz" };
 
 export type AgentView = {
   key: string;
@@ -627,6 +685,8 @@ export type AgentView = {
   seated: boolean;
   carrying: boolean;
   bubble: Bubble | null;
+  /** What it is doing during its run, in full (60 characters at most): its chip and its sheet show it. Null between runs. */
+  activity: string | null;
   status: AgentStatus;
   coarse: Coarse;
 };
@@ -699,7 +759,13 @@ function tripPose(trip: Trip, at: number, reduced: boolean): TripPose {
 const isAwake = (agent: AgentRuntime, at: number): boolean => agent.running || at - agent.lastActive < ASLEEP_AFTER_MS;
 
 function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number, reduced: boolean, layout: RoomLayout): AgentView {
-  const base = { key: agent.key, id: agent.id, name: agent.name, index };
+  // Only during a run: an agent that sleeps or waits has no bubble of activity.
+  const activity = agent.running && !agent.owner ? currentActivity(agent, at) : null;
+  const doing: Bubble | null = activity !== null ? { kind: "activity", text: bubbleText(activity) } : null;
+  // Its own words (hq_status) win over a thought; the words of the safety net give way to one, for its 5 s.
+  const said = activity !== null && agent.announced !== null && activity === agent.announced.text;
+  const overThought = (thought: string): Bubble => (said && doing ? doing : { kind: "thought", text: thought });
+  const base = { key: agent.key, id: agent.id, name: agent.name, index, activity };
   const phase = index * 137;
   const trip = agent.trips.find((candidate) => at >= candidate.start && at < tripEnd(candidate));
   const make = (
@@ -741,7 +807,11 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
 
   if (agent.roam) {
     const thought = agent.thought && at < agent.thought.until ? agent.thought.text : null;
-    const bubble: Bubble | null = agent.question ? { kind: "question" } : thought !== null ? { kind: "thought", text: thought } : null;
+    const bubble: Bubble | null = agent.question
+      ? { kind: "question" }
+      : thought !== null
+        ? overThought(thought)
+        : doing;
     const stuck: AgentStatus | null = agent.question ? { kind: agent.question } : null;
     const coarse: Coarse = stuck ? { kind: "stuck" } : { kind: "working" };
     const walking = { seated: false };
@@ -788,11 +858,12 @@ function viewAgent(agent: AgentRuntime, index: number, spot: Office, at: number,
   if (agent.question) {
     return make("sit", { kind: agent.question }, { kind: "stuck" }, { kind: "question" });
   }
+  // One bubble at a time over the head: what it says it does, or the beginning of its text for a moment.
   if (agent.thought && at < agent.thought.until) {
-    return make("think", { kind: "thinking" }, { kind: "working" }, { kind: "thought", text: agent.thought.text });
+    return make("think", { kind: "thinking" }, { kind: "working" }, overThought(agent.thought.text));
   }
-  if (at < agent.typingUntil) return make("type", { kind: "typing" }, { kind: "working" }, null);
-  if (isAwake(agent, at)) return make("sit", { kind: "seated" }, { kind: "working" }, null);
+  if (at < agent.typingUntil) return make("type", { kind: "typing" }, { kind: "working" }, doing);
+  if (isAwake(agent, at)) return make("sit", { kind: "seated" }, { kind: "working" }, doing);
   return make("sleep", { kind: "asleep" }, { kind: "asleep" }, { kind: "zzz" });
 }
 
@@ -829,6 +900,8 @@ export function nextChangeAt(model: RoomModel, at: number): number {
     }
     consider(agent.typingUntil);
     if (agent.thought) consider(agent.thought.until);
+    // The status gives way to the last tool once it is old.
+    if (agent.running && agent.announced) consider(agent.announced.at + ANNOUNCE_MS);
     if (!agent.running) consider(agent.lastActive + ASLEEP_AFTER_MS);
     for (const trip of agent.trips) {
       consider(trip.start);

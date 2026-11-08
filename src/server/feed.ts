@@ -19,6 +19,7 @@ import { heldResources } from "./resources";
 import { toPosix, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, ownerSpriteUrl, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { logoUrl } from "./logos";
+import { HQ_STATUS_TOOL } from "../ui/activity";
 import type { FloorLayoutMode } from "../ui/floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM, resolveReceptionRoom } from "../ui/reception";
 
@@ -257,6 +258,11 @@ export type StateDto = {
       /** Its resources held by another agent's run while it has work waiting (« en attente du GPU »), empty otherwise. */
       waitingFor: string[];
       lastRun: RunDto | null;
+      /**
+       * While a run is in progress: what the agent last said it is doing (hq_status) and its last other tool
+       * call, each with its time, so that a page opened during the run shows its bubble at once. Null otherwise.
+       */
+      activity: AgentActivityDto | null;
     }[];
   }[];
   invalidRooms: { room: string; error: string }[];
@@ -281,6 +287,35 @@ export type StateDto = {
   approvals: { pending: ApprovalDto[]; unseen: ApprovalDto[]; history: ApprovalDto[] };
   recent: { events: EventDto[]; messages: MessageDto[] };
 };
+
+/** What a running agent last said it does, and its last other tool call (docs/api.md, `GET /api/state`). */
+export type AgentActivityDto = {
+  status: { text: string; at: string } | null;
+  tool: { name: string; input: unknown; at: string } | null;
+};
+
+/** The activity of a run in progress: its latest status (hq_status) and its latest other tool call. */
+function runActivity(db: Db, runId: number): AgentActivityDto {
+  const status = db
+    .prepare("SELECT text, created_at FROM run_statuses WHERE run_id = ? ORDER BY id DESC LIMIT 1")
+    .get(runId) as { text: string; created_at: string } | undefined;
+  const call = db
+    .prepare(
+      `SELECT data, created_at FROM events WHERE run_id = ? AND type = 'tool_call'
+       AND COALESCE(json_extract(data, '$.name'), '') <> ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(runId, HQ_STATUS_TOOL) as { data: string; created_at: string } | undefined;
+  let tool: AgentActivityDto["tool"] = null;
+  if (call) {
+    try {
+      const data = JSON.parse(call.data) as { name?: unknown; input?: unknown };
+      if (typeof data.name === "string") tool = { name: data.name, input: data.input ?? {}, at: call.created_at };
+    } catch {
+      // A malformed event says nothing.
+    }
+  }
+  return { status: status ? { text: status.text, at: status.created_at } : null, tool };
+}
 
 export type SchedulerInfo = {
   /** HQ_SCHEDULER=on. */
@@ -358,6 +393,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           resources: agent.resources,
           waitingFor: state === "working" ? [] : waitingFor(db, room.name, agent.id, agent.resources),
           lastRun: row ? toRun(row) : null,
+          activity: row?.status === "running" ? runActivity(db, row.id) : null,
         };
       }),
     })),

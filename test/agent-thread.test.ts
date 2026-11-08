@@ -105,7 +105,7 @@ test("the lines of the thread: a day line per day, the message then its answer, 
     {
       kind: "run",
       at: day2,
-      run: { id: 7, status: "running", task: "Go", reason: null, costUsd: 0, startedAt: day2, endedAt: null, summary: null },
+      run: { id: 7, status: "running", task: "Go", reason: null, costUsd: 0, startedAt: day2, endedAt: null, summary: null, statuses: [], statusCount: 0 },
     },
     {
       kind: "item",

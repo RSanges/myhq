@@ -59,6 +59,7 @@ export const QUESTION_DENIED_TOOLS = [
   "mcp__hq__hq_submit",
   "mcp__hq__hq_message",
   "mcp__hq__hq_ask",
+  "mcp__hq__hq_status",
   "mcp__hq__hq_task_update",
   "mcp__hq__hq_read_decisions",
   "mcp__hq__hq_memory_write",

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { HQ_STATUS_TOOL } from "./activity";
 import { placeAgents, type AgentGroup } from "./agent-groups";
 import { AgentSheet } from "./agent-sheet";
 import { ChatPanel, ChatToggle, useChatToggle } from "./chat-panel";
@@ -297,6 +298,19 @@ export function RoomPage() {
     [selected, model.approvals],
   );
 
+  // What the agent whose sheet is open does: its header shows it. Its thread lists the steps again at each new status.
+  const selectedActivity = selected ? (statusOf.get(selected.key)?.activity ?? null) : null;
+  const selectedStatus = useMemo(() => {
+    if (selected === null) return 0;
+    let latest = 0;
+    for (const event of model.events) {
+      if (event.room === selected.room && event.agentId === selected.id && event.type === "tool_call" && event.data.name === HQ_STATUS_TOOL) {
+        latest = event.id;
+      }
+    }
+    return latest;
+  }, [selected, model.events]);
+
   const title = room === null || single ? t.title : t.floorTitle(room);
 
   return (
@@ -448,6 +462,7 @@ export function RoomPage() {
                   name={item.agent.name}
                   color={item.agent.color}
                   status={statusOf.get(item.key)?.status ?? null}
+                  activity={statusOf.get(item.key)?.activity ?? null}
                   label={label}
                   selected={item.key === selectedKey}
                   onOpen={() => setSelectedKey(item.key)}
@@ -506,7 +521,8 @@ export function RoomPage() {
           dispatch={dispatch}
           onClose={closeSheet}
           asleep={statusOf.get(selected.key)?.status.kind === "asleep"}
-          refreshKey={selectedItems}
+          activity={selectedActivity}
+          refreshKey={`${selectedItems}|${selectedStatus}`}
         />
       )}
       {receptionHere && selectedKey === RECEPTION_KEY && (
@@ -526,6 +542,7 @@ function AgentRow({
   name,
   color = null,
   status,
+  activity = null,
   label,
   selected,
   onOpen,
@@ -537,6 +554,8 @@ function AgentRow({
   /** Colour of the agent's room; the receptionist has none. */
   color?: string | null;
   status: AgentStatus | null;
+  /** What it says it is doing during its run (activity.ts): shown instead of its pose. */
+  activity?: string | null;
   /** The group this chip opens in the strip, named above it; null inside a group. */
   label: AgentGroup | null;
   selected: boolean;
@@ -563,7 +582,9 @@ function AgentRow({
         onClick={onOpen}
       >
         <span className="room-agent-name">{name}</span>
-        <span className="room-agent-status">{status ? statusText(status, receptionist) : ""}</span>
+        <span className="room-agent-status" data-activity={activity ? "" : undefined}>
+          {activity ?? (status ? statusText(status, receptionist) : "")}
+        </span>
       </button>
     </li>
   );

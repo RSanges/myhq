@@ -5,8 +5,8 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { pathToFileURL } from "node:url";
 import { openDb, type Db } from "../src/server/db";
-import { hqMcpServerCommand } from "../src/server/claude-engine";
 
 let dir: string;
 let db: Db;
@@ -33,7 +33,12 @@ before(async () => {
     "INSERT INTO tasks (room, agent_id, source, text, status, run_id, created_at, updated_at) VALUES ('demo', 'scout', 'manual', 'test', 'in_progress', ?, ?, ?)",
   ).run(runId, at, at);
 
-  const server = hqMcpServerCommand(process.cwd());
+  // The sources, never the frozen bundle of build/mcp: that one belongs to the app in service and may be older.
+  const loader = path.join(process.cwd(), "node_modules", "tsx", "dist", "loader.mjs");
+  const server = {
+    command: process.execPath,
+    args: ["--import", pathToFileURL(loader).href, path.join(process.cwd(), "src", "mcp", "server.ts")],
+  };
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args,
@@ -61,7 +66,7 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return content.map((part) => part.text).join("");
 }
 
-test("lists the seventeen hq tools", async () => {
+test("lists the eighteen hq tools", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "hq_ask",
@@ -78,10 +83,36 @@ test("lists the seventeen hq tools", async () => {
     "hq_run_extend",
     "hq_run_status",
     "hq_run_stop",
+    "hq_status",
     "hq_submit",
     "hq_suggest_agent",
     "hq_task_update",
   ]);
+});
+
+test("hq_status stores what the agent says it does, with the time and its run, and writes nothing else", async () => {
+  const changes = (db.prepare("SELECT COUNT(*) AS n FROM changes").get() as { n: number }).n;
+  const result = await client.callTool({ name: "hq_status", arguments: { text: "  rend le clip B,\n 2 sur 3 " } });
+  assert.notEqual(result.isError, true, textOf(result));
+  const answer = JSON.parse(textOf(result)) as { saved: boolean; text: string; at: string };
+  assert.equal(answer.saved, true);
+  assert.equal(answer.text, "rend le clip B, 2 sur 3", "one line, its spaces collapsed");
+  const rows = db.prepare("SELECT * FROM run_statuses WHERE run_id = ?").all(runId) as Record<string, unknown>[];
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    { run: rows[0]!.run_id, room: rows[0]!.room, agent: rows[0]!.agent_id, text: rows[0]!.text, at: rows[0]!.created_at },
+    { run: runId, room: "demo", agent: "scout", text: "rend le clip B, 2 sur 3", at: answer.at },
+  );
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM changes").get() as { n: number }).n, changes, "no run, event, message or item");
+});
+
+test("hq_status refuses a blank text and one longer than 60 characters", async () => {
+  for (const text of ["", "   ", "x".repeat(61)]) {
+    const result = await client.callTool({ name: "hq_status", arguments: { text } });
+    assert.equal(result.isError, true, JSON.stringify(text));
+  }
+  const ok = await client.callTool({ name: "hq_status", arguments: { text: "x".repeat(60) } });
+  assert.notEqual(ok.isError, true, textOf(ok));
 });
 
 test("hq_submit creates a pending approval", async () => {

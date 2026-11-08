@@ -3127,7 +3127,7 @@ body {
   background: var(--card);
 }
 
-.agent-event summary {
+.agent-event > details > summary {
   display: flex;
   align-items: flex-start;
   gap: 0.6rem;
@@ -3137,11 +3137,11 @@ body {
   list-style: none;
 }
 
-.agent-event summary::-webkit-details-marker {
+.agent-event > details > summary::-webkit-details-marker {
   display: none;
 }
 
-.agent-event summary::after {
+.agent-event > details > summary::after {
   content: "";
   flex: none;
   width: 0.45rem;
@@ -3153,12 +3153,12 @@ body {
   transition: rotate 0.15s;
 }
 
-.agent-event details[open] summary::after {
+.agent-event > details[open] > summary::after {
   margin-top: 0.6rem;
   rotate: 225deg;
 }
 
-.agent-event summary:hover {
+.agent-event > details > summary:hover {
   background: var(--soft);
 }
 
@@ -3407,7 +3407,7 @@ body {
     animation: none !important;
   }
 
-  .agent-event summary::after {
+  .agent-event > details > summary::after {
     transition: none;
   }
 }
@@ -3481,4 +3481,81 @@ body {
 .agent-proposal-done {
   color: var(--ok);
   font-weight: 700;
+}
+
+/* What an agent at work says it does, on its chip under the floor: in the text colour, two lines at most. */
+.room-agent-status[data-activity] {
+  display: -webkit-box;
+  max-width: 13rem;
+  overflow: hidden;
+  color: var(--foreground);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 39.99rem) {
+  .room-agent-status[data-activity] {
+    max-width: none;
+  }
+}
+
+/* A bubble over a head points at it: a small square tail under its middle, in the box's own colours. */
+.room-label[data-box="bubble"]::after {
+  content: "";
+  position: absolute;
+  bottom: -0.32em;
+  left: 50%;
+  width: 0.55em;
+  height: 0.55em;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  translate: -50% 0;
+  rotate: 45deg;
+}
+
+/* The steps a run announced (hq_status), in the thread of the sheet: the latest ones, the current one in front. */
+.agent-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-steps li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.15rem 0 0.15rem 0.85rem;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.agent-steps time {
+  font-size: 0.71875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-steps li[data-current] {
+  border-left-color: var(--ok);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.agent-steps-live {
+  margin: 0 0.75rem 0.6rem 2rem;
+}
+
+.agent-steps-more summary {
+  color: var(--muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.agent-steps-more[open] summary {
+  margin-bottom: 0.2rem;
 }

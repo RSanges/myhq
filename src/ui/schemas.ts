@@ -126,6 +126,14 @@ export const agentSchema = z.object({
   /** Its resources another run held while its work waited, when the state was read. */
   waitingFor: z.array(z.string()).optional(),
   lastRun: runSchema.nullable(),
+  /** While a run is in progress: its latest status (hq_status) and its latest other tool call; absent from an older server. */
+  activity: z
+    .object({
+      status: z.object({ text: z.string(), at: z.string() }).nullable(),
+      tool: z.object({ name: z.string(), input: z.unknown(), at: z.string() }).nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const firingSchema = z.object({
@@ -327,6 +335,10 @@ export const threadRunSchema = z.object({
   startedAt: z.string(),
   endedAt: z.string().nullable(),
   summary: z.string().nullable(),
+  /** What the agent said it was doing during the run (hq_status), oldest first: the latest ones. */
+  statuses: z.array(z.object({ text: z.string(), at: z.string() })).default([]),
+  /** How many it said in all (more than `statuses` when the earliest were left out). */
+  statusCount: z.number().int().default(0),
 });
 
 /** An item the agent submitted, in its thread; `question`: an item of questions (hq_ask). */

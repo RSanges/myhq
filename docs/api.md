@@ -297,7 +297,8 @@ restart.
           "state": "idle",
           "resources": [],
           "waitingFor": [],
-          "lastRun": null
+          "lastRun": null,
+          "activity": null
         }
       ]
     }
@@ -338,6 +339,14 @@ restart.
   agent's mailbox (the agent sheet then says « En attente : gpu occupé »); empty
   otherwise, and always while the agent works. The interface drops an entry as
   soon as no working agent holds that resource any more.
+- `activity`: while the agent's last run is in progress, what it last said it
+  is doing and its last other tool call, so that a page opened during the run
+  shows its bubble at once: `{ "status": { "text": "rend le clip B, 2 sur 3",
+  "at": "..." }, "tool": { "name": "Read", "input": { "file_path": "..." },
+  "at": "..." } }`, each `null` when there is none (`status` comes from
+  `hq_status`, `tool` from the run's events, `hq_status` itself left out).
+  `null` between runs. After the snapshot, the `tool_call` events of the
+  stream keep it up to date (see `architecture.md`, "The activity bubble").
 - `reception`: the onboarding agent seen from the floors. `room` is the one
   floor that draws it as a receptionist (`reception.room` of `myhq.json` when
   that room exists, else the room `assistant`, else the first room, `null`
@@ -1229,7 +1238,10 @@ before a run, a run before an item.
     {
       "kind": "run",
       "at": "2026-11-08T10:01:00.000Z",
-      "run": { "id": 12, "status": "done", "task": "...", "reason": null, "costUsd": 0.21, "startedAt": "...", "endedAt": "...", "summary": "..." }
+      "run": {
+        "id": 12, "status": "done", "task": "...", "reason": null, "costUsd": 0.21, "startedAt": "...", "endedAt": "...", "summary": "...",
+        "statuses": [{ "text": "rend le clip B, 2 sur 3", "at": "..." }], "statusCount": 1
+      }
     },
     {
       "kind": "item",
@@ -1242,7 +1254,8 @@ before a run, a run before an item.
 ```
 
 `at` is when the question was asked, the run started or the item was
-submitted. `item.question`: an item of questions (`hq_ask`, type `question`).
+submitted. `statuses`: what the agent said it was doing during the run
+(`hq_status`), oldest first, the latest 12; `statusCount`: how many in all. `item.question`: an item of questions (`hq_ask`, type `question`).
 `busy`: a question waits for its answer. Errors: `ROOM_NOT_FOUND`,
 `ROOM_INVALID`, `AGENT_NOT_FOUND`.
 
@@ -1419,7 +1432,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its seventeen tools write to the same
+for each run (see `architecture.md`). Its eighteen tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

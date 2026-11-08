@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { askAgent, decideProposal, errorText, fetchThread, resetDiscussion } from "./api";
 import type { Run, Thread } from "./schemas";
 
 /** How often the thread is read again while the agent answers a question. */
 const POLL_MS = 2_000;
+/**
+ * A change of `refreshKey` is read after this: a status reaches the page with
+ * its tool call, a moment before the HQ server has stored it.
+ */
+const SETTLE_MS = 700;
 
 /**
  * The thread of an agent's sheet: read when the sheet opens and whenever
@@ -20,6 +25,7 @@ export function useAgentThread(room: string, agentId: string, refreshKey: string
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const busy = thread?.busy ?? false;
+  const opened = useRef(false);
 
   useEffect(() => {
     let closed = false;
@@ -33,10 +39,12 @@ export function useAgentThread(room: string, agentId: string, refreshKey: string
         if (!closed) setError(errorText(failure));
       }
     };
-    void load();
+    const first = setTimeout(() => void load(), opened.current ? SETTLE_MS : 0);
+    opened.current = true;
     const timer = busy ? setInterval(() => void load(), POLL_MS) : null;
     return () => {
       closed = true;
+      clearTimeout(first);
       if (timer) clearInterval(timer);
     };
   }, [room, agentId, refreshKey, busy, tick]);

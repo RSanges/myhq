@@ -6,13 +6,15 @@ import { QUESTION_TYPE } from "./questions";
 // agent"): one chronological view of what the owner and the agent said and
 // did, read from the tables that already hold it, never copied. The owner's
 // questions and their answers (since the last « Nouvelle discussion »), the
-// agent's latest runs and the latest items it submitted, its questions
-// (`hq_ask`) among them.
+// agent's latest runs with the steps it announced (`hq_status`) and the latest
+// items it submitted, its questions (`hq_ask`) among them.
 
 /** The latest runs of the agent the thread shows. */
 export const THREAD_RUNS = 15;
 /** The latest items of the agent the thread shows. */
 export const THREAD_ITEMS = 20;
+/** The latest steps of a run (what the agent said it was doing, hq_status) the thread gives. */
+export const THREAD_RUN_STATUSES = 12;
 
 /** A run, as the thread shows it: a line, its whole summary on demand. */
 export type ThreadRun = {
@@ -24,6 +26,10 @@ export type ThreadRun = {
   startedAt: string;
   endedAt: string | null;
   summary: string | null;
+  /** What the agent said it was doing (hq_status), oldest first: the latest THREAD_RUN_STATUSES. */
+  statuses: { text: string; at: string }[];
+  /** How many it said in all. */
+  statusCount: number;
 };
 
 /** An item the agent submitted: its title and status, opened on the desk. `question`: an item of questions (`hq_ask`). */
@@ -61,6 +67,15 @@ export function readThread(db: Db, room: string, agentId: string): ThreadDto {
     )
     .all(room, agentId, THREAD_ITEMS) as { id: number; type: string; title: string; status: ApprovalStatus; created_at: string }[];
 
+  const statusesOf = db.prepare("SELECT text, created_at FROM run_statuses WHERE run_id = ? ORDER BY id DESC LIMIT ?");
+  const countOf = db.prepare("SELECT COUNT(*) AS n FROM run_statuses WHERE run_id = ?");
+  const steps = (runId: number) => ({
+    statuses: (statusesOf.all(runId, THREAD_RUN_STATUSES) as { text: string; created_at: string }[])
+      .reverse()
+      .map((row) => ({ text: row.text, at: row.created_at })),
+    statusCount: (countOf.get(runId) as { n: number }).n,
+  });
+
   const entries: ThreadEntry[] = [
     ...questions.map((question): ThreadEntry => ({ kind: "question", at: question.askedAt, question })),
     ...runs.map(
@@ -76,6 +91,7 @@ export function readThread(db: Db, room: string, agentId: string): ThreadDto {
           startedAt: run.started_at,
           endedAt: run.ended_at,
           summary: run.summary,
+          ...steps(run.id),
         },
       }),
     ),

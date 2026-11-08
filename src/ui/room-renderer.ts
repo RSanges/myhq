@@ -177,6 +177,9 @@ const FLIGHT_MS = 380;
 const MARGIN = 8;
 /** A floor at most this much bigger than the canvas (at one device pixel) is still centred whole; a bigger one shows its offices. */
 const NEARLY_FITS = 1.25;
+/** The widest bubble of activity, and the height of two of its lines, in CSS pixels (scaled like the labels). */
+const BUBBLE_WIDTH = 150;
+const BUBBLE_HEIGHT = 36;
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -929,7 +932,11 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         const node = nodes.get(agent.key);
         if (!node || agent.alpha < 0.5) continue;
         const { feet, height } = node;
-        if (Math.abs(art.x - feet.x) > 22 || art.y < feet.y - height - 2 || art.y > feet.y + 8) continue;
+        // The bubble of what it is doing opens its sheet too: its box is part of the character.
+        const bubbled = agent.bubble?.kind === "activity";
+        const halfWidth = bubbled && art.y < feet.y - height ? px(BUBBLE_WIDTH) / 2 : 22;
+        const top = bubbled ? feet.y - height - 3 - px(22) - px(BUBBLE_HEIGHT) : feet.y - height - 2;
+        if (Math.abs(art.x - feet.x) > halfWidth || art.y < top || art.y > feet.y + 8) continue;
         const depth = agent.x + agent.y;
         if (depth > foundDepth) {
           found = agent;
@@ -1024,6 +1031,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
           const bubble = agent.bubble;
           if (bubble?.kind === "thought") {
             labels.place(`bubble:${agent.key}`, { text: bubble.text, x: node.feet.x, y: bubbleY, size: px(11), ax: 0.5, ay: 1, box: "bubble", maxWidth: px(180), clamp: true });
+          } else if (bubble?.kind === "activity") {
+            // What it is doing, 30 characters at most: on one or two lines, above its name, never over it.
+            labels.place(`bubble:${agent.key}`, { text: bubble.text, x: node.feet.x, y: bubbleY, size: px(11), weight: 600, ax: 0.5, ay: 1, box: "bubble", tone: "ink", maxWidth: px(BUBBLE_WIDTH), clamp: true });
           } else if (bubble?.kind === "question") {
             labels.place(`bubble:${agent.key}`, { text: "?", x: node.feet.x, y: bubbleY, size: px(11), tone: "onDanger", weight: 700, box: "badge", ax: 0.5, ay: 1 });
           } else if (bubble?.kind === "talk") {

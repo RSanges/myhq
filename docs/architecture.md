@@ -121,13 +121,14 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Seventeen tools, all validated with zod:
+room) and writes directly to SQLite. Eighteen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). |
 | `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
+| `hq_status(text)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -2164,7 +2165,9 @@ old `onboarding.sprite` of a home is no longer drawn. To see it without a real r
 |---|---|
 | `run` running | The agent is awake at its desk, seated; a new run clears a question mark. |
 | `tool_call` | Types for 2.5 s. |
-| `text` | Thought bubble with the first 64 characters, for 5 s (the stream does not keep `thinking` blocks). |
+| `text` | Thought bubble with the first 64 characters, for 5 s (the stream does not keep `thinking` blocks), unless the agent's own words (`hq_status`) are up. |
+| `tool_call` `mcp__hq__hq_status` | The bubble of activity over the head says its `text` (see "The activity bubble"); nothing else moves. |
+| any other `tool_call` | Types for 2.5 s; the tool, in a few words, becomes the safety net of the bubble of activity. |
 | `tool_call` `mcp__hq__hq_message` | Gets up and walks the aisles and the hall to the chair of `input.to`, faces it and talks for 3 s, walks back and sits. A recipient that is not in the room makes it an ordinary tool call. |
 | `tool_call` `mcp__hq__hq_submit` | Walks to the tray of the lobby carrying a folder, stays 2.2 s, drops it in the tray, walks back. The tray counter rises at the drop, not when the `approval` event arrives. |
 | run `failed`, `end` failed, or `hq_task_update` with `status: blocked` | A question mark, until the user decides an item of that agent or the next run starts. It overrides typing and thinking, not a walk, and it does not fall asleep. |
@@ -2173,6 +2176,40 @@ old `onboarding.sprite` of a home is no longer drawn. To see it without a real r
 
 Trips queue behind each other (three waiting at most). Every state has a text
 label (types, thinks, "drops an item"...) in `strings.ts`.
+
+**The activity bubble.** During a run, a small bubble over the head of the
+agent says what it is doing, in its words: the `text` of its latest
+`hq_status`. The prompt of every run (`buildPrompt`) asks the agent to call
+it at the start and at each notable step, a few words in the home's language,
+60 characters at most, no technical detail (an agent whose `allowedTools`
+is explicit needs `mcp__hq__hq_status` in it; `mcp__hq__*` covers it). The
+MCP server stores it (`run_statuses`: run, room, agent, text, time) and
+writes nothing else; the floor learns it from the tool call itself, which the
+run's event stream already carries to the page (`tool_call` events), checked
+with the same rule as the server (`normalizeStatus` of
+`src/ui/activity.ts`: one line, 60 characters at most as given, not blank),
+so that both agree on what is a status. The latest status wins for 2 minutes
+(`ANNOUNCE_MS`); then, or when the agent never said anything, its last
+other tool says it instead, translated by code, without a model
+(`toolActivity`): Read « lit brief.md », Grep and Glob « cherche dans les
+fichiers », Write and Edit « écrit script.md », WebSearch « cherche sur le
+web », a Bash command by what it runs (ffmpeg « monte la vidéo », Remotion
+« fait le rendu vidéo », python, node or curl « lance un script », git
+« met à jour le code », tests « lance les vérifications »), `hq_submit`
+« dépose un item », `hq_message` « écrit à writer », the tool of another
+MCP server « utilise courrier ». A status stays as long as no tool came after
+it. The bubble shows 30 characters at most, cut with « … », in the box of the
+other bubbles (a small tail under its middle), above the name tag and never
+over it. The agent's own words win over a thought bubble; the words of the
+safety net give way to one for its 5 s. Both give way to the question mark
+and to a visit, and never show between runs (an agent that
+waits or sleeps has none). A click on it opens the agent's sheet, as a click
+on the character does. Reduced motion changes nothing: the bubble does not
+move. The chip of the agent under the floor and the header of its sheet show
+the same words in full (« Au travail : rend le clip B, 2 sur 3 »). A page
+opened during a run gets the latest status and the last tool call of the run
+from `/api/state` (`activity` of each agent), so the bubble is there at
+once.
 
 **Accessibility.** The canvas complements the desk and is `aria-hidden`. Under
 it a list gives, for each agent, its name, its state in text and a button that
@@ -2203,13 +2240,16 @@ floor; `agent-sheet.tsx`) is a conversation with it, laid out like a
 messaging app:
 
 - **The header**: the agent's name, its room and its state in one line
-  (« Au travail », « Réfléchit à ta question… », « Dort », « Disponible »,
-  a failed last run, a shared resource it waits for: `sheetState` of
+  (« Au travail : rend le clip B, 2 sur 3 » with the words of its bubble of
+  activity, « Réfléchit à ta question… », « Dort », « Disponible », a failed
+  last run, a shared resource it waits for: `sheetState` of
   `agent-thread-model.ts`, pure).
 - **One thread**, oldest first: the owner's messages and the agent's answers
   (questions to the agent, see "Questions to an agent"), its runs in one line
   each (time, status, duration, cost and the end of its summary; unfolded,
-  the whole summary, its task and a link to the run on the desk), the items it
+  the whole summary, its task and a link to the run on the desk; the steps it
+  announced with `hq_status`, time and text, the latest three shown, the
+  current one in front while the run goes on, the earlier ones folded), the items it
   submitted (title, status, a link to the desk) and its questions (`hq_ask`)
   that wait for the owner, with « Répondre ». A day line separates the days.
   The server aggregates it (`readThread` of `src/server/agent-thread.ts`,
@@ -2217,8 +2257,9 @@ messaging app:
   each of them, without copying anything: the discussion since its last
   reset, the latest 15 runs and the latest 20 items. The interface turns it
   into lines (`threadLines`, pure). It is read again when the agent's last run
-  starts or ends, when one of its items comes or is decided, and every 2
-  seconds while a question waits for its answer.
+  starts or ends, when one of its items comes or is decided, at each new
+  status of the agent (a moment after its tool call, for the server to store
+  it), and every 2 seconds while a question waits for its answer.
 - **One field at the bottom**, « Écris à <agent> », and a send button: Enter
   sends, Shift+Enter goes to the next line. Each message is a question to the
   agent. « Nouvelle discussion » takes the messages and answers out of the

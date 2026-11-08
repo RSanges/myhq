@@ -188,7 +188,8 @@ test("onboarding run: types on each read, thinks on text, carries the item to th
 
   assert.equal(agent(reading).status.kind, "typing");
   assert.equal(agent(reading).pose, "type");
-  assert.equal(agent(reading).bubble, null);
+  // No status of its own yet: its last tool says what it does (the safety net of the bubble of activity).
+  assert.deepEqual(agent(reading).bubble, { kind: "activity", text: "lit README.md" });
   assert.equal(agent(stillReading).status.kind, "typing");
   assert.equal(agent(thinkingAgain).status.kind, "thinking");
 

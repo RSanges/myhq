@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { recentRuns } from "./agent-runs";
-import { localDay, sheetState, threadLines, type SheetState, type ThreadLine } from "./agent-thread-model";
+import { localDay, sheetState, threadLines, type RunSteps, type SheetState, type ThreadLine } from "./agent-thread-model";
 import { errorText, startRun } from "./api";
 import { approvalHash, DESK_PATH, runHash } from "./deep-link";
 import { FeedRow } from "./feed";
@@ -24,17 +24,18 @@ const t = strings.room.sheet;
 const MESSAGE_MAX_CHARS = 4_000;
 
 /**
- * Focus for a sheet: what opened it is remembered, `first` gets the focus when
- * it opens, and the focus goes back when it closes. Escape calls `onEscape`.
+ * Focus for a sheet: what opened it is remembered, the element `first` gives
+ * gets the focus when it opens, and the focus goes back when it closes. Escape
+ * calls `onEscape`.
  */
-function useSheetFocus(first: { current: HTMLElement | null }, onEscape: () => void) {
+function useSheetFocus(first: () => HTMLElement | null, onEscape: () => void) {
   const onEscapeRef = useRef(onEscape);
   useEffect(() => {
     onEscapeRef.current = onEscape;
   });
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    first.current?.focus();
+    first()?.focus();
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") onEscapeRef.current();
     };
@@ -68,7 +69,7 @@ export function SheetShell({
   children: ReactNode;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  useSheetFocus(closeRef, onClose);
+  useSheetFocus(() => closeRef.current, onClose);
 
   return (
     <aside className="room-sheet" role="dialog" aria-label={label}>
@@ -112,6 +113,40 @@ const Icon = ({ children }: { children: ReactNode }) => (
 
 /** The anchor of a run's line in the thread. */
 export const threadRunId = (id: number): string => `agent-thread-run-${id}`;
+
+/** The steps a run announced (hq_status): the latest, the current one in front, the earlier ones folded. */
+function Steps({ runId, steps, className }: { runId: number; steps: RunSteps; className?: string }) {
+  const p = t.thread;
+  const row = (step: { text: string; at: string; current?: boolean }, index: number) => (
+    <li key={`${step.at}:${index}`} data-current={step.current ? "" : undefined} aria-current={step.current ? "step" : undefined}>
+      <time dateTime={step.at}>{formatClock(step.at)}</time>
+      <span>{step.text}</span>
+    </li>
+  );
+  return (
+    <div className={className}>
+      {(steps.folded.length > 0 || steps.hidden > 0) && (
+        <details className="agent-steps-more">
+          <summary>
+            {p.stepsEarlier(steps.folded.length + steps.hidden)}
+          </summary>
+          <ul className="agent-steps">
+            {steps.folded.map(row)}
+            {steps.hidden > 0 && (
+              <li>
+                <span />
+                <span>{p.stepsHidden(steps.hidden)}</span>
+              </li>
+            )}
+          </ul>
+        </details>
+      )}
+      <ul className="agent-steps" aria-label={p.stepsLabel(runId)}>
+        {steps.shown.map(row)}
+      </ul>
+    </div>
+  );
+}
 
 /** Brings the line of a run into view, unfolded. */
 function showRun(id: number) {
@@ -264,6 +299,12 @@ function Line({ line, name, now, decide }: { line: ThreadLine; name: string; now
               </span>
             </summary>
             <div className="agent-event-more">
+              {run.status !== "running" && line.steps.shown.length > 0 && (
+                <>
+                  <p className="agent-event-label">{t.thread.steps}</p>
+                  <Steps runId={run.id} steps={line.steps} />
+                </>
+              )}
               <p className="agent-event-label">{t.thread.runSummary}</p>
               {run.summary ? (
                 <div className="agent-event-summary">
@@ -279,6 +320,9 @@ function Line({ line, name, now, decide }: { line: ThreadLine; name: string; now
               </Link>
             </div>
           </details>
+          {run.status === "running" && line.steps.shown.length > 0 && (
+            <Steps runId={run.id} steps={line.steps} className="agent-steps-live" />
+          )}
         </li>
       );
     }
@@ -454,6 +498,7 @@ export function AgentSheet({
   dispatch,
   onClose,
   asleep = false,
+  activity = null,
   refreshKey = "",
 }: {
   agent: TeamAgent;
@@ -462,6 +507,8 @@ export function AgentSheet({
   onClose: () => void;
   /** The floor shows it asleep. */
   asleep?: boolean;
+  /** What it says it is doing during its run (activity.ts), for the header. */
+  activity?: string | null;
   /** Changes when something the thread shows may have changed (an item of the agent, for one). */
   refreshKey?: string;
 }) {
@@ -477,11 +524,7 @@ export function AgentSheet({
   const gearRef = useRef<HTMLButtonElement>(null);
   // On a phone the keyboard would cover the thread: the focus goes to the way back instead of the field.
   useSheetFocus(
-    {
-      get current() {
-        return (window.matchMedia("(min-width: 48rem)").matches ? fieldRef.current : backRef.current) ?? null;
-      },
-    },
+    () => (window.matchMedia("(min-width: 48rem)").matches ? fieldRef.current : backRef.current),
     () => {
       if (settings) {
         setSettings(false);
@@ -507,7 +550,7 @@ export function AgentSheet({
     working,
     failed: agent.state === "failed",
     asleep,
-    activity: null,
+    activity,
     waitingFor: agent.waitingFor ?? [],
   });
 

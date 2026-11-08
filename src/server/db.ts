@@ -712,6 +712,25 @@ CREATE TABLE IF NOT EXISTS question_proposals (
 );
 `,
   },
+  {
+    version: 21,
+    sql: `
+-- What an agent says it is doing during a run (the HQ tool hq_status, 60
+-- characters at most, docs/architecture.md, "The activity bubble"): the
+-- bubble over its head, its chip and the steps of the run in its sheet.
+-- Written by the HQ MCP server of the run; nothing else reads or acts on it.
+-- Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS run_statuses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_statuses_run ON run_statuses (run_id, id);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

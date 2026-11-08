@@ -32,6 +32,7 @@ import {
   writeMessage,
   type RelayMessage,
 } from "../server/supervisor";
+import { normalizeStatus, STATUS_MAX_CHARS } from "../ui/activity";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
 /** Context of the HQ MCP server, read from the environment of the run. */
@@ -114,7 +115,7 @@ const targetShape = {
 /** The run a supervisor checks: the run number of its « long run to check » task. */
 const runIdShape = z.number().int().positive().describe("The number of the run (#12 gives 12), as your task « Long run to check » names it.");
 
-/** Input shapes of the seventeen tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the eighteen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -201,6 +202,15 @@ export const inputs = {
   hq_memory_write: {
     key: z.string().min(1).max(200).describe("Key of the value to write."),
     value: z.string().max(100_000).describe("Value to store (text or JSON)."),
+  },
+  hq_status: {
+    text: z
+      .string()
+      .max(STATUS_MAX_CHARS)
+      .refine((value) => normalizeStatus(value) !== null, "a few words, not blank")
+      .describe(
+        `What you are doing right now, in a few words of the home's language, for the owner: ${STATUS_MAX_CHARS} characters at most, no technical detail (no file path, command or tool name). For example "rend le clip B, 2 sur 3".`,
+      ),
   },
   hq_pending: {},
   hq_items: {
@@ -964,6 +974,26 @@ export function hqRunStop(db: Db, ctx: HqContext, args: Args<"hq_run_stop">) {
     ...requestStop(db, { room: ctx.room, agentId: ctx.agentId }, parsed.runId, parsed.reason),
     note: "MyHQ interrupts the run now: it ends failed, its own task blocked and its mailbox tasks pending, and the Standard shows your reason.",
   };
+}
+
+/**
+ * hq_status: what the agent says it is doing, stored with the time and its run
+ * (`run_statuses`, migration 21). It writes nothing else: the floor reads it
+ * from the tool call itself, which reaches the interface through the event
+ * stream of the run, and the sheet lists the steps of the run.
+ */
+export function hqStatus(db: Db, ctx: HqContext, args: Args<"hq_status">) {
+  const parsed = z.object(inputs.hq_status).parse(args);
+  const text = normalizeStatus(parsed.text)!;
+  const at = now();
+  db.prepare("INSERT INTO run_statuses (run_id, room, agent_id, text, created_at) VALUES (?, ?, ?, ?, ?)").run(
+    ctx.runId,
+    ctx.room,
+    ctx.agentId,
+    text,
+    at,
+  );
+  return { saved: true as const, text, at };
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {

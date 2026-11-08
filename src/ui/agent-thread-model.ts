@@ -11,6 +11,16 @@ import type { AgentQuestion, ThreadEntry, ThreadItem, ThreadRun } from "./schema
 
 /** The end of a run's summary shown on its line, in characters. */
 export const TAIL_CHARS = 140;
+/** The latest steps of a run (hq_status) shown at once; the earlier ones are folded. */
+export const STEPS_SHOWN = 3;
+
+/** The steps a run announced, as its line shows them: the latest ones, the current one marked, the rest folded. */
+export type RunSteps = {
+  shown: { text: string; at: string; current: boolean }[];
+  folded: { text: string; at: string }[];
+  /** Older steps the thread did not get at all. */
+  hidden: number;
+};
 
 export type ReplyState = "thinking" | "answer" | "failed";
 
@@ -41,6 +51,7 @@ export type ThreadLine =
       durationMs: number | null;
       /** The end of its summary, on its line. */
       tail: string | null;
+      steps: RunSteps;
     }
   | {
       kind: "item";
@@ -94,6 +105,17 @@ export function runDurationMs(run: Pick<ThreadRun, "startedAt" | "endedAt">, now
   return Math.max(0, end - start);
 }
 
+/** The steps of a run: the latest STEPS_SHOWN, the last one current while the run goes on, the earlier ones folded. */
+export function runSteps(run: Pick<ThreadRun, "status" | "statuses" | "statusCount">, shown: number = STEPS_SHOWN): RunSteps {
+  const split = Math.max(0, run.statuses.length - shown);
+  const latest = run.statuses.slice(split);
+  return {
+    shown: latest.map((step, index) => ({ ...step, current: run.status === "running" && index === latest.length - 1 })),
+    folded: run.statuses.slice(0, split),
+    hidden: Math.max(0, run.statusCount - run.statuses.length),
+  };
+}
+
 function replyState(question: AgentQuestion): ReplyState {
   if (question.status === "running") return "thinking";
   return question.status === "done" && question.answer !== null ? "answer" : "failed";
@@ -137,6 +159,7 @@ export function threadLines(entries: readonly ThreadEntry[], now: number): Threa
           run: entry.run,
           durationMs: runDurationMs(entry.run, now),
           tail: summaryTail(entry.run.summary),
+          steps: runSteps(entry.run),
         });
         break;
       case "item":

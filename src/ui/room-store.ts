@@ -88,6 +88,7 @@ export function createRoomStore(): RoomStore {
                     lastRun: agent.lastRun,
                     roam: agent.roam ?? false,
                     roamAlways: agent.roamAlways ?? false,
+                    activity: agent.activity ?? null,
                   })),
                 })),
                 approvals: state.approvals.pending,
@@ -113,7 +114,13 @@ export function createRoomStore(): RoomStore {
                 model,
                 {
                   type: "hydrate",
-                  agents: room.agents.map((agent) => ({ id: agent.id, name: agent.name, lastRun: agent.lastRun, roam: agent.roam ?? false })),
+                  agents: room.agents.map((agent) => ({
+                    id: agent.id,
+                    name: agent.name,
+                    lastRun: agent.lastRun,
+                    roam: agent.roam ?? false,
+                    activity: agent.activity ?? null,
+                  })),
                   approvals: state.approvals.pending.filter(
                     (approval) => pileRoomOf(approval) === room.name || (here && pileRoomOf(approval) === RECEPTION_ROOM),
                   ),
