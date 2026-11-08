@@ -258,7 +258,7 @@ export function questionSystemText(language: string): string {
     "",
     "Tell the two apart from what the owner wants:",
     "- The owner wants to talk (a question, an opinion, where you stand, how you work, what you would do, an idea to weigh): answer normally.",
-    `- The owner asks you to do work (make, redo, produce, write, render, send, fix, check and report, publish...): do not do it, and never say or suggest it is done. Say in one short sentence that you will start a run for it, then end your answer with a block holding the task of that run, alone on its last lines, outside any code block:`,
+    `- The owner asks you to do work (make, redo, produce, write, render, send, fix, check and report, publish...): do not do it, and never say or suggest it is done. Say in one short sentence that you propose a run for it, which starts only once the owner confirms it, then end your answer with a block holding the task of that run, alone on its last lines, outside any code block:`,
     "",
     `<${RUN_PROPOSAL_TAG}>`,
     "The task of the run, in the language of your answer: complete and self-contained, as if it were given to you without this discussion (what to do, on what, with the details and decisions of the discussion that matter, what to deliver and how).",

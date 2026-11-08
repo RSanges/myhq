@@ -1215,7 +1215,7 @@ mode and decides what the owner wants. The « Question mode » block tells it
 apart: a wish to talk (a question, an opinion, where it stands, how it works)
 gets a plain answer; a request for work (make, redo, produce, write, send,
 fix...) is never done, and the agent never says it is. It says in one short
-sentence that it will start a run, then ends its answer with a tagged block,
+sentence that it proposes a run, which starts once the owner confirms, then ends its answer with a tagged block,
 alone on its last lines, that holds the task of that run, reworded, complete
 and self-contained (what to do, on what, with the details of the discussion
 that matter, what to deliver):
