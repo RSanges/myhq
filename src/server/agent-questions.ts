@@ -1,0 +1,465 @@
+import fs from "node:fs";
+import path from "node:path";
+import { z } from "zod";
+import { memoryText, readMemories } from "./briefing";
+import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
+import { getConfig, liveConfig, type HqConfig } from "./config";
+import { getDbAt, now, type Db } from "./db";
+import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } from "./engine";
+import { HqError } from "./errors";
+import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
+import { languageName } from "./onboarding";
+import type { Agent, Room } from "./rooms";
+import { agentEnv, findAgent, isStopping, todayLine } from "./runner";
+
+// Questions of the owner to an agent (docs/architecture.md, "Questions to an
+// agent"). The agent answers with its own role, memory, model and effort, in
+// its own working directory, through the same `claude -p` as a run, but with
+// read tools only: Read, Glob, Grep and the HQ server in read-only mode
+// (hq_memory_read, hq_items). It is not a run: nothing in `runs`, no agent
+// lock, no daily cap, no wake-up. Each question is metered in
+// `agent_questions` (migration 19), and its cost counts in the day and the
+// week of the whiteboard (usage.ts).
+
+/** The longest question the owner may ask. */
+export const QUESTION_MAX_CHARS = 4_000;
+/** A question that has no answer after this is stopped (`timeout`). */
+export const QUESTION_TIMEOUT_MS = 5 * 60_000;
+/** The cap of one question (`--max-budget-usd`), below the agent's own when that is lower. */
+export const QUESTION_MAX_BUDGET_USD = 1;
+/** The earlier exchanges of the discussion given back to the agent, and how much of each answer. */
+export const QUESTION_CONTEXT_EXCHANGES = 10;
+export const QUESTION_CONTEXT_ANSWER_CHARS = 2_000;
+/** The longest answer stored. */
+export const ANSWER_MAX_CHARS = 20_000;
+/** How many questions of the discussion the API gives back, the latest ones. */
+export const DISCUSSION_LIMIT = 50;
+
+/** The only built-in tools that exist for a question: they read, never write. */
+export const QUESTION_TOOLS = ["Read", "Glob", "Grep"] as const;
+/** The HQ tools of a question: the ones the server gives in read-only mode. */
+export const QUESTION_HQ_TOOLS = ["mcp__hq__hq_memory_read", "mcp__hq__hq_items"] as const;
+/**
+ * Denied on top of the global deny list, whatever the project settings of the
+ * working directory allow: every built-in tool that writes, runs or fetches,
+ * and every HQ tool that writes (the server does not even give them).
+ */
+export const QUESTION_DENIED_TOOLS = [
+  "Bash",
+  "Edit",
+  "MultiEdit",
+  "Write",
+  "NotebookEdit",
+  "WebFetch",
+  "WebSearch",
+  "Task",
+  "mcp__hq__hq_submit",
+  "mcp__hq__hq_message",
+  "mcp__hq__hq_ask",
+  "mcp__hq__hq_task_update",
+  "mcp__hq__hq_read_decisions",
+  "mcp__hq__hq_memory_write",
+  "mcp__hq__hq_suggest_agent",
+  "mcp__hq__hq_relaunch",
+  "mcp__hq__hq_blocked_note",
+  "mcp__hq__hq_run_extend",
+  "mcp__hq__hq_run_stop",
+] as const;
+
+export const askSchema = z.strictObject({
+  question: z.string().trim().min(1).max(QUESTION_MAX_CHARS),
+});
+
+export const QUESTION_STATUSES = ["running", "done", "failed"] as const;
+export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
+
+/** Why a question has no answer: its delay, its budget, the engine, or the app stopped during it. */
+export type QuestionError = "timeout" | "budget" | "error" | "interrupted";
+
+export type QuestionRow = {
+  id: number;
+  room: string;
+  agent_id: string;
+  question: string;
+  answer: string | null;
+  status: QuestionStatus;
+  error: QuestionError | null;
+  detail: string | null;
+  engine: string;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  cost_usd: number;
+  tool_calls: number;
+  tools: string;
+  started_at: string;
+  ended_at: string | null;
+  cleared_at: string | null;
+};
+
+/** A question as the API gives it. */
+export type QuestionDto = {
+  id: number;
+  question: string;
+  answer: string | null;
+  status: QuestionStatus;
+  error: QuestionError | null;
+  model: string | null;
+  costUsd: number;
+  askedAt: string;
+  answeredAt: string | null;
+};
+
+export function toQuestion(row: QuestionRow): QuestionDto {
+  return {
+    id: row.id,
+    question: row.question,
+    answer: row.answer,
+    status: row.status,
+    error: row.error,
+    model: row.model,
+    costUsd: row.cost_usd,
+    askedAt: row.started_at,
+    answeredAt: row.ended_at,
+  };
+}
+
+export type QuestionDeps = {
+  config?: HqConfig;
+  /** Default: the real `claude -p` (ClaudeEngine). */
+  engine?: Engine;
+  /** Default: QUESTION_TIMEOUT_MS. */
+  timeoutMs?: number;
+};
+
+type QuestionsState = {
+  /** The questions in progress in this process, to stop them when it exits. */
+  active: Map<number, AbortController>;
+  /** Their executions, until their end is recorded. */
+  executing: Set<Promise<void>>;
+  exitHook: boolean;
+};
+
+const globalForQuestions = globalThis as unknown as { __myhqQuestions?: QuestionsState };
+
+function questionsState(): QuestionsState {
+  globalForQuestions.__myhqQuestions ??= { active: new Map(), executing: new Set(), exitHook: false };
+  return globalForQuestions.__myhqQuestions;
+}
+
+/** Resolves when no question of this process is in progress (tests, scripts). */
+export async function questionsIdle(): Promise<void> {
+  const state = questionsState();
+  while (state.executing.size > 0) await Promise.allSettled([...state.executing]);
+}
+
+/** The question of this agent in progress, if any. */
+function runningQuestion(db: Db, room: string, agentId: string): QuestionRow | undefined {
+  return db
+    .prepare("SELECT * FROM agent_questions WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+    .get(room, agentId) as QuestionRow | undefined;
+}
+
+/** The current discussion with an agent (since its last reset), oldest first, the latest DISCUSSION_LIMIT. */
+export function readDiscussion(db: Db, room: string, agentId: string): QuestionRow[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM agent_questions WHERE room = ? AND agent_id = ? AND cleared_at IS NULL ORDER BY id DESC LIMIT ?",
+    )
+    .all(room, agentId, DISCUSSION_LIMIT) as QuestionRow[];
+  return rows.reverse();
+}
+
+/**
+ * A new discussion: the questions of the current one leave the sheet (and
+ * the context given to the agent), their rows stay for the meter. Refused
+ * while a question is in progress. Returns how many questions were cleared.
+ */
+export function resetDiscussion(db: Db, room: string, agentId: string): number {
+  return db
+    .transaction(() => {
+      const busy = runningQuestion(db, room, agentId);
+      if (busy) throw busyError(agentId, busy.id);
+      return db
+        .prepare("UPDATE agent_questions SET cleared_at = ? WHERE room = ? AND agent_id = ? AND cleared_at IS NULL")
+        .run(now(), room, agentId).changes;
+    })
+    .immediate();
+}
+
+function busyError(agentId: string, questionId: number): HqError {
+  return new HqError(
+    "QUESTION_BUSY",
+    409,
+    `Agent "${agentId}" is already answering a question (#${questionId}): one question at a time per agent.`,
+  );
+}
+
+/**
+ * At startup, in the process that owns the home: the questions a crash or a
+ * stop left `running` end `failed` (`interrupted`). Returns how many.
+ */
+export function recoverInterruptedQuestions(db: Db): number {
+  return db
+    .prepare(
+      "UPDATE agent_questions SET status = 'failed', error = 'interrupted', detail = ?, ended_at = ? WHERE status = 'running'",
+    )
+    .run("Interrupted: MyHQ stopped during the question.", now()).changes;
+}
+
+/** The question-mode rules, after the agent's role in its system prompt. */
+export function questionSystemText(language: string): string {
+  return [
+    "## Question mode",
+    "",
+    "The owner of MyHQ is asking you a question. This is not a task and not a run: answer it, and nothing else.",
+    `Answer in ${language}, short and concrete, from what you know (your role, your memory, the discussion below) and from what you can read in your working directory and its folders (Read, Glob, Grep; hq_memory_read and hq_items for your memory and the items).`,
+    "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
+    "If the question asks for work, say how you would do it and that the owner can start a run for it. If you do not know, say so: never invent.",
+  ].join("\n");
+}
+
+/** The user message of a question: who the agent is, the discussion so far, the question, its memory and the date. */
+export function buildQuestionPrompt(params: {
+  room: Room;
+  agent: Agent;
+  question: string;
+  /** The earlier answered exchanges of the discussion, oldest first. */
+  previous: readonly { question: string; answer: string }[];
+  memory: string;
+  today: string;
+}): string {
+  const lines = [
+    `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ. The owner asks you a question: this is not a run.`,
+  ];
+  if (params.previous.length > 0) {
+    lines.push("", "The discussion so far:");
+    for (const exchange of params.previous) {
+      const answer =
+        exchange.answer.length > QUESTION_CONTEXT_ANSWER_CHARS
+          ? `${exchange.answer.slice(0, QUESTION_CONTEXT_ANSWER_CHARS)}... [cut]`
+          : exchange.answer;
+      lines.push("", `Owner: ${exchange.question}`, `You: ${answer}`);
+    }
+  }
+  lines.push("", "The owner's question:", params.question, "", params.memory, "", params.today);
+  return lines.join("\n");
+}
+
+function homeLanguage(home: string): string {
+  try {
+    return readHomeLanguage(home);
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+}
+
+/**
+ * Asks an agent a question: records it (`running`) and lets the agent answer
+ * in the background. Refused while the app stops, and while the agent answers
+ * another one (QUESTION_BUSY): one at a time per agent. A run of the agent in
+ * progress does not matter. Returns the question as recorded.
+ */
+export function askAgent(request: { room: string; agent: string; question: string }, deps: QuestionDeps = {}): QuestionRow {
+  const config = deps.config ?? getConfig();
+  const { room, agent } = findAgent(config, request.room, request.agent);
+  const question = askSchema.parse({ question: request.question }).question;
+  if (isStopping()) {
+    throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: ask "${agent.id}" again after the restart.`);
+  }
+  const db = getDbAt(config.dbPath);
+  const engine = deps.engine ?? new ClaudeEngine(config.claudeBin);
+  const { row, previous } = db
+    .transaction(() => {
+      const busy = runningQuestion(db, room.name, agent.id);
+      if (busy) throw busyError(agent.id, busy.id);
+      const answered = db
+        .prepare(
+          `SELECT question, answer FROM agent_questions
+           WHERE room = ? AND agent_id = ? AND cleared_at IS NULL AND status = 'done' AND answer IS NOT NULL
+           ORDER BY id DESC LIMIT ?`,
+        )
+        .all(room.name, agent.id, QUESTION_CONTEXT_EXCHANGES) as { question: string; answer: string }[];
+      const id = Number(
+        db
+          .prepare(
+            "INSERT INTO agent_questions (room, agent_id, question, status, engine, model, started_at) VALUES (?, ?, ?, 'running', ?, ?, ?)",
+          )
+          .run(room.name, agent.id, question, engine.name, agent.model, now()).lastInsertRowid,
+      );
+      return {
+        row: db.prepare("SELECT * FROM agent_questions WHERE id = ?").get(id) as QuestionRow,
+        previous: answered.reverse(),
+      };
+    })
+    .immediate();
+
+  const state = questionsState();
+  installExitHook(state);
+  const timeoutMs = deps.timeoutMs ?? QUESTION_TIMEOUT_MS;
+  const execution = answerQuestion({ config, db, engine, room, agent, row, previous, timeoutMs }).catch((error: unknown) =>
+    console.error(`[questions] question #${row.id} crashed`, error),
+  );
+  state.executing.add(execution);
+  void execution.finally(() => state.executing.delete(execution));
+  return row;
+}
+
+/** A process that exits kills the `claude -p` of its questions; their rows are closed at the next start. */
+function installExitHook(state: QuestionsState): void {
+  if (state.exitHook) return;
+  state.exitHook = true;
+  process.on("exit", () => {
+    for (const controller of state.active.values()) controller.abort();
+  });
+}
+
+/** The full text of the CLI's result line (the engine's summary is cut), when the line is one. */
+function resultText(line: string): string | null {
+  try {
+    const message = JSON.parse(line) as { type?: unknown; result?: unknown };
+    return message.type === "result" && typeof message.result === "string" ? message.result : null;
+  } catch {
+    return null;
+  }
+}
+
+async function answerQuestion(p: {
+  config: HqConfig;
+  db: Db;
+  engine: Engine;
+  room: Room;
+  agent: Agent;
+  row: QuestionRow;
+  previous: { question: string; answer: string }[];
+  timeoutMs: number;
+}): Promise<void> {
+  const { config, db, engine, room, agent, row } = p;
+  const state = questionsState();
+  const controller = new AbortController();
+  state.active.set(row.id, controller);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, p.timeoutMs);
+
+  const dir = path.join(config.runsDir, "questions");
+  const systemFile = path.join(dir, `${row.id}.system.md`);
+  const mcpConfigPath = path.join(dir, `${row.id}.mcp.json`);
+  let end: Extract<RunEvent, { type: "end" }> | null = null;
+  /** The untruncated answer, read from the raw lines; the model the CLI reports. */
+  const seen: { answer: string | null; model: string | null } = { answer: null, model: null };
+  const tools: string[] = [];
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const language = languageName(homeLanguage(config.home));
+    fs.writeFileSync(systemFile, `${fs.readFileSync(agent.rolePath, "utf8").trimEnd()}\n\n${questionSystemText(language)}\n`);
+    // The HQ server alone, in read-only mode: never the agent's own servers.
+    writeMcpConfig({
+      file: mcpConfigPath,
+      repoRoot: config.repoRoot,
+      hqEnv: { HQ_DB_PATH: config.dbPath, HQ_AGENT_ID: agent.id, HQ_ROOM: room.name, HQ_READ_ONLY: "1" },
+      extraServers: {},
+    });
+    const memory = memoryText(readMemories(db, room.name, agent.id), {
+      empty: "Your memory: empty.",
+      heading: "Your memory, kept between runs (read only here):",
+    });
+    const prompt = buildQuestionPrompt({
+      room,
+      agent,
+      question: row.question,
+      previous: p.previous,
+      memory,
+      today: todayLine(new Date(), liveConfig(config).timeZone, homeLanguage(config.home)),
+    });
+    // The working directory is read, never created here: an agent that never ran answers from a scratch folder.
+    const workDir = fs.existsSync(agent.workDir) ? agent.workDir : path.join(dir, "scratch");
+    fs.mkdirSync(workDir, { recursive: true });
+    const input: RunInput = {
+      runId: row.id,
+      room: room.name,
+      agentId: agent.id,
+      prompt,
+      model: agent.model,
+      ...(agent.effort ? { effort: agent.effort } : {}),
+      ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
+      rolePath: systemFile,
+      allowedTools: [...QUESTION_TOOLS, ...QUESTION_HQ_TOOLS],
+      disallowedTools: [...QUESTION_DENIED_TOOLS],
+      tools: [...QUESTION_TOOLS],
+      addDirs: agent.addDirs,
+      mcpConfigPath,
+      maxBudgetUsd: Math.min(QUESTION_MAX_BUDGET_USD, agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd),
+      workDir,
+      env: agentEnv(process.env, {}),
+      signal: controller.signal,
+      onRawLine: (line) => {
+        fs.appendFileSync(path.join(dir, `${row.id}.jsonl`), `${line}\n`);
+        seen.answer = resultText(line) ?? seen.answer;
+      },
+    };
+    for await (const event of engine.run(input)) {
+      // The CLI has read the file once it says it started: it leaves the disk.
+      if (event.type === "start") {
+        removeMcpConfig(mcpConfigPath);
+        seen.model = event.model;
+      }
+      if (event.type === "tool_call") tools.push(event.name);
+      if (event.type === "end") end = event;
+    }
+  } catch (error) {
+    end = {
+      type: "end",
+      status: "failed",
+      reason: "engine_error",
+      summary: error instanceof Error ? error.message : String(error),
+      usage: { ...ZERO_USAGE },
+      costUsd: 0,
+    };
+  } finally {
+    clearTimeout(timer);
+    state.active.delete(row.id);
+    removeMcpConfig(mcpConfigPath);
+    fs.rmSync(systemFile, { force: true });
+  }
+
+  const usage: Usage = end?.usage ?? ZERO_USAGE;
+  const done = !timedOut && end?.status === "done";
+  const error: QuestionError | null = done
+    ? null
+    : timedOut
+      ? "timeout"
+      : end?.reason === "error_max_budget_usd"
+        ? "budget"
+        : "error";
+  const detail = done
+    ? null
+    : timedOut
+      ? `No answer after ${Math.round(p.timeoutMs / 1000)} s: the question was stopped.`
+      : (end?.summary ?? "The engine ended without a result.");
+  const answer = done ? (seen.answer ?? end?.summary ?? "").slice(0, ANSWER_MAX_CHARS) : null;
+  db.prepare(
+    `UPDATE agent_questions SET status = ?, answer = ?, model = COALESCE(?, model), error = ?, detail = ?, input_tokens = ?, output_tokens = ?,
+       cache_creation_input_tokens = ?, cache_read_input_tokens = ?, cost_usd = ?, tool_calls = ?, tools = ?, ended_at = ?
+     WHERE id = ? AND status = 'running'`,
+  ).run(
+    done ? "done" : "failed",
+    answer,
+    seen.model,
+    error,
+    detail,
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheCreationInputTokens,
+    usage.cacheReadInputTokens,
+    end?.costUsd ?? 0,
+    tools.length,
+    JSON.stringify(tools),
+    now(),
+    row.id,
+  );
+}

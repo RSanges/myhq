@@ -146,6 +146,10 @@ room) and writes directly to SQLite. Seventeen tools, all validated with zod:
 Everything an agent wants to show or have approved goes through this server,
 so everything is logged.
 
+With `HQ_READ_ONLY=1` the server needs no `HQ_RUN_ID` and registers only
+`hq_memory_read` and `hq_items`: it is how a question to an agent reads its
+memory and the items (see "Questions to an agent").
+
 **The database is shared by several processes.** The app and the HQ MCP
 server of every run open the same SQLite file, each connection in WAL mode
 with a busy timeout of 10 s (`openDb`, `BUSY_TIMEOUT_MS`, set before anything
@@ -1127,6 +1131,81 @@ export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.
 
+### Questions to an agent
+
+A run is how an agent works: it costs a full turn, takes the agent's lock,
+counts in the daily cap and answers with an item in the queue. To ask an agent
+something (how it makes its videos, where it stands, what it would do), the
+owner asks it a question instead, from « Poser une question » on the agent's
+sheet (`POST /api/rooms/<room>/agents/<agent>/ask`). The agent answers itself,
+in the background, and the answer shows under the question in Markdown.
+
+`askAgent` (`src/server/agent-questions.ts`) starts one `claude -p` through the
+same engine as a run (`ClaudeEngine`, `buildClaudeArgs`), with the agent's own
+model, effort and prompt cache duration, its working directory as cwd (a
+scratch folder of `data/runs/questions/` when it does not exist yet: a
+question never creates it) and its `addDirs`. The system prompt is the agent's
+role followed by a « Question mode » block: the owner asks, this is not a task;
+answer in the home's language, short and concrete, from what you know and what
+you can read; you write nothing, submit nothing, send nothing; if the question
+asks for work, say how you would do it and that a run can do it. The user
+message names the agent, gives the earlier exchanges of the discussion (the
+last 10 answered ones, each answer cut to 2000 characters), the question
+(4000 characters at most, zod), the agent's memory (as a run's briefing gives
+it, `memoryText`) and the date line.
+
+**Read only, by configuration.** The prompt is not the guard:
+
+- `--tools Read Glob Grep`: no other built-in tool exists for the turn (no
+  Bash, Edit, Write, NotebookEdit, WebFetch, WebSearch, Task).
+- `--allowedTools` lists those three and `mcp__hq__hq_memory_read`,
+  `mcp__hq__hq_items`; `--disallowedTools` adds every built-in tool that
+  writes, runs or fetches and every HQ tool that writes, on top of the global
+  deny list, whatever the project settings of the working directory allow.
+- `--mcp-config` holds the HQ server alone, never the agent's own servers, in
+  read-only mode: `HQ_READ_ONLY=1` and no `HQ_RUN_ID` (a question is not a
+  run). In that mode the server registers only `hq_memory_read` and `hq_items`,
+  so a tool that writes does not even exist. `hq_read_decisions` is left out
+  on purpose: it marks the decisions it gives as seen, a write, and the next
+  run would miss them.
+- No write guard is needed (no write tool exists); the one a run installed in
+  the working directory stays, and fails closed without its configuration.
+- `--max-budget-usd` is 1 $, or the agent's own budget when it is lower.
+
+**Not a run.** Nothing goes into `runs`, `events` or `tasks`: the agent's last
+run and the feed do not change, the daily cap does not count it, nothing is
+woken at its end, and the agent lock is not taken (a question is answered
+while the agent works). The guards are its own: one question at a time per
+agent (`QUESTION_BUSY`, 409), none while the app stops (`SHUTTING_DOWN`), and
+5 minutes at most: past that the process is killed and the question ends
+`failed` with `timeout`, its tokens still recorded. A question the app's stop
+or a crash left `running` is closed `failed` (`interrupted`) at the next start,
+as the interrupted runs are, and its per-question MCP file is swept with
+theirs.
+
+**Metered.** Each question is a row of `agent_questions` (migration 19): the
+question, the full answer (read from the CLI's result line, the engine's
+summary being cut), `status` (`running`, `done`, `failed`), `error` (`timeout`,
+`budget`, `error`, `interrupted`), the model the CLI reports, the four token
+counts, the cost (`total_cost_usd`: each question is a fresh `claude -p`, so
+it is its own), the tool calls and their names. `GET /api/usage` gives their
+totals for today and the week (`questions`), the weekly budget counts them,
+the whiteboard adds them to the cost of the day and of the week, and the
+meter lists them as « Questions aux agents ». The raw output is kept as
+`data/runs/questions/<id>.jsonl`.
+
+**The discussion.** One per agent: its questions since the last « Nouvelle
+discussion » (`DELETE` on the same route), oldest first. A reset only sets
+`cleared_at`: the rows stay, so their cost stays in the meter, and a reset is
+refused while a question is in progress. The sheet reads the discussion again
+every 2 seconds while a question waits, and shows « <agent> réfléchit à ta
+question... »; the floor does not animate it.
+
+A question measured on Sonnet costs a few cents: the role, the question-mode
+block and the CLI's own system prompt are written to the cache the first
+time, read from it the next ones, and each file the agent reads adds its
+tokens. On Opus count about five times more.
+
 ### The write guard
 
 The CLI's path rules cannot be trusted with the limit of an agent's writes.
@@ -1211,7 +1290,8 @@ through the approval queue.
   directory, ignored by Git. Idempotent SQL migrations in the code. Tables:
   `rooms`, `agents` (with the armed state of their routines), `runs`,
   `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`,
-  `chat_turns` (the assistant's chat turns, metered).
+  `chat_turns` (the assistant's chat turns, metered), `agent_questions` (the
+  owner's questions to the agents, metered, see "Questions to an agent").
   Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`), a `summary` and a `reason`. A task comes from a run's own
@@ -1778,7 +1858,7 @@ a coffee corner, the kitchen a coffee corner and sofas. The carpets and tiles
 of the rooms, the rug borders, the sofa pillows and the band of the counter
 take the room's colour (`room.json` `color`, a pastel of it for the floors),
 or a neutral look without one. The figures of the whiteboard (runs of the day
-against the cap, cost, share of the weekly budget, routines armed, next fire
+against the cap, cost of the runs and the questions to the agents, share of the weekly budget, routines armed, next fire
 and last firing: the numbers of `/api/usage` and `/api/routines`) are a card
 in a corner of the canvas, each one flashing when it changes. The canvas takes
 the whole width and the height that is left under the header and above the
@@ -2073,7 +2153,8 @@ screen high, the floor fitted (offices first) and draggable.
 
 **The sheet of an agent** (click on a character, or its list button): the team
 card (role, model, tools, routines and their arming switch, last run, run
-button: `AgentCard` of `team.tsx`) and its recent runs with their journal
+button: `AgentCard` of `team.tsx`), « Poser une question » (a question answered
+without a run, see "Questions to an agent": `agent-ask.tsx`) and its recent runs with their journal
 (`FeedRow` of `feed.tsx`), rebuilt from the events the page holds since the
 API has no list of old runs. A side panel on a wide screen, the whole screen on
 a phone; Escape closes it and focus returns to what opened it.

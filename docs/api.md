@@ -24,6 +24,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
+| `QUESTION_BUSY` | 409 | A question to an agent while it answers another one (one at a time per agent), or a reset of its discussion meanwhile. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) without `answers`. |
@@ -31,7 +32,7 @@ Every error has the same shape and an HTTP status:
 | `ANSWERS_NOT_EXPECTED` | 400 | `answers` on an item that is not an item of questions. |
 | `QUESTION_NOT_REVISABLE` | 409 | `revise` on an item of questions: answer it or reject it. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs (or `maxRunsPerDay` of `myhq.json`, which wins) were already started today (local day, all agents). |
-| `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts until it is back. |
+| `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts, and no agent takes a question, until it is back. |
 | `ROADMAP_NOT_FOUND` | 404 | `docs/roadmap.json` is missing from the home, or fails validation. The message says which. |
 | `TARGET_NOT_FOUND` | 404 | The path given to onboarding is not a directory. |
 | `PATH_OUTSIDE_ROOT` | 400 | `GET /api/fs/dirs`: the `path` is absolute (`/x`, `C:/x`), climbs (`..`), uses a backslash or a `:`, or leads out of the projects root through a link. |
@@ -940,7 +941,7 @@ Errors: `INVALID_INPUT` (an id that is not a positive integer), `FILE_NOT_FOUND`
 ### `GET /api/usage`
 
 Tokens and cost of the runs, by local calendar day of the server, per agent,
-of the assistant's chat turns, and the daily cap.
+of the assistant's chat turns, of the questions to the agents, and the daily cap.
 
 ```json
 {
@@ -956,6 +957,10 @@ of the assistant's chat turns, and the daily cap.
   "chat": {
     "today": { "turns": 5, "inputTokens": 30, "outputTokens": 900, "cacheCreationInputTokens": 9000, "cacheReadInputTokens": 60000, "costUsd": 0.12, "toolCalls": 4 },
     "week": { "turns": 21, "...": "same totals" }
+  },
+  "questions": {
+    "today": { "questions": 2, "inputTokens": 12, "outputTokens": 700, "cacheCreationInputTokens": 15000, "cacheReadInputTokens": 30000, "costUsd": 0.06 },
+    "week": { "questions": 5, "...": "same totals" }
   }
 }
 ```
@@ -963,13 +968,18 @@ of the assistant's chat turns, and the daily cap.
 - `days`: the last 7 days, oldest first, today last, days without runs at 0.
 - `week`: from Monday of the current week to today.
 - Every run started counts towards the cap, whatever its status.
-- `budget` is `null` unless `HQ_WEEKLY_BUDGET_USD` is set; `share` is
-  `week.costUsd / weeklyUsd` (above 1 when the budget is exceeded).
+- `budget` is `null` unless `HQ_WEEKLY_BUDGET_USD` is set; `spentUsd` is
+  `week.costUsd` plus `questions.week.costUsd`, and `share` is
+  `spentUsd / weeklyUsd` (above 1 when the budget is exceeded).
 - `agents`: the totals of each agent that has runs in the period (today, or
   Monday to today), most expensive first. The desk's meter lists the week's.
 - `chat`: the turns of the assistant's chat (`chat_turns`), answered or not,
   with the tool calls they made. The chat is not a run: its turns are not in
   `today`, `week`, `days`, the cap nor `budget`.
+- `questions`: the owner's questions to the agents (`agent_questions`), answered
+  or not. A question is not a run: it is not in `today`, `week`, `days` nor the
+  cap, but it counts in `budget`, and the whiteboard adds it to the cost of the
+  day and of the week.
 
 ### Conversation shapes
 
@@ -1113,6 +1123,66 @@ Body: `{ "armed": true }`. Response `200`:
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
 `AGENT_NOT_FOUND`.
+
+### Questions to an agent
+
+A question of the owner to an agent, answered by the agent without a run (no
+agent lock, no daily cap, nothing in `runs`, nobody woken), read-only, and
+metered (`architecture.md`, "Questions to an agent"). One discussion per
+agent. A question has this shape:
+
+```json
+{
+  "id": 7,
+  "question": "How do you make your videos?",
+  "answer": "I write the script, then render it with **Remotion**...",
+  "status": "done",
+  "error": null,
+  "model": "claude-sonnet-5-5",
+  "costUsd": 0.031,
+  "askedAt": "2026-11-08T10:00:00.000Z",
+  "answeredAt": "2026-11-08T10:00:21.000Z"
+}
+```
+
+`status` is `running`, `done` or `failed`; `answer` is null unless `done`
+(Markdown); `error` says why a question failed: `timeout` (no answer after 5
+minutes), `budget` (its `--max-budget-usd` reached), `error` (the engine
+failed), `interrupted` (the app stopped during it). `model` is the one the CLI
+reported, the agent's alias until then.
+
+#### `GET /api/rooms/[room]/agents/[agent]/ask`
+
+The current discussion (since the last reset), oldest first, the latest 50.
+
+```json
+{ "agent": { "room": "demo", "id": "scout", "name": "Scout" }, "questions": [{ "...": "question shape" }], "busy": false }
+```
+
+`busy`: a question waits for its answer. Errors: `ROOM_NOT_FOUND`,
+`ROOM_INVALID`, `AGENT_NOT_FOUND`.
+
+#### `POST /api/rooms/[room]/agents/[agent]/ask`
+
+Body: `{ "question": "How do you make your videos?" }` (trimmed, 1 to 4000
+characters). Response `202` with the question as recorded, `running`: the
+agent answers in the background, read the discussion again for the answer.
+
+```json
+{ "question": { "id": 8, "status": "running", "answer": null, "...": "question shape" } }
+```
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
+`AGENT_NOT_FOUND`, `QUESTION_BUSY` (the agent answers another question),
+`SHUTTING_DOWN`. A run in progress and the daily cap never refuse a question.
+
+#### `DELETE /api/rooms/[room]/agents/[agent]/ask`
+
+« Nouvelle discussion »: the questions leave the discussion (and the context
+the agent gets); their rows stay, so their cost stays in `/api/usage`.
+Response `200`: `{ "cleared": 2 }`, how many questions were cleared. Errors:
+`ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_BUSY` (a
+question is in progress: wait for its answer).
 
 ### `GET /api/routines`
 

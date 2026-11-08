@@ -26,17 +26,32 @@ export type ChatTotals = {
   toolCalls: number;
 };
 
+/** Totals of the owner's questions to the agents over a period (a question is not a run). */
+export type QuestionTotals = {
+  questions: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  costUsd: number;
+};
+
 export type UsageDto = {
   today: Totals & { date: string };
   week: Totals & { start: string };
   days: (Totals & { date: string })[];
   cap: { maxRunsPerDay: number; runsToday: number; remaining: number };
-  /** Share of the user's weekly budget spent this week (HQ_WEEKLY_BUDGET_USD), or null when not set. */
+  /**
+   * Share of the user's weekly budget spent this week (HQ_WEEKLY_BUDGET_USD), or null when not set: the
+   * runs and the questions to the agents.
+   */
   budget: { weeklyUsd: number; spentUsd: number; share: number } | null;
   /** The runs of each agent that ran in the period, most expensive first. */
   agents: { today: AgentTotals[]; week: AgentTotals[] };
   /** The assistant's chat turns. */
   chat: { today: ChatTotals; week: ChatTotals };
+  /** The owner's questions to the agents (agent-questions.ts): not in `today` nor `week`, but in `budget`. */
+  questions: { today: QuestionTotals; week: QuestionTotals };
 };
 
 const TOTALS = `COUNT(r.id) AS runs,
@@ -74,9 +89,24 @@ function chatTotals(db: Db, from: string): ChatTotals {
     .get() as ChatTotals;
 }
 
+function questionTotals(db: Db, from: string): QuestionTotals {
+  return db
+    .prepare(
+      `SELECT COUNT(q.id) AS questions,
+         COALESCE(SUM(q.input_tokens), 0) AS inputTokens,
+         COALESCE(SUM(q.output_tokens), 0) AS outputTokens,
+         COALESCE(SUM(q.cache_creation_input_tokens), 0) AS cacheCreationInputTokens,
+         COALESCE(SUM(q.cache_read_input_tokens), 0) AS cacheReadInputTokens,
+         COALESCE(SUM(q.cost_usd), 0) AS costUsd
+       FROM agent_questions q WHERE date(q.started_at, 'localtime') >= ${from}`,
+    )
+    .get() as QuestionTotals;
+}
+
 /**
  * Tokens and cost of the runs, by local calendar day (the server's time zone),
- * per agent, and of the assistant's chat turns. The week starts on Monday.
+ * per agent, of the assistant's chat turns and of the questions to the
+ * agents. The week starts on Monday.
  */
 export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number | null = null): UsageDto {
   const days = db
@@ -98,6 +128,8 @@ export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number 
     .get() as Totals & { start: string };
   const today = days[days.length - 1]!;
   const count = runsToday(db);
+  const questions = { today: questionTotals(db, TODAY), week: questionTotals(db, WEEK_START) };
+  const spentUsd = week.costUsd + questions.week.costUsd;
   return {
     today,
     week,
@@ -106,9 +138,10 @@ export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number 
     budget:
       weeklyBudgetUsd === null
         ? null
-        : { weeklyUsd: weeklyBudgetUsd, spentUsd: week.costUsd, share: week.costUsd / weeklyBudgetUsd },
+        : { weeklyUsd: weeklyBudgetUsd, spentUsd, share: spentUsd / weeklyBudgetUsd },
     agents: { today: agentTotals(db, TODAY), week: agentTotals(db, WEEK_START) },
     chat: { today: chatTotals(db, TODAY), week: chatTotals(db, WEEK_START) },
+    questions,
   };
 }
 

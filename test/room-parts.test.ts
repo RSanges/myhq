@@ -73,6 +73,7 @@ const usage: Usage = {
   budget: null,
   agents: null,
   chat: null,
+  questions: null,
 };
 
 const firing = (over: Partial<Firing> = {}): Firing => ({
@@ -121,6 +122,20 @@ test("the whiteboard shows the budget share when there is one, and says when the
   assert.equal(byKey.last, "aucun");
   const unknown = buildBoard({ room: "demo", agents: agentsOf(), usage: null, firings: [], schedulerEnabled: true });
   assert.equal(unknown[0]!.value, "...");
+});
+
+test("the whiteboard adds the questions to the agents to the cost of the day and of the week", () => {
+  const questions = { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+  const rows = buildBoard({
+    room: "demo",
+    agents: agentsOf(),
+    usage: { ...usage, questions: { today: { ...questions, questions: 1, costUsd: 0.03 }, week: { ...questions, questions: 2, costUsd: 0.1 } } },
+    firings: [],
+    schedulerEnabled: true,
+  });
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  assert.match(byKey.cost!, /0,20/);
+  assert.match(byKey.week!, /0,50/);
 });
 
 const event = (id: number, runId: number, type: HqEvent["type"], data: Record<string, unknown> = {}): HqEvent => ({

@@ -92,11 +92,26 @@ export function briefingText(decisions: readonly Decision[], memories: readonly 
       if (payload && payload !== "{}" && payload !== "null") lines.push(indent(`Payload: ${payload}`));
     }
   }
-  lines.push("");
+  lines.push(
+    "",
+    memoryText(memories, {
+      empty: "Your memory (hq_memory_write keeps a value for your next runs): empty.",
+      heading: "Your memory, kept between runs (hq_memory_write changes a value):",
+    }),
+  );
+  return lines.join("\n");
+}
+
+/**
+ * The memory of an agent as a prompt gives it: `heading`, then each value
+ * (the keys past MEMORY_PROMPT_MAX characters are only named), or `empty`.
+ */
+export function memoryText(memories: readonly MemoryEntry[], words: { empty: string; heading: string }): string {
+  const lines: string[] = [];
   if (memories.length === 0) {
-    lines.push("Your memory (hq_memory_write keeps a value for your next runs): empty.");
+    lines.push(words.empty);
   } else {
-    lines.push("Your memory, kept between runs (hq_memory_write changes a value):");
+    lines.push(words.heading);
     let budget = MEMORY_PROMPT_MAX;
     for (const m of memories) {
       if (m.value.length > budget) {

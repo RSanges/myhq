@@ -192,6 +192,15 @@ const chatTotalsSchema = z.object({
   toolCalls: z.number(),
 });
 
+const questionTotalsSchema = z.object({
+  questions: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheCreationInputTokens: z.number(),
+  cacheReadInputTokens: z.number(),
+  costUsd: z.number(),
+});
+
 export const usageSchema = z.object({
   today: totalsSchema,
   week: totalsSchema,
@@ -199,6 +208,7 @@ export const usageSchema = z.object({
   budget: z.object({ weeklyUsd: z.number(), spentUsd: z.number(), share: z.number() }).nullable().default(null),
   agents: z.object({ today: z.array(agentTotalsSchema), week: z.array(agentTotalsSchema) }).nullable().default(null),
   chat: z.object({ today: chatTotalsSchema, week: chatTotalsSchema }).nullable().default(null),
+  questions: z.object({ today: questionTotalsSchema, week: questionTotalsSchema }).nullable().default(null),
 });
 
 export const routinesResponseSchema = z.object({
@@ -269,6 +279,30 @@ export const chatReplySchema = z.object({
 });
 
 export const clearedSchema = z.object({ cleared: z.boolean() });
+
+/** A question of the owner to an agent (docs/api.md, "Questions to an agent"). */
+export const agentQuestionSchema = z.object({
+  id: z.number().int(),
+  question: z.string(),
+  answer: z.string().nullable(),
+  status: z.enum(["running", "done", "failed"]),
+  error: z.enum(["timeout", "budget", "error", "interrupted"]).nullable(),
+  model: z.string().nullable(),
+  costUsd: z.number(),
+  askedAt: z.string(),
+  answeredAt: z.string().nullable(),
+});
+
+/** `GET /api/rooms/[room]/agents/[agent]/ask`: the discussion with an agent. */
+export const discussionSchema = z.object({
+  agent: z.object({ room: z.string(), id: z.string(), name: z.string() }),
+  questions: z.array(agentQuestionSchema),
+  busy: z.boolean(),
+});
+
+export const askResponseSchema = z.object({ question: agentQuestionSchema });
+
+export const discussionClearedSchema = z.object({ cleared: z.number().int() });
 
 export const readySchema = z.object({ cursor: z.number().int() });
 
@@ -368,6 +402,8 @@ export type Approval = z.infer<typeof approvalSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 export type State = z.infer<typeof stateSchema>;
 export type Usage = z.infer<typeof usageSchema>;
+export type AgentQuestion = z.infer<typeof agentQuestionSchema>;
+export type Discussion = z.infer<typeof discussionSchema>;
 export type DirListing = z.infer<typeof dirListingSchema>;
 export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;

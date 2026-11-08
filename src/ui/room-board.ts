@@ -10,8 +10,8 @@ export type BoardRow = { key: string; label: string; value: string };
 
 /**
  * The whiteboard of a room (of every room, with `room` null: the single
- * floor of the home): the day's runs against the cap, the cost, the
- * share of the weekly budget, and the state of the routines (armed or not,
+ * floor of the home): the day's runs against the cap, the cost (the runs
+ * and the questions to the agents), the share of the weekly budget, and the state of the routines (armed or not,
  * next fire, last firing). Pure: the strings and the formats are the only
  * things it needs.
  */
@@ -32,11 +32,19 @@ export function buildBoard(params: {
     label: t.runs,
     value: usage ? t.runsValue(usage.cap.runsToday, usage.cap.maxRunsPerDay) : t.unknown,
   });
-  rows.push({ key: "cost", label: t.cost, value: usage ? formatCost(usage.today.costUsd) : t.unknown });
+  rows.push({
+    key: "cost",
+    label: t.cost,
+    value: usage ? formatCost(usage.today.costUsd + (usage.questions?.today.costUsd ?? 0)) : t.unknown,
+  });
   rows.push(
     usage?.budget
       ? { key: "budget", label: t.budget, value: strings.meter.budgetShare(Math.round(usage.budget.share * 100)) }
-      : { key: "week", label: t.week, value: usage ? formatCost(usage.week.costUsd) : t.unknown },
+      : {
+          key: "week",
+          label: t.week,
+          value: usage ? formatCost(usage.week.costUsd + (usage.questions?.week.costUsd ?? 0)) : t.unknown,
+        },
   );
 
   const withRoutines = mine.filter((agent) => agent.routines.length > 0);

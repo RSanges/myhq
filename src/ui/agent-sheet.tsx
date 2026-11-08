@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { AgentAsk } from "./agent-ask";
 import { recentRuns } from "./agent-runs";
 import { FeedRow } from "./feed";
 import { formatCost, formatDateTime } from "./format";
@@ -69,8 +70,9 @@ export function SheetShell({
 /**
  * The sheet of an agent, opened from its character or from the list under the
  * room: the card of the team (role, model, tools, routines and their switch,
- * last run, the button that starts a run) and the journal of its recent runs,
- * rebuilt from the events the page holds.
+ * last run, the button that starts a run), « Poser une question » (a question
+ * answered without a run) and the journal of its recent runs, rebuilt from
+ * the events the page holds.
  */
 export function AgentSheet({
   agent,
@@ -90,6 +92,7 @@ export function AgentSheet({
       <ul>
         <AgentCard agent={agent} dispatch={dispatch} showTools />
       </ul>
+      <AgentAsk key={agent.key} room={agent.room} agentId={agent.id} name={agent.name} />
       <section className="space-y-2" aria-labelledby="room-sheet-runs">
         <h3 id="room-sheet-runs" className="text-sm font-semibold">
           {t.recentRuns}

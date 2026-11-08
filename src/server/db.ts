@@ -659,6 +659,40 @@ CREATE TABLE IF NOT EXISTS approval_commands (
 );
 `,
   },
+  {
+    version: 19,
+    sql: `
+-- The owner's questions to an agent (docs/architecture.md, "Questions to an
+-- agent"): not runs (no lock, no daily cap, no wake-up) but metered like
+-- them. One row per question, its answer, why it failed, the four token counts
+-- and the cost. cleared_at: the owner started a new discussion; the row stays
+-- for the meter. Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS agent_questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+  error TEXT,
+  detail TEXT,
+  engine TEXT NOT NULL,
+  model TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  tools TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  cleared_at TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_questions_agent ON agent_questions (room, agent_id, id);
+CREATE INDEX IF NOT EXISTS agent_questions_started ON agent_questions (started_at);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

@@ -7,6 +7,7 @@ import { loadHome, syncHome, type Home } from "./rooms";
 import { wakeOnboarding } from "./onboarding";
 import { purgeLeftoverMcpConfigs } from "./claude-engine";
 import { recoverInterruptedRuns } from "./runner";
+import { recoverInterruptedQuestions } from "./agent-questions";
 
 const globalForApp = globalThis as unknown as {
   __myhqStarted?: Set<string>;
@@ -67,14 +68,17 @@ export function app(): { config: HqConfig; db: Db } {
     if (owner) {
       const recovered = recoverInterruptedRuns(db);
       if (recovered.runs > 0) console.warn(`[myhq] ${recovered.runs} interrupted run(s) marked as cancelled`);
+      const questions = recoverInterruptedQuestions(db);
+      if (questions > 0) console.warn(`[myhq] ${questions} interrupted question(s) to agents marked as failed`);
       if (recovered.requeued + recovered.blocked > 0) {
         console.warn(
           `[myhq] tasks of runs no longer in progress: ${recovered.requeued} back in the queue, ${recovered.blocked} run instruction(s) blocked`,
         );
       }
     }
-    // Earlier versions kept each run's MCP config, with its expanded secrets, on disk.
-    const purged = purgeLeftoverMcpConfigs(config.runsDir);
+    // Earlier versions kept each run's MCP config, with its expanded secrets, on disk (a crash may leave a question's).
+    const purged =
+      purgeLeftoverMcpConfigs(config.runsDir) + purgeLeftoverMcpConfigs(path.join(config.runsDir, "questions"));
     if (purged > 0) console.warn(`[myhq] ${purged} leftover MCP config file(s) deleted from the runs directory`);
     const home = loadAndSyncHome(config, db);
     console.log(`[myhq] home ${config.home}: ${home.rooms.length} room(s)`);

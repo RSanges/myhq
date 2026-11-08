@@ -54,8 +54,16 @@ function Budget({ budget }: { budget: NonNullable<Usage["budget"]> }) {
   );
 }
 
-/** Where the week's tokens went: each agent that ran, then the conversation. */
-function ByAgent({ agents, chat }: { agents: NonNullable<Usage["agents"]>["week"]; chat: NonNullable<Usage["chat"]>["week"] | null }) {
+/** Where the week's tokens went: each agent that ran, then the conversation and the questions to the agents. */
+function ByAgent({
+  agents,
+  chat,
+  questions,
+}: {
+  agents: NonNullable<Usage["agents"]>["week"];
+  chat: NonNullable<Usage["chat"]>["week"] | null;
+  questions: NonNullable<Usage["questions"]>["week"] | null;
+}) {
   const tokens = (t: { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number }) =>
     t.inputTokens + t.outputTokens + t.cacheCreationInputTokens + t.cacheReadInputTokens;
   const rows = agents.map((a) => ({
@@ -67,6 +75,15 @@ function ByAgent({ agents, chat }: { agents: NonNullable<Usage["agents"]>["week"
   }));
   if (chat && chat.turns > 0) {
     rows.push({ key: "_chat", label: strings.meter.chat, count: strings.meter.turns(chat.turns), cost: chat.costUsd, tokens: tokens(chat) });
+  }
+  if (questions && questions.questions > 0) {
+    rows.push({
+      key: "_questions",
+      label: strings.meter.questions,
+      count: strings.meter.questionCount(questions.questions),
+      cost: questions.costUsd,
+      tokens: tokens(questions),
+    });
   }
   return (
     <div className="mt-3 min-w-0 rounded-lg border border-line bg-card p-4">
@@ -126,7 +143,7 @@ export function Meter({ usage, failed }: { usage: Usage | null; failed: boolean 
           {usage.budget && <Budget budget={usage.budget} />}
         </div>
       )}
-      {usage?.agents && <ByAgent agents={usage.agents.week} chat={usage.chat?.week ?? null} />}
+      {usage?.agents && <ByAgent agents={usage.agents.week} chat={usage.chat?.week ?? null} questions={usage.questions?.week ?? null} />}
     </Section>
   );
 }

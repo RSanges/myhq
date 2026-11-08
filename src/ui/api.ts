@@ -7,6 +7,7 @@ import { strings } from "./strings";
 import {
   approvalResponseSchema,
   armResponseSchema,
+  askResponseSchema,
   chatHistorySchema,
   chatReplySchema,
   clearedSchema,
@@ -15,6 +16,8 @@ import {
   deskSchema,
   deskSeenSchema,
   dirListingSchema,
+  discussionClearedSchema,
+  discussionSchema,
   errorBodySchema,
   itemAskResponseSchema,
   relaunchResponseSchema,
@@ -22,11 +25,13 @@ import {
   runResponseSchema,
   stateSchema,
   usageSchema,
+  type AgentQuestion,
   type Approval,
   type ChatReply,
   type ChatTurn,
   type Desk,
   type DirListing,
+  type Discussion,
   type Run,
   type State,
   type Usage,
@@ -127,6 +132,22 @@ export async function startRun(room: string, agent: string, task: string): Promi
   const body: { room: string; agent: string; task?: string } = { room, agent };
   if (task.trim() !== "") body.task = task.trim();
   return (await request("/api/runs", runResponseSchema, jsonInit("POST", body))).run;
+}
+
+const askUrl = (room: string, agent: string) =>
+  `/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}/ask`;
+
+/** The discussion of the owner with an agent (questions, not runs). */
+export const fetchDiscussion = (room: string, agent: string): Promise<Discussion> => request(askUrl(room, agent), discussionSchema);
+
+/** Asks an agent a question: it answers in the background, the discussion shows it. */
+export async function askAgent(room: string, agent: string, question: string): Promise<AgentQuestion> {
+  return (await request(askUrl(room, agent), askResponseSchema, jsonInit("POST", { question: question.trim() }))).question;
+}
+
+/** « Nouvelle discussion »: the questions leave the sheet (their cost stays metered). */
+export async function resetDiscussion(room: string, agent: string): Promise<void> {
+  await request(askUrl(room, agent), discussionClearedSchema, { method: "DELETE" });
 }
 
 export async function startOnboarding(path: string): Promise<Run> {

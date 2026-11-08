@@ -118,6 +118,7 @@ test("the sheet of a room: decisions, cost of the day, and what each agent does"
     cap: { maxRunsPerDay: 12, runsToday: 3, remaining: 9 },
     budget: null,
     chat: null,
+    questions: null,
     agents: {
       today: [
         { ...totals, room: "demo", agentId: "scout", runs: 2, costUsd: 0.25 },
