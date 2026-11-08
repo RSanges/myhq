@@ -93,6 +93,7 @@ const question = (id: number, at: string, status: "running" | "done" | "failed",
   costUsd: 0.02,
   askedAt: at,
   answeredAt: status === "running" ? null : at,
+  proposal: null,
 });
 
 test("the lines of the thread: a day line per day, the message then its answer, a run and an item", () => {
@@ -168,4 +169,20 @@ test("the state of the header: answering first, then at work with what it does, 
   assert.deepEqual(sheetState({ ...base, waitingFor: ["gpu"], asleep: true }), { kind: "waiting", resources: ["gpu"] });
   assert.deepEqual(sheetState({ ...base, asleep: true }), { kind: "asleep" });
   assert.deepEqual(sheetState(base), { kind: "idle" });
+});
+
+test("an answer that proposes a run carries its card, a failed one never does", () => {
+  const at = new Date(2026, 10, 8, 9, 0).toISOString();
+  const proposal = { task: "Refais le clip B", state: "pending" as const, runId: null, decidedAt: null };
+  const lines = threadLines(
+    [
+      { kind: "question", at, question: { ...question(1, at, "done", "Je lance un tour."), proposal } },
+      { kind: "question", at, question: { ...question(2, at, "failed"), proposal } },
+    ],
+    Date.now(),
+  );
+  const done = lines[2];
+  assert.ok(done?.kind === "reply" && done.proposal?.task === "Refais le clip B");
+  const failed = lines[4];
+  assert.ok(failed?.kind === "reply" && failed.proposal === null);
 });

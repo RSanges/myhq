@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { askAgent, errorText, fetchThread, resetDiscussion } from "./api";
-import type { Thread } from "./schemas";
+import { askAgent, decideProposal, errorText, fetchThread, resetDiscussion } from "./api";
+import type { Run, Thread } from "./schemas";
 
 /** How often the thread is read again while the agent answers a question. */
 const POLL_MS = 2_000;
@@ -63,6 +63,34 @@ export function useAgentThread(room: string, agentId: string, refreshKey: string
     [room, agentId],
   );
 
+  /**
+   * « Lancer le tour » or « On en parle d'abord » on a proposed run: the card shows what became of it.
+   * Returns the run it started, or null (set aside, or refused: the error says why).
+   */
+  const decide = useCallback(
+    async (questionId: number, action: "launch" | "dismiss"): Promise<Run | null> => {
+      setError(null);
+      try {
+        const { question, run } = await decideProposal(room, agentId, questionId, action);
+        setThread((current) =>
+          current
+            ? {
+                ...current,
+                entries: current.entries.map((entry) =>
+                  entry.kind === "question" && entry.question.id === questionId ? { ...entry, question } : entry,
+                ),
+              }
+            : current,
+        );
+        return run;
+      } catch (failure) {
+        setError(errorText(failure));
+        return null;
+      }
+    },
+    [room, agentId],
+  );
+
   const reset = useCallback(async () => {
     setError(null);
     try {
@@ -73,5 +101,5 @@ export function useAgentThread(room: string, agentId: string, refreshKey: string
     }
   }, [room, agentId, reload]);
 
-  return { thread, readAt, error, setError, busy, send, reset, reload };
+  return { thread, readAt, error, setError, busy, send, decide, reset, reload };
 }

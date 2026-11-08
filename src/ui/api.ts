@@ -19,6 +19,7 @@ import {
   discussionClearedSchema,
   errorBodySchema,
   itemAskResponseSchema,
+  proposalResponseSchema,
   relaunchResponseSchema,
   routinesResponseSchema,
   runResponseSchema,
@@ -144,6 +145,19 @@ export const fetchThread = (room: string, agent: string): Promise<Thread> =>
 /** Asks an agent a question: it answers in the background, the discussion shows it. */
 export async function askAgent(room: string, agent: string, question: string): Promise<AgentQuestion> {
   return (await request(askUrl(room, agent), askResponseSchema, jsonInit("POST", { question: question.trim() }))).question;
+}
+
+/**
+ * « Lancer le tour » (`launch`) or « On en parle d'abord » (`dismiss`) on the run an answer proposes:
+ * the question as it is now, and the run it started.
+ */
+export async function decideProposal(
+  room: string,
+  agent: string,
+  questionId: number,
+  action: "launch" | "dismiss",
+): Promise<{ question: AgentQuestion; run: Run | null }> {
+  return request(`${askUrl(room, agent)}/${questionId}/proposal`, proposalResponseSchema, jsonInit("POST", { action }));
 }
 
 /** « Nouvelle discussion »: the questions leave the sheet (their cost stays metered). */

@@ -25,6 +25,9 @@ Every error has the same shape and an HTTP status:
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
 | `QUESTION_BUSY` | 409 | A question to an agent while it answers another one (one at a time per agent), or a reset of its discussion meanwhile. |
+| `QUESTION_NOT_FOUND` | 404 | A decision on a proposed run for a question that is not one of this agent's. |
+| `PROPOSAL_NOT_FOUND` | 404 | A decision on a proposed run for a question whose answer proposes none. |
+| `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) without `answers`. |
@@ -1141,7 +1144,8 @@ agent. A question has this shape:
   "model": "claude-sonnet-5-5",
   "costUsd": 0.031,
   "askedAt": "2026-11-08T10:00:00.000Z",
-  "answeredAt": "2026-11-08T10:00:21.000Z"
+  "answeredAt": "2026-11-08T10:00:21.000Z",
+  "proposal": null
 }
 ```
 
@@ -1149,7 +1153,11 @@ agent. A question has this shape:
 (Markdown); `error` says why a question failed: `timeout` (no answer after 5
 minutes), `budget` (its `--max-budget-usd` reached), `error` (the engine
 failed), `interrupted` (the app stopped during it). `model` is the one the CLI
-reported, the agent's alias until then.
+reported, the agent's alias until then. `proposal` is the run the answer
+proposes when the message asked for work (`architecture.md`, "A task or a
+discussion"), null otherwise: `{ "task": "...", "state": "pending", "runId":
+null, "decidedAt": null }`, `state` being `pending`, `launched` (with
+`runId`) or `dismissed`. The answer never holds the block of the proposal.
 
 #### `GET /api/rooms/[room]/agents/[agent]/ask`
 
@@ -1183,6 +1191,27 @@ the agent gets); their rows stay, so their cost stays in `/api/usage`.
 Response `200`: `{ "cleared": 2 }`, how many questions were cleared. Errors:
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_BUSY` (a
 question is in progress: wait for its answer).
+
+#### `POST /api/rooms/[room]/agents/[agent]/ask/[question]/proposal`
+
+The owner's decision on the run an answer proposes: the only way such a run
+starts. Body: `{ "action": "launch" }` (« Lancer le tour ») or
+`{ "action": "dismiss" }` (« On en parle d'abord »). `launch` starts the run
+with the proposal's task as `POST /api/runs` does from the desk (no
+`reason`), and answers `202`; `dismiss` answers `200`. Both give the
+question as it is now and the run, or null:
+
+```json
+{ "question": { "id": 8, "proposal": { "task": "...", "state": "launched", "runId": 13, "decidedAt": "..." }, "...": "question shape" }, "run": { "...": "run shape" } }
+```
+
+Errors: `INVALID_JSON`, `INVALID_INPUT` (no `action`, another value, a
+`question` that is not a positive integer), `ROOM_NOT_FOUND`,
+`ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_NOT_FOUND`,
+`PROPOSAL_NOT_FOUND` (the answer proposes no run), `PROPOSAL_DECIDED`
+(already launched or set aside), and for `launch` the refusals of a run
+(`AGENT_BUSY`, `RESOURCE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`):
+the proposal then stays `pending`.
 
 ### `GET /api/rooms/[room]/agents/[agent]/thread`
 

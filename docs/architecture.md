@@ -1147,10 +1147,11 @@ scratch folder of `data/runs/questions/` when it does not exist yet: a
 question never creates it) and its `addDirs`. The system prompt is the agent's
 role followed by a « Question mode » block: the owner asks, this is not a task;
 answer in the home's language, short and concrete, from what you know and what
-you can read; you write nothing, submit nothing, send nothing; if the question
-asks for work, say how you would do it and that a run can do it. The user
-message names the agent, gives the earlier exchanges of the discussion (the
-last 10 answered ones, each answer cut to 2000 characters), the question
+you can read; you write nothing, submit nothing, send nothing; a request for
+work is proposed as a run, never done (see "A task or a discussion" below).
+The user message names the agent, gives the earlier exchanges of the
+discussion (the last 10 answered ones, each answer cut to 2000 characters,
+with what became of the run it proposed), the question
 (4000 characters at most, zod), the agent's memory (as a run's briefing gives
 it, `memoryText`) and the date line.
 
@@ -1205,6 +1206,52 @@ A question measured on Sonnet costs a few cents: the role, the question-mode
 block and the CLI's own system prompt are written to the cache the first
 time, read from it the next ones, and each file the agent reads adds its
 tokens. On Opus count about five times more.
+
+#### A task or a discussion
+
+Every message of the sheet is a question: the agent reads it in question
+mode and decides what the owner wants. The « Question mode » block tells it
+apart: a wish to talk (a question, an opinion, where it stands, how it works)
+gets a plain answer; a request for work (make, redo, produce, write, send,
+fix...) is never done, and the agent never says it is. It says in one short
+sentence that it will start a run, then ends its answer with a tagged block,
+alone on its last lines, that holds the task of that run, reworded, complete
+and self-contained (what to do, on what, with the details of the discussion
+that matter, what to deliver):
+
+```text
+D'accord, je lance un tour pour refaire le clip B.
+
+<run-proposal>
+Refais le clip B avec la nouvelle musique (piste 2), puis dépose-le pour validation.
+</run-proposal>
+```
+
+A tag pair rather than JSON or a code fence: Markdown leaves it alone, an
+answer that shows code cannot be mistaken for it, and a missing or broken
+block degrades to a plain answer. `parseRunProposal`
+(`src/server/run-proposal.ts`, pure) splits the answer when the question
+ends: the last complete block is the task (out of a code fence the model may
+have wrapped it in, at most 20000 characters like any run's task); every
+block and every stray tag leave the text, so what a broken block held stays
+readable. The answer is stored without the block; the task goes to
+`question_proposals` (migration 20: the question, the task, `pending`,
+`launched` with the run, or `dismissed`, and when it was decided).
+
+**Nothing starts without the owner.** Under the answer the sheet shows a
+card: « C'est une tâche. Je lance un tour pour : » and the task, with
+« Lancer le tour » and « On en parle d'abord ». No route starts a run from an
+answer by itself; only `POST .../ask/<question>/proposal` with
+`{ "action": "launch" }` does (`decideProposal`), through `startRun`, the
+same path as the desk's « Lancer un tour »: the agent lock, the shared
+resources and the daily cap refuse it the same way (the proposal then stays
+pending, to launch later), and the run has no `reason`, like any run started
+by hand. `dismiss` sets it aside. A proposal is decided once
+(`PROPOSAL_DECIDED`), and the card keeps what became of it after a reload
+(the run launched, with a button that shows its line in the thread, or set
+aside). The context of the next questions says it too, after the answer
+(« You proposed a run: ... The owner started it (run #12) »), so that the
+agent knows where the discussion stands.
 
 ### The write guard
 

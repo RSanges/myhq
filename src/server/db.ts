@@ -693,6 +693,25 @@ CREATE INDEX IF NOT EXISTS agent_questions_agent ON agent_questions (room, agent
 CREATE INDEX IF NOT EXISTS agent_questions_started ON agent_questions (started_at);
 `,
   },
+  {
+    version: 20,
+    sql: `
+-- The runs an agent proposes in answer to a message of the owner that asks for
+-- work (docs/architecture.md, "A task or a discussion"): the task of the run,
+-- reworded by the agent, and what the owner did with it. Nothing starts
+-- without the owner's click: pending until « Lancer le tour » (launched, with
+-- the run) or « On en parle d'abord » (dismissed). One per question at most.
+-- Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS question_proposals (
+  question_id INTEGER PRIMARY KEY,
+  task TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'launched', 'dismissed')),
+  run_id INTEGER,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

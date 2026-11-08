@@ -11,7 +11,7 @@ import { formatClock, formatCost, formatDateTime, formatDuration, formatShortDay
 import { Markdown } from "./markdown-view";
 import { roleFileName, type Action, type FeedEntry, type TeamAgent } from "./model";
 import { chipStyle } from "./room-color";
-import type { HqEvent } from "./schemas";
+import type { AgentQuestion, HqEvent } from "./schemas";
 import { strings } from "./strings";
 import { Routines } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
@@ -113,8 +113,88 @@ const Icon = ({ children }: { children: ReactNode }) => (
 /** The anchor of a run's line in the thread. */
 export const threadRunId = (id: number): string => `agent-thread-run-${id}`;
 
+/** Brings the line of a run into view, unfolded. */
+function showRun(id: number) {
+  const line = document.getElementById(threadRunId(id));
+  if (!line) return;
+  const details = line.querySelector("details");
+  if (details) details.open = true;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  line.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+  line.querySelector("summary")?.focus();
+}
+
+/** What the thread lets the owner do with a proposed run. */
+type Decide = {
+  onDecide: (questionId: number, action: "launch" | "dismiss") => Promise<void>;
+  /** The question whose proposal is being decided, if any. */
+  deciding: number | null;
+  /** The agent has a run in progress: a new one would be refused. */
+  working: boolean;
+};
+
+/**
+ * The card under an answer that proposes a run: the task, then « Lancer le
+ * tour » or « On en parle d'abord ». Once decided it says what became of it,
+ * after a reload too.
+ */
+function ProposalCard({
+  questionId,
+  proposal,
+  name,
+  decide,
+}: {
+  questionId: number;
+  proposal: NonNullable<AgentQuestion["proposal"]>;
+  name: string;
+  decide: Decide;
+}) {
+  const p = t.thread.proposal;
+  const busy = decide.deciding === questionId;
+  return (
+    <section className="agent-proposal" data-state={proposal.state} aria-label={p.label}>
+      <p className="agent-proposal-lead">{p.lead}</p>
+      <p className="agent-proposal-task">{proposal.task}</p>
+      {proposal.state === "pending" ? (
+        <>
+          <div className="agent-proposal-actions">
+            <button
+              type="button"
+              className="chat-btn chat-btn-primary"
+              disabled={busy || decide.working}
+              onClick={() => void decide.onDecide(questionId, "launch")}
+            >
+              {busy ? p.launching : p.launch}
+            </button>
+            <button type="button" className="chat-btn" disabled={busy} onClick={() => void decide.onDecide(questionId, "dismiss")}>
+              {p.talk}
+            </button>
+          </div>
+          {decide.working && <p className="agent-proposal-note">{p.busy(name)}</p>}
+        </>
+      ) : proposal.state === "launched" ? (
+        <p className="agent-proposal-note" role="status">
+          <span className="agent-proposal-done">{p.launched(proposal.runId)}</span>
+          {proposal.runId !== null && (
+            <>
+              {" "}
+              <button type="button" className="agent-link" onClick={() => showRun(proposal.runId!)}>
+                {p.seeRun}
+              </button>
+            </>
+          )}
+        </p>
+      ) : (
+        <p className="agent-proposal-note" role="status">
+          {p.dismissed}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** One line of the thread. */
-function Line({ line, name, now }: { line: ThreadLine; name: string; now: number }) {
+function Line({ line, name, now, decide }: { line: ThreadLine; name: string; now: number; decide: Decide }) {
   switch (line.kind) {
     case "day":
       return (
@@ -150,9 +230,14 @@ function Line({ line, name, now }: { line: ThreadLine; name: string; now: number
               {t.thread.thinking(name)}
             </p>
           ) : line.state === "answer" && line.text !== null ? (
-            <div className="chat-msg-text agent-answer">
-              <Markdown source={line.text} />
-            </div>
+            <>
+              {line.text !== "" && (
+                <div className="chat-msg-text agent-answer">
+                  <Markdown source={line.text} />
+                </div>
+              )}
+              {line.proposal && <ProposalCard questionId={line.questionId} proposal={line.proposal} name={name} decide={decide} />}
+            </>
           ) : (
             <p className="chat-error">{t.thread.failed[line.error ?? "error"] ?? t.thread.failed.error}</p>
           )}
@@ -406,7 +491,7 @@ export function AgentSheet({
   );
 
   const runKey = agent.lastRun ? `${agent.lastRun.id}:${agent.lastRun.status}` : "";
-  const { thread, readAt, error, busy, send, reset } = useAgentThread(agent.room, agent.id, `${runKey}|${refreshKey}`);
+  const { thread, readAt, error, busy, send, decide, reset } = useAgentThread(agent.room, agent.id, `${runKey}|${refreshKey}`);
   // The clock of the durations: when the thread was read, and every half minute while a run goes on.
   const [clock, setClock] = useState(0);
   const working = agent.state === "working";
@@ -450,6 +535,19 @@ export function AgentSheet({
       event.preventDefault();
       void submit();
     }
+  };
+
+  // « Lancer le tour »: the run joins the page's model at once, so the floor and the header follow it.
+  const [deciding, setDeciding] = useState<number | null>(null);
+  const decision: Decide = {
+    deciding,
+    working,
+    onDecide: async (questionId, action) => {
+      setDeciding(questionId);
+      const run = await decide(questionId, action);
+      if (run) dispatch({ type: "run", run });
+      setDeciding(null);
+    },
   };
 
   const clear = async () => {
@@ -539,7 +637,7 @@ export function AgentSheet({
             {thread !== null && lines.length === 0 && <p className="agent-empty">{t.thread.empty(agent.name)}</p>}
             <ul className="chat-msgs">
               {lines.map((line) => (
-                <Line key={line.key} line={line} name={agent.name} now={now} />
+                <Line key={line.key} line={line} name={agent.name} now={now} decide={decision} />
               ))}
             </ul>
           </div>

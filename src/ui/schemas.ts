@@ -291,6 +291,16 @@ export const agentQuestionSchema = z.object({
   costUsd: z.number(),
   askedAt: z.string(),
   answeredAt: z.string().nullable(),
+  /** The run the answer proposes (a message that asked for work); absent from an older server: none. */
+  proposal: z
+    .object({
+      task: z.string(),
+      state: z.enum(["pending", "launched", "dismissed"]),
+      runId: z.number().int().nullable(),
+      decidedAt: z.string().nullable(),
+    })
+    .nullable()
+    .default(null),
 });
 
 /** `GET /api/rooms/[room]/agents/[agent]/ask`: the discussion with an agent. */
@@ -303,6 +313,9 @@ export const discussionSchema = z.object({
 export const askResponseSchema = z.object({ question: agentQuestionSchema });
 
 export const discussionClearedSchema = z.object({ cleared: z.number().int() });
+
+/** `POST /api/rooms/[room]/agents/[agent]/ask/[question]/proposal`: the question as it is now, and the run it started. */
+export const proposalResponseSchema = z.object({ question: agentQuestionSchema, run: runSchema.nullable() });
 
 /** A run in the thread of an agent's sheet. */
 export const threadRunSchema = z.object({

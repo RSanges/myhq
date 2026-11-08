@@ -3411,3 +3411,74 @@ body {
     transition: none;
   }
 }
+
+/* The card under an answer that proposes a run: nothing starts without « Lancer le tour ». */
+.agent-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-left-width: 4px;
+  border-radius: 0.8rem;
+  background: var(--accent-soft);
+  font-size: 0.875rem;
+}
+
+.agent-proposal[data-state="launched"] {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.agent-proposal[data-state="dismissed"] {
+  border-color: var(--line);
+  background: var(--soft);
+}
+
+.agent-proposal p {
+  margin: 0;
+}
+
+.agent-proposal-lead {
+  font-weight: 700;
+}
+
+.agent-proposal-task {
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.5rem;
+  background: var(--card);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-proposal[data-state="dismissed"] .agent-proposal-task {
+  color: var(--muted);
+}
+
+.agent-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.agent-proposal .chat-btn {
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+}
+
+.agent-proposal .chat-btn-primary {
+  color: var(--accent-fg);
+}
+
+.agent-proposal-note {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.agent-proposal-done {
+  color: var(--ok);
+  font-weight: 700;
+}

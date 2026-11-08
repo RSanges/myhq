@@ -2,7 +2,8 @@ import type { AgentQuestion, ThreadEntry, ThreadItem, ThreadRun } from "./schema
 
 // The thread of an agent's sheet, as the interface draws it: the entries of
 // GET /api/rooms/<room>/agents/<agent>/thread turned into the lines of a
-// conversation. The owner's message and the agent's answer, a run in one line
+// conversation. The owner's message and the agent's answer (with the run it
+// proposes when the message asked for work), a run in one line
 // (its summary on demand), an item with its status, a question of the agent
 // that waits for the owner, and a day line when the day changes. Pure and
 // testable: no DOM, no wording (the component words it with strings.ts),
@@ -28,6 +29,8 @@ export type ThreadLine =
       /** Why there is no answer, for a failed one. */
       error: AgentQuestion["error"];
       costUsd: number;
+      /** The run the answer proposes, for the owner to start or set aside (a card under the answer). */
+      proposal: AgentQuestion["proposal"];
     }
   | {
       kind: "run";
@@ -122,6 +125,7 @@ export function threadLines(entries: readonly ThreadEntry[], now: number): Threa
           text: question.status === "done" ? question.answer : null,
           error: question.error,
           costUsd: question.costUsd,
+          proposal: question.status === "done" ? question.proposal : null,
         });
         break;
       }
