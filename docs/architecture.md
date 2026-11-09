@@ -1933,9 +1933,17 @@ it out at, so the browser never resamples it. On load, or with the « Vue
 d'ensemble » button, the floor takes the largest such zoom that fits the
 canvas, centred; when even one device pixel per art pixel is too big (a
 1280 to 1440 pixel screen for the single floor, a phone), it stays at one and
-the rest is a drag away (the floor of one room then shows its offices). There
-is no step under one: the old overview of the single floor went to half a
-device pixel per art pixel, sampled smoothly, and blurred every piece of art.
+the rest is a drag away (the floor of one room then shows its offices). Zooming
+out goes further, down to the zoom where the whole floor fits the canvas
+with a margin (`minZoomFor` and `fitZoom` of `floor-view.ts`, never under
+0.15): under one, the steps are that minimum, then 0.35, 0.5 and 0.75 when
+they are clearly above it, and the art is sampled linearly (a slightly soft
+overview rather than rows of pixels dropped); from one up, nearest sampling
+and whole steps as above. Under one, text that would pile up goes away by CSS
+scale (`labelDetail`): the wide bubbles (activity, « réfléchit ») under 0.75
+CSS pixel per art pixel, the names and small marks under 0.5; a decision's
+« ? » and the tray counter always stay, and an agent keeps a click target of
+at least 10 CSS pixels.
 The wheel zooms, one whole step per notch, around the pointer (a trackpad's
 two finger scroll cannot be told apart from a wheel for sure, so it zooms
 too, and its pinch arrives as the wheel with ctrl); a drag (a mouse, one
@@ -1949,7 +1957,7 @@ room's box (signboard included) goes to the middle of the view, so a room
 bigger than the view overflows it evenly on both sides; on a wide screen, the
 middle of the part of the canvas left of the room's sheet it opens (below);
 when the sheet closes, the room goes back to the middle of the whole canvas,
-unless the view moved since (a drag, a zoom, the overview). The zoom passes through whole steps only so every frame
+unless the view moved since (a drag, a zoom, the overview). The flight passes through the zoom levels only (whole steps from one up) so every frame
 stays crisp, at once under `prefers-reduced-motion`. A click on the floor
 outside the rooms, or the « Vue d'ensemble » button, flies back to the
 overview and closes the room's sheet. A click on an agent still opens its
