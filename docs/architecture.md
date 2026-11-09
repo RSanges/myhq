@@ -1274,6 +1274,12 @@ gives for reading. So MyHQ enforces the paths itself
   hook is in exec form (`command`: the Node binary, `args`: the script, no
   shell, so no quoting issue on Windows), matches `Write|Edit|MultiEdit|NotebookEdit`,
   and has `onFailure: "block"`: a hook that cannot run blocks the write.
+- The same file turns on the CLI's own
+  `permissions.blockWritesOutsideWorkingDirectories` (Claude Code 2.1.314
+  and later; older versions ignore it), a second layer that refuses writes
+  outside the working directories even if the hook does not run. It is not
+  enough alone: it counts the `--add-dir` folders as working directories,
+  and only the hook keeps them read-only. Neither bounds `Bash`.
 - In a worktree, the file stays out of Git as the skills do: a
   `.claude/.gitignore` of MyHQ's ignores `settings.local.json` and itself (no
   Git command, nothing shared with the other worktrees). A repository with

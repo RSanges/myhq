@@ -240,6 +240,7 @@ test("installing the hook writes an exec-form PreToolUse entry and keeps everyth
   installWriteGuard(work, { script: HOOK, node: "C:\\node\\node.exe" });
   const fresh = settingsOf(work);
   assert.equal(fresh.hooks.PreToolUse.length, 1);
+  assert.deepEqual(fresh.permissions, { blockWritesOutsideWorkingDirectories: true }, "the CLI's own guard, as a second layer");
   assert.deepEqual(fresh.hooks.PreToolUse[0], {
     matcher: "Write|Edit|MultiEdit|NotebookEdit",
     hooks: [{ type: "command", command: "C:/node/node.exe", args: [HOOK.replace(/\\/g, "/")], timeout: 30, onFailure: "block" }],
@@ -254,7 +255,7 @@ test("installing the hook writes an exec-form PreToolUse entry and keeps everyth
   installWriteGuard(work, { script: HOOK });
   installWriteGuard(work, { script: HOOK });
   const merged = settingsOf(work);
-  assert.deepEqual(merged.permissions, { allow: ["Read"] });
+  assert.deepEqual(merged.permissions, { allow: ["Read"], blockWritesOutsideWorkingDirectories: true });
   assert.deepEqual(merged.env, { A: "1" });
   assert.deepEqual((merged.hooks as Record<string, unknown>).Stop, [own]);
   assert.equal(merged.hooks.PreToolUse.length, 2, "MyHQ's entry is replaced, never duplicated");

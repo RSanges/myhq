@@ -172,7 +172,12 @@ function keepOutOfGit(workDir: string): void {
  * Installs the guard's PreToolUse hook in `<workDir>/.claude/settings.local.json`:
  * MyHQ's entry is put first (a previous one replaced), every other setting
  * and hook of the file is kept. The hook runs `node <script>` without a shell
- * (exec form), and blocks the write if it fails to run (`onFailure`). Throws
+ * (exec form), and blocks the write if it fails to run (`onFailure`). The
+ * CLI's own `permissions.blockWritesOutsideWorkingDirectories` (Claude Code
+ * 2.1.314+, ignored by older versions) is turned on as a second layer: it
+ * refuses writes outside the working directories even if the hook does not
+ * run, though it lets `--add-dir` folders through, which only the hook
+ * refuses. Throws
  * an explicit error when the file exists and is not a JSON object. With
  * `ignoreInGit` (a worktree, a folder of a versioned home) the file is kept
  * out of Git (keepOutOfGit).
@@ -214,8 +219,13 @@ export function installWriteGuard(
       },
     ],
   };
+  const permissions =
+    settings.permissions && typeof settings.permissions === "object" && !Array.isArray(settings.permissions)
+      ? (settings.permissions as Record<string, unknown>)
+      : {};
   const next = {
     ...settings,
+    permissions: { ...permissions, blockWritesOutsideWorkingDirectories: true },
     hooks: { ...hooks, PreToolUse: [entry, ...previous.filter((group) => !isGuardGroup(group))] },
   };
   // Out of Git first: a refusal must leave no settings file behind for an agent to commit.
