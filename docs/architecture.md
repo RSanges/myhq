@@ -1172,7 +1172,8 @@ it, `memoryText`) and the date line.
   deny list. They read only, and no write tool exists beside them. The
   question mode block then tells the agent to search before answering anything
   that may have changed (a release, a model, a price, a rule), never from
-  memory, each fact with its source and date, and to put nothing personal in
+  memory, each fact with its source and date, the facts that matter read on
+  their official page rather than in search snippets, and to put nothing personal in
   a query or a URL. An agent whose job is to stay current (a documentalist)
   answers from the latest news, not from its training. The other agents keep
   the three read tools.

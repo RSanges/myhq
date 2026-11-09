@@ -269,7 +269,7 @@ export function questionSystemText(language: string, web = false): string {
     "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
     ...(web
       ? [
-          "You have WebSearch and WebFetch here, to read only. Anything that may have changed (a release, a model, a version, a price, a rule, an announcement, the state of the art): search the web before you answer, never answer it from memory, and give each fact with its source and its date. Your notes and knowledge files are a starting point, not the latest word.",
+          "You have WebSearch and WebFetch here, to read only. Anything that may have changed (a release, a model, a version, a price, a rule, an announcement, the state of the art): search the web before you answer, never answer it from memory, and give each fact with its source and its date. Search results are leads: for the facts that matter, open the official source (the publisher's own page, release notes, documentation) with WebFetch before you state them. Your notes and knowledge files are a starting point, not the latest word.",
           "Never put anything personal or private in a search query or a fetched URL.",
         ]
       : []),
