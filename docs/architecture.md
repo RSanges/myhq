@@ -1159,11 +1159,23 @@ it, `memoryText`) and the date line.
 **Read only, by configuration.** The prompt is not the guard:
 
 - `--tools Read Glob Grep`: no other built-in tool exists for the turn (no
-  Bash, Edit, Write, NotebookEdit, WebFetch, WebSearch, Task).
+  Bash, Edit, Write, NotebookEdit, Task, and no WebFetch or WebSearch unless
+  the agent has them, below).
 - `--allowedTools` lists those three and `mcp__hq__hq_memory_read`,
   `mcp__hq__hq_items`; `--disallowedTools` adds every built-in tool that
   writes, runs or fetches and every HQ tool that writes, on top of the global
   deny list, whatever the project settings of the working directory allow.
+- **The web, for an agent that already reads it.** When the agent's own
+  `allowedTools` hold `WebSearch` or `WebFetch` (a rule such as
+  `WebFetch(domain:...)` counts), the question keeps them
+  (`questionWebTools`): they join `--tools` and `--allowedTools` and leave the
+  deny list. They read only, and no write tool exists beside them. The
+  question mode block then tells the agent to search before answering anything
+  that may have changed (a release, a model, a price, a rule), never from
+  memory, each fact with its source and date, and to put nothing personal in
+  a query or a URL. An agent whose job is to stay current (a documentalist)
+  answers from the latest news, not from its training. The other agents keep
+  the three read tools.
 - `--mcp-config` holds the HQ server alone, never the agent's own servers, in
   read-only mode: `HQ_READ_ONLY=1` and no `HQ_RUN_ID` (a question is not a
   run). In that mode the server registers only `hq_memory_read` and `hq_items`,

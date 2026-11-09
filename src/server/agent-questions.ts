@@ -16,7 +16,8 @@ import { agentEnv, findAgent, isStopping, startRun, todayLine, type RunnerDeps }
 // Questions of the owner to an agent (docs/architecture.md, "Questions to an
 // agent"). The agent answers with its own role, memory, model and effort, in
 // its own working directory, through the same `claude -p` as a run, but with
-// read tools only: Read, Glob, Grep and the HQ server in read-only mode
+// read tools only: Read, Glob, Grep, the web tools when its own whitelist has
+// them (WebSearch, WebFetch), and the HQ server in read-only mode
 // (hq_memory_read, hq_items). It is not a run: nothing in `runs`, no agent
 // lock, no daily cap, no wake-up. Each question is metered in
 // `agent_questions` (migration 19), and its cost counts in the day and the
@@ -43,9 +44,23 @@ export const QUESTION_TOOLS = ["Read", "Glob", "Grep"] as const;
 /** The HQ tools of a question: the ones the server gives in read-only mode. */
 export const QUESTION_HQ_TOOLS = ["mcp__hq__hq_memory_read", "mcp__hq__hq_items"] as const;
 /**
+ * The web tools a question keeps when the agent's own whitelist has them: they
+ * read, and an agent whose job is to stay current (a documentalist, a watch)
+ * must check before it answers about anything recent, not answer from memory.
+ */
+export const QUESTION_WEB_TOOLS = ["WebSearch", "WebFetch"] as const;
+
+/** The web tools of the agent's whitelist (`WebFetch` or `WebFetch(domain:...)` both count). */
+export function questionWebTools(allowedTools: string[]): string[] {
+  return QUESTION_WEB_TOOLS.filter((tool) =>
+    allowedTools.some((rule) => rule.replace(/\(.*$/, "").trim() === tool),
+  );
+}
+/**
  * Denied on top of the global deny list, whatever the project settings of the
  * working directory allow: every built-in tool that writes, runs or fetches,
- * and every HQ tool that writes (the server does not even give them).
+ * and every HQ tool that writes (the server does not even give them). The web
+ * tools leave this list for an agent that has them (QUESTION_WEB_TOOLS).
  */
 export const QUESTION_DENIED_TOOLS = [
   "Bash",
@@ -245,13 +260,19 @@ export function recoverInterruptedQuestions(db: Db): number {
 }
 
 /** The question-mode rules, after the agent's role in its system prompt. */
-export function questionSystemText(language: string): string {
+export function questionSystemText(language: string, web = false): string {
   return [
     "## Question mode",
     "",
     "The owner of MyHQ is asking you a question. This is not a task and not a run: answer it, and nothing else.",
     `Answer in ${language}, short and concrete, from what you know (your role, your memory, the discussion below) and from what you can read in your working directory and its folders (Read, Glob, Grep; hq_memory_read and hq_items for your memory and the items).`,
     "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
+    ...(web
+      ? [
+          "You have WebSearch and WebFetch here, to read only. Anything that may have changed (a release, a model, a version, a price, a rule, an announcement, the state of the art): search the web before you answer, never answer it from memory, and give each fact with its source and its date. Your notes and knowledge files are a starting point, not the latest word.",
+          "Never put anything personal or private in a search query or a fetched URL.",
+        ]
+      : []),
     "If you do not know, say so: never invent.",
     "",
     "### A discussion or a task",
@@ -421,7 +442,11 @@ async function answerQuestion(p: {
   try {
     fs.mkdirSync(dir, { recursive: true });
     const language = languageName(homeLanguage(config.home));
-    fs.writeFileSync(systemFile, `${fs.readFileSync(agent.rolePath, "utf8").trimEnd()}\n\n${questionSystemText(language)}\n`);
+    const web = questionWebTools(agent.allowedTools);
+    fs.writeFileSync(
+      systemFile,
+      `${fs.readFileSync(agent.rolePath, "utf8").trimEnd()}\n\n${questionSystemText(language, web.length > 0)}\n`,
+    );
     // The HQ server alone, in read-only mode: never the agent's own servers.
     writeMcpConfig({
       file: mcpConfigPath,
@@ -453,9 +478,9 @@ async function answerQuestion(p: {
       ...(agent.effort ? { effort: agent.effort } : {}),
       ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
       rolePath: systemFile,
-      allowedTools: [...QUESTION_TOOLS, ...QUESTION_HQ_TOOLS],
-      disallowedTools: [...QUESTION_DENIED_TOOLS],
-      tools: [...QUESTION_TOOLS],
+      allowedTools: [...QUESTION_TOOLS, ...web, ...QUESTION_HQ_TOOLS],
+      disallowedTools: QUESTION_DENIED_TOOLS.filter((tool) => !web.includes(tool)),
+      tools: [...QUESTION_TOOLS, ...web],
       addDirs: agent.addDirs,
       mcpConfigPath,
       maxBudgetUsd: Math.min(QUESTION_MAX_BUDGET_USD, agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd),

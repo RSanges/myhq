@@ -10,6 +10,8 @@ import {
   askSchema,
   QUESTION_MAX_CHARS,
   questionsIdle,
+  questionSystemText,
+  questionWebTools,
   readDiscussion,
   recoverInterruptedQuestions,
   resetDiscussion,
@@ -26,7 +28,7 @@ import { makeHome, waitForRun } from "./helpers";
 
 const usage = { inputTokens: 10, outputTokens: 20, cacheCreationInputTokens: 30, cacheReadInputTokens: 40 };
 
-/** A room whose agent has its own MCP server and every write tool: a question must get none of them. */
+/** A room whose agent has its own MCP server and every write tool, but no web tool: a question must get none of them. */
 const writerRoom = {
   name: "demo",
   targetRepo: "../demo-project",
@@ -37,7 +39,7 @@ const writerRoom = {
       role: "roles/scout.md",
       model: "sonnet",
       effort: "high",
-      allowedTools: ["Read", "Write", "Edit", "Bash(git *)", "WebFetch", "mcp__hq__*", "mcp__mail__*"],
+      allowedTools: ["Read", "Write", "Edit", "Bash(git *)", "mcp__hq__*", "mcp__mail__*"],
       mcpServers: { mail: { command: "node", args: ["mail.js"] } },
     },
   ],
@@ -156,6 +158,30 @@ test("a question reads only: the binary gets Read, Glob, Grep and the HQ read to
   assert.match(input.prompt, /How do you make your videos\?/);
   assert.match(input.prompt, /Remotion then ffmpeg\./);
   assert.ok(!fs.existsSync(input.rolePath), "the system prompt file is removed");
+});
+
+test("a question keeps the web tools of an agent that has them, to read only, and checks recent facts there", async () => {
+  const webRoom = {
+    ...writerRoom,
+    agents: [{ ...writerRoom.agents[0]!, allowedTools: ["Read", "Write(**)", "WebSearch", "WebFetch(domain:example.com)", "mcp__hq__*"] }],
+  };
+  const config = makeHome({}, webRoom);
+  const seen: Seen[] = [];
+  askAgent({ room: "demo", agent: "scout", question: "What did Apple announce this week?" }, { config, engine: fakeEngine({ seen }) });
+  await questionsIdle();
+
+  const { input, system } = seen[0]!;
+  const args = buildClaudeArgs(input);
+  assert.deepEqual(flagValues(args, "--tools"), ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]);
+  assert.deepEqual(flagValues(args, "--allowedTools"), ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "mcp__hq__hq_memory_read", "mcp__hq__hq_items"]);
+  const denied = flagValues(args, "--disallowedTools");
+  for (const tool of ["WebSearch", "WebFetch"]) assert.ok(!denied.includes(tool), `${tool} is not denied`);
+  for (const tool of ["Bash", "Edit", "Write", "mcp__hq__hq_submit", "mcp__hq__hq_memory_write"]) assert.ok(denied.includes(tool), `${tool} is still denied`);
+  assert.match(system, /search the web before you answer, never answer it from memory/);
+
+  // Without web tools, the question mode does not mention them.
+  assert.equal(questionWebTools(["Read", "Bash(git *)"]).length, 0);
+  assert.doesNotMatch(questionSystemText("English"), /WebSearch/);
 });
 
 test("a question is metered, never a run: no run, no task, no cap, no wake-up", async () => {
