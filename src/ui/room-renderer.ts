@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Rectangle, Sprite, Texture } from "pixi.js";
+import { Application, Container, Graphics, Rectangle, Sprite, Texture, type TextureSource } from "pixi.js";
 import {
   buildFloorScene,
   characterBox,
@@ -18,7 +18,7 @@ import {
   type ScreenRect,
   type SignPart,
 } from "./iso-floor";
-import { focusZoom } from "./floor-view";
+import { fitZoom, focusZoom, labelDetail, MAX_ZOOM, MIN_ZOOM, minZoomFor, nearestZoom, stepZoom, zoomLevels } from "./floor-view";
 import type { LabelLayer } from "./room-labels";
 import {
   CELL,
@@ -44,7 +44,10 @@ import { RECEPTION_KEY } from "./reception";
 // scripts/iso/README.md): it is only ever drawn at a whole number of device
 // pixels per art pixel (one at least), with nearest sampling, no mipmaps and
 // whole-pixel positions, so it stays crisp; a view that flies to a room or
-// back to the overview passes through whole zoom steps only. The signboards
+// back to the overview passes through zoom levels only. From one device pixel
+// per art pixel up the levels are whole steps; under it (a far view, to see the
+// whole floor) they are fractions down to the exact fit of the floor, sampled
+// linearly (a downscaled nearest would drop lines of pixels). The signboards
 // of the single floor are floor art too, their names drawn with the pixel
 // font of the floor set. Tiles, floor shadows and rugs lie flat under everything; walls,
 // rims, furniture and standing characters are sorted back to front by their
@@ -106,7 +109,11 @@ export type RoomRenderer = {
   resize(cssWidth: number, cssHeight: number): void;
   /** The screen's device pixel ratio changed (zoom, another screen): draw at the new density. */
   setResolution(resolution: number): void;
-  /** One step closer (+1) or further (-1), around a point of the canvas (CSS pixels) or its centre. */
+  /**
+   * One zoom level closer (+1) or further (-1), around a point of the canvas (CSS pixels) or its centre. The levels are
+   * whole steps from one device pixel per art pixel to MAX_ZOOM, and under one, fractions down to the exact fit of
+   * the whole floor (`zoomLevels`).
+   */
   zoomBy(step: number, around?: Point): void;
   /** Moves the floor by this many CSS pixels. */
   panBy(dx: number, dy: number): void;
@@ -114,7 +121,7 @@ export type RoomRenderer = {
   fit(animate?: boolean): void;
   /** True while the view is the overview (nothing moved it since). */
   readonly overview: boolean;
-  /** Whether a step closer or further is possible. */
+  /** Whether a level closer or further exists. */
   canZoom(step: number): boolean;
   /** The character under a point of the canvas (CSS pixels), the front one when they overlap. */
   agentAt(view: RoomView, x: number, y: number): AgentView | null;
@@ -158,13 +165,8 @@ export type RendererOptions = {
   onLoad: () => void;
 };
 
-/** The closest the floor gets: this many device pixels per art pixel. */
-export const MAX_ZOOM = 6;
-/**
- * The furthest: one device pixel per art pixel, never less (a smoothed half
- * step blurred the art). A floor bigger than the screen at one is panned.
- */
-export const MIN_ZOOM = 1;
+// The zoom range (floor-view.ts): MAX_ZOOM device pixels per art pixel at the closest; at the furthest, the exact
+// fit of the whole floor in the view (a fraction), or one when the floor fits at one or more.
 const BUMP_MS = 650;
 /** A counter with something to decide flashes this long, once per COUNTER_PERIOD (never with reduced motion). */
 const COUNTER_FLASH_MS = 260;
@@ -175,6 +177,8 @@ const COUNTER_MAX = 99;
 const FLIGHT_MS = 380;
 /** Free space around the floor when it is fitted, in art pixels. */
 const MARGIN = 8;
+/** Free space around the floor at the furthest zoom, in art pixels (on top of the bounds' own few pixels). */
+const FIT_MARGIN = 20;
 /** A floor at most this much bigger than the canvas (at one device pixel) is still centred whole; a bigger one shows its offices. */
 const NEARLY_FITS = 1.25;
 /** The widest bubble of activity, and the height of two of its lines, in CSS pixels (scaled like the labels). */
@@ -235,11 +239,25 @@ function sliceSheet(image: HTMLImageElement): Sheet | null {
 
 const hexToNumber = (hex: string | null): number | null => (hex ? Number.parseInt(hex.slice(1), 16) : null);
 
-/** Nearest sampling and no mipmaps: pixel art drawn at a whole number of device pixels per pixel. */
+/**
+ * Nearest sampling and no mipmaps: pixel art drawn at a whole number of device pixels per pixel. Under one device
+ * pixel per art pixel (the far levels) `setSampling("linear")` smooths them instead: nearest would drop lines of pixels.
+ */
+let sampling: "nearest" | "linear" = "nearest";
+const sampled = new Set<TextureSource>();
 function crisp(texture: Texture): Texture {
-  texture.source.scaleMode = "nearest";
+  texture.source.scaleMode = sampling;
   texture.source.autoGenerateMipmaps = false;
+  sampled.add(texture.source);
   return texture;
+}
+function setSampling(mode: "nearest" | "linear"): void {
+  if (mode === sampling) return;
+  sampling = mode;
+  for (const source of sampled) {
+    if (source.destroyed) sampled.delete(source);
+    else source.scaleMode = mode;
+  }
 }
 
 /**
@@ -342,6 +360,17 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
   let layout: RoomLayout | null = null;
 
   const scale = () => zoom / resolution;
+  /** The furthest zoom: the exact fit of the whole floor in the view, one at most (floor-view.ts `minZoomFor`). */
+  const minZoom = (): number => {
+    if (!layout) return MIN_ZOOM;
+    const b = layout.bounds;
+    return minZoomFor(fitZoom(b.w, b.h, FIT_MARGIN, cssSize.width * resolution, cssSize.height * resolution));
+  };
+  const levels = (): number[] => zoomLevels(minZoom(), MAX_ZOOM);
+  /** A view whose zoom a smaller or other canvas left under the furthest comes back to it. */
+  const clampZoom = () => {
+    zoom = Math.max(minZoom(), Math.min(MAX_ZOOM, zoom));
+  };
   type View = { zoom: number; center: Point };
   /** The view flying to another (a room clicked, the overview), through whole zoom steps only; null when still. */
   let flight: { from: View; to: View; start: number | null } | null = null;
@@ -353,6 +382,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     const at = offset();
     world.scale.set(scale());
     world.position.set(at.x, at.y);
+    // Under one device pixel per art pixel the art is smoothed, from it up it stays nearest (crisp).
+    setSampling(zoom < MIN_ZOOM ? "linear" : "nearest");
     labels.setView(scale(), at.x, at.y, cssSize.width);
   };
   const clampCenter = () => {
@@ -405,8 +436,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     const t = Math.min(1, (at - flight.start) / FLIGHT_MS);
     const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
     const { from, to } = flight;
-    // The zoom moves on a log scale, drawn at the nearest whole step: every frame stays crisp.
-    zoom = Math.max(MIN_ZOOM, Math.round(Math.exp(Math.log(from.zoom) + (Math.log(to.zoom) - Math.log(from.zoom)) * e)));
+    // The zoom moves on a log scale, drawn at the nearest level: every frame stays even.
+    zoom = nearestZoom(levels(), Math.exp(Math.log(from.zoom) + (Math.log(to.zoom) - Math.log(from.zoom)) * e));
     center = { x: from.center.x + (to.center.x - from.center.x) * e, y: from.center.y + (to.center.y - from.center.y) * e };
     if (t >= 1) {
       zoom = to.zoom;
@@ -829,7 +860,10 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       cssSize = { width: Math.max(1, cssWidth), height: Math.max(1, cssHeight) };
       app.renderer.resize(cssSize.width, cssSize.height);
       if (!adjusted) fitView();
-      else clampCenter();
+      else {
+        clampZoom();
+        clampCenter();
+      }
       applyView();
     },
     setResolution(next) {
@@ -838,18 +872,21 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       app.renderer.resolution = next;
       app.renderer.resize(cssSize.width, cssSize.height);
       if (!adjusted) fitView();
+      else clampZoom();
       applyView();
     },
     zoomBy(step, around) {
-      // Whole steps only, from one device pixel per art pixel to MAX_ZOOM.
+      // One level at a time: the fit of the whole floor, fractions over it, then whole steps up to MAX_ZOOM.
       flight = null;
       focused = null;
-      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + Math.sign(step)));
+      const next = stepZoom(levels(), zoom, step);
       if (next === zoom) return;
       const anchor = around ?? { x: cssSize.width / 2, y: cssSize.height / 2 };
       const art = artOf(anchor.x, anchor.y);
       zoom = next;
       center = { x: art.x - (anchor.x - cssSize.width / 2) / scale(), y: art.y - (anchor.y - cssSize.height / 2) / scale() };
+      // The furthest level shows the whole floor: centred, whatever the point it zoomed out around.
+      if (layout && next === minZoom() && next < MIN_ZOOM) center = { x: layout.bounds.x + layout.bounds.w / 2, y: layout.bounds.y + layout.bounds.h / 2 };
       adjusted = true;
       clampCenter();
       applyView();
@@ -870,7 +907,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       focused = null;
     },
     canZoom(step) {
-      return step > 0 ? zoom < MAX_ZOOM : zoom > MIN_ZOOM;
+      return stepZoom(levels(), zoom, step) !== zoom;
     },
     counterAt(x, y) {
       const art = artOf(x, y);
@@ -926,6 +963,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
     agentAt(view, x, y) {
       const at = offset();
       const art = { x: (x - at.x) / scale(), y: (y - at.y) / scale() };
+      const detail = labelDetail(zoom, scale());
+      // A character stays at least this many CSS pixels wide to click, however far the view.
+      const body = Math.max(22, 10 / scale());
       let found: AgentView | null = null;
       let foundDepth = Number.NEGATIVE_INFINITY;
       for (const agent of view.agents) {
@@ -933,8 +973,9 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         if (!node || agent.alpha < 0.5) continue;
         const { feet, height } = node;
         // The bubble of what it is doing opens its sheet too: its box is part of the character.
-        const bubbled = agent.bubble?.kind === "activity";
-        const halfWidth = bubbled && art.y < feet.y - height ? px(BUBBLE_WIDTH) / 2 : 22;
+        // (only while it is drawn: the far levels hide it).
+        const bubbled = detail.bubbles && agent.bubble?.kind === "activity";
+        const halfWidth = bubbled && art.y < feet.y - height ? px(BUBBLE_WIDTH) / 2 : body;
         const top = bubbled ? feet.y - height - 3 - px(22) - px(BUBBLE_HEIGHT) : feet.y - height - 2;
         if (Math.abs(art.x - feet.x) > halfWidth || art.y < top || art.y > feet.y + 8) continue;
         const depth = agent.x + agent.y;
@@ -956,6 +997,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         drawnLayout = view.layout;
         staticKey = key;
         if (!adjusted) fitView();
+        else clampZoom();
         clampCenter();
         applyView();
         if (pendingFocus !== null) renderer.focusRoom(pendingFocus.room, pendingFocus.animate, pendingFocus.insetRight);
@@ -978,6 +1020,8 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         for (const sprite of [...chair.under, ...chair.over]) sprite.visible = sitting;
       }
 
+      // The text over the agents that still has room at this zoom (the far levels drop what would pile up).
+      const detail = labelDetail(zoom, scale());
       const standing: { node: AgentNode; box: Box; rect: ScreenRect }[] = [];
       for (const agent of view.agents) {
         const node = nodeFor(agent.key);
@@ -1016,29 +1060,32 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
         // The name over the head, and what the agent is doing over the name.
         if (agent.alpha > 0.5) {
           const top = node.feet.y - node.height - 3;
-          labels.place(`name:${agent.key}`, {
-            text: agent.name,
-            x: node.feet.x,
-            y: top,
-            size: px(11),
-            weight: 700,
-            box: "tag",
-            ax: 0.5,
-            ay: 1,
-            color: agent.key === RECEPTION_KEY ? null : current.template === "rooms" ? roomColorHex(current, agent.key) : scene.color,
-          });
+          if (detail.names) {
+            labels.place(`name:${agent.key}`, {
+              text: agent.name,
+              x: node.feet.x,
+              y: top,
+              size: px(11),
+              weight: 700,
+              box: "tag",
+              ax: 0.5,
+              ay: 1,
+              color: agent.key === RECEPTION_KEY ? null : current.template === "rooms" ? roomColorHex(current, agent.key) : scene.color,
+            });
+          }
           const bubbleY = top - px(22);
           const bubble = agent.bubble;
-          if (bubble?.kind === "thought") {
+          // The wide bubbles go first when the floor shrinks, the small marks with the names; the "?" of a decision stays.
+          if (bubble?.kind === "thought" && detail.bubbles) {
             labels.place(`bubble:${agent.key}`, { text: bubble.text, x: node.feet.x, y: bubbleY, size: px(11), ax: 0.5, ay: 1, box: "bubble", maxWidth: px(180), clamp: true });
-          } else if (bubble?.kind === "activity") {
+          } else if (bubble?.kind === "activity" && detail.bubbles) {
             // What it is doing, 30 characters at most: on one or two lines, above its name, never over it.
             labels.place(`bubble:${agent.key}`, { text: bubble.text, x: node.feet.x, y: bubbleY, size: px(11), weight: 600, ax: 0.5, ay: 1, box: "bubble", tone: "ink", maxWidth: px(BUBBLE_WIDTH), clamp: true });
           } else if (bubble?.kind === "question") {
             labels.place(`bubble:${agent.key}`, { text: "?", x: node.feet.x, y: bubbleY, size: px(11), tone: "onDanger", weight: 700, box: "badge", ax: 0.5, ay: 1 });
-          } else if (bubble?.kind === "talk") {
+          } else if (bubble?.kind === "talk" && detail.names) {
             labels.place(`bubble:${agent.key}`, { text: "...", x: node.feet.x, y: bubbleY, size: px(11), weight: 700, ax: 0.5, ay: 1, box: "bubble" });
-          } else if (bubble?.kind === "zzz") {
+          } else if (bubble?.kind === "zzz" && detail.names) {
             labels.place(`bubble:${agent.key}`, { text: "z Z", x: node.feet.x + px(14), y: bubbleY + px(6), size: px(11), tone: "muted", weight: 700, ax: 0, ay: 1 });
           }
         }
@@ -1062,7 +1109,7 @@ export async function createRoomRenderer(options: RendererOptions): Promise<Room
       if (current.user) {
         const deskPiece = current.pieces[current.user.desk]!;
         const deskTop = screenOf((deskPiece.cell[0] + 1) * CELL, deskPiece.cell[1] * CELL + 8);
-        labels.place("user-desk", { text: scene.labels.userDesk, x: deskTop.x, y: deskTop.y - 84, size: px(11), weight: 700, tone: "muted", box: "tag", ax: 0.5, ay: 1 });
+        if (detail.names) labels.place("user-desk", { text: scene.labels.userDesk, x: deskTop.x, y: deskTop.y - 84, size: px(11), weight: 700, tone: "muted", box: "tag", ax: 0.5, ay: 1 });
         const trayPiece = current.pieces[current.user.tray]!;
         const trayTop = screenOf((trayPiece.cell[0] + 0.5) * CELL, (trayPiece.cell[1] + 0.5) * CELL);
         const papers = Math.min(view.pending, 6);
