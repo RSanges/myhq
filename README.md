@@ -206,13 +206,20 @@ and logs a warning.
 
 ### Restart at boot on Windows
 
-pm2 has no startup hook on Windows: a scheduled task runs `pm2 resurrect` when
-you log on. In PowerShell, once:
+pm2 has no startup hook on Windows: a scheduled task runs
+`scripts/pm2-resurrect.ps1` when you log on. The script calls Node and pm2 by
+their full paths, tries three times, and logs each attempt to
+`%USERPROFILE%\.pm2\resurrect-task.log`. It also finds a pm2 installed from a
+packaged (MSIX) app such as Claude Desktop, whose global npm installs land in
+the app's redirected AppData and are invisible outside it. In PowerShell, from
+the repository folder, once:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command pm2 resurrect"
+$script = (Resolve-Path scripts\pm2-resurrect.ps1).Path
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+$trigger.Delay = "PT30S"
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName "MyHQ (pm2 resurrect)" -Action $action -Trigger $trigger -Settings $settings -Description "Restarts MyHQ at logon"
 ```
 
