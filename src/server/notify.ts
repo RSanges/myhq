@@ -6,7 +6,7 @@ import type { InlineKeyboard } from "../assistant/telegram";
 import { DEFAULT_TELEGRAM_API_BASE, pollingEnabled } from "../assistant/settings";
 import { MESSAGE_LIMIT, splitMessage } from "../assistant/text";
 import { recordBotMessage } from "./chat-history";
-import { parseQuestionPayload, QUESTION_TYPE, type QuestionPayload } from "./questions";
+import { parseChoices, parseQuestionPayload, QUESTION_TYPE, type QuestionPayload } from "./questions";
 import { NOTIFICATION_NOTE } from "./home-settings";
 import { approvalLinkLine, withLine } from "./public-url";
 import { isQuiet, isUrgentPayload, lastQuietEnd, readQuietHours } from "./quiet-hours";
@@ -237,9 +237,12 @@ export async function notifyPendingApprovals(
     }
     if (row.status === "pending") {
       const files = filesOf.all(row.id) as { id: number; name: string; mime: string; size: number }[];
+      const choices = parseChoices(JSON.parse(row.payload));
       const head = strings.notify.approvalPending(row);
-      const listed = files.length > 0 ? `${head}
-${strings.attachments.telegramLine(files.map((file) => file.name))}` : head;
+      const withChoices = choices ? `${head}
+${strings.notify.choicesOnDesk(choices.questions.length)}` : head;
+      const listed = files.length > 0 ? `${withChoices}
+${strings.attachments.telegramLine(files.map((file) => file.name))}` : withChoices;
       const text = withLine(listed, approvalLinkLine(row.id, env));
       const media = files.length > 0 ? await telegramMediaFor(dataDir, row.id, files, env) : null;
       if (await send(text, { approvalId: row.id, ...(media ? { media } : {}) })) recordBotMessage(db, text, "alert");

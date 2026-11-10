@@ -8,7 +8,17 @@ import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
 import { AGENT_PROPOSAL, applyAgentProposal } from "./agent-proposal";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
-import { answersNote, answersSchema, answersTaskText, assertAnswers, parseQuestionPayload, QUESTION_TYPE } from "./questions";
+import {
+  answersLines,
+  answersNote,
+  answersSchema,
+  answersTaskText,
+  assertAnswers,
+  CHOICES_KEY,
+  parseChoices,
+  parseQuestionPayload,
+  QUESTION_TYPE,
+} from "./questions";
 import { startApprovalCommand } from "./approval-command";
 import { loadHome, type Agent } from "./rooms";
 import { agentEnv, wakeAgents, type RunnerDeps } from "./runner";
@@ -20,13 +30,18 @@ export const decisionSchema = z
     note: z.string().trim().max(5_000).optional(),
     /** Remarks on passages of the body, for `revise` and `rejected` only. */
     annotations: annotationsSchema.optional(),
-    /** The answers to an item of questions (hq_ask), one per question: they are what approving such an item means. */
+    /**
+     * The answers to the questions of an item, one per question. An item of
+     * questions (hq_ask) is approved by them; a deliverable that carries
+     * questions (hq_submit `questions`) takes them with its approval (required)
+     * or its revision (optional).
+     */
     answers: answersSchema.optional(),
   })
   .superRefine((d, ctx) => {
     const annotated = (d.annotations?.length ?? 0) > 0;
-    if (d.answers && d.decision !== "approved") {
-      ctx.addIssue({ code: "custom", message: "answers only go with an approval", path: ["answers"] });
+    if (d.answers && d.decision === "rejected") {
+      ctx.addIssue({ code: "custom", message: "answers go with an approval or a revision, not a rejection", path: ["answers"] });
     }
     if (d.decision === "approved" && annotated) {
       ctx.addIssue({ code: "custom", message: "annotations only go with a rejection or a revision", path: ["annotations"] });
@@ -49,11 +64,13 @@ export function revisionTaskText(
   type: string,
   note: string | null,
   annotations: readonly Annotation[],
+  answers: readonly string[] = [],
 ): string {
   const head = `Revise your submission #${id} "${title}" (${type}).`;
-  if (annotations.length === 0) return `${head} User's note: ${note}`;
+  const chosen = answers.length > 0 ? `\nThe owner's answers to the questions of this item:\n${answers.join("\n")}` : "";
+  if (annotations.length === 0) return `${head} User's note: ${note}${chosen}`;
   return `${head} User's remarks:
-${decisionText(note, annotations)}`;
+${decisionText(note, annotations)}${chosen}`;
 }
 
 /** The agent of an item in the home, null when the home no longer has it. */
@@ -88,6 +105,14 @@ function agentOf(config: HqConfig, row: ApprovalRow): Agent | null {
  * (so `onRevise: "queue"` applies), and no approval task, command or relay.
  * It cannot be sent back (`QUESTION_NOT_REVISABLE`); rejecting it is how the
  * owner says the question has no place.
+ *
+ * An ordinary deliverable can carry questions too (hq_submit `questions`, in
+ * its payload under `ownerChoices`): approving it then needs `answers`
+ * (`ANSWERS_REQUIRED`), a revision may give them, a rejection never does.
+ * They are checked the same way, kept in the payload, and added (« Q : ... / R :
+ * ... ») to the decision note, to the revision task and to the approval task
+ * of the agent, to the messages of `onApprove`; the comment stays the owner's
+ * own. The item is otherwise decided as any other.
  *
  * Approving a `room_proposal` writes the room in the home first (see
  * proposal.ts), approving an `agent_proposal` adds the agent to its room (see
@@ -153,8 +178,28 @@ export function decideApproval(
       if (isQuestion && decision.decision === "revise") {
         throw new HqError("QUESTION_NOT_REVISABLE", 409, `Approval #${id} is a question: answer it or reject it, it is not sent back.`);
       }
-      if (decision.answers && !isQuestion) {
-        throw new HqError("ANSWERS_NOT_EXPECTED", 400, `Approval #${id} is not an item of questions: it takes no answers.`);
+      const stored = JSON.parse(row.payload) as Record<string, unknown>;
+      // The questions an answer is for: the item's own (hq_ask) or those attached to a deliverable (hq_submit).
+      const asked = isQuestion ? parseQuestionPayload(stored) : parseChoices(stored);
+      if (decision.answers && !isQuestion && !asked) {
+        throw new HqError("ANSWERS_NOT_EXPECTED", 400, `Approval #${id} carries no questions: it takes no answers.`);
+      }
+      // Checked against the questions, then kept with them: they are the owner's decision on the choices.
+      let answered: { payload: string; note: string; task: string; lines: string[] } | null = null;
+      if (decision.answers && asked) {
+        assertAnswers(asked.questions, decision.answers);
+        const lines = answersLines(asked.questions, decision.answers);
+        const kept = isQuestion
+          ? { ...stored, answers: decision.answers }
+          : { ...stored, [CHOICES_KEY]: { ...(stored[CHOICES_KEY] as object), answers: decision.answers } };
+        answered = {
+          payload: JSON.stringify(kept),
+          note: answersNote(asked.questions, decision.answers),
+          task: answersTaskText(id, row.title, asked.questions, decision.answers),
+          lines,
+        };
+        // An item of questions has no comment; a deliverable keeps the owner's, after the answers.
+        note = isQuestion ? answered.note : [answered.note, note].filter(Boolean).join("\n");
       }
       if (row.status !== "pending") {
         if (decision.decision !== "revise") {
@@ -175,29 +220,22 @@ export function decideApproval(
         }
         history = [...history, current];
       }
-      // An item of questions is approved by answering it: the answers, checked against its questions, are its decision.
-      let answered: { payload: string; note: string; task: string } | null = null;
-      if (isQuestion && decision.decision === "approved") {
-        if (!decision.answers) {
+      // An item of questions is approved by answering it, a deliverable that carries questions with its answers.
+      if (decision.decision === "approved" && !decision.answers) {
+        if (isQuestion) {
           throw new HqError("ANSWERS_REQUIRED", 422, `Approval #${id} is a question: approve it with its answers, or reject it.`);
         }
-        const stored = JSON.parse(row.payload) as Record<string, unknown>;
-        const asked = parseQuestionPayload(stored);
-        if (!asked) throw new HqError("INTERNAL", 500, `The questions of approval #${id} are unreadable.`);
-        assertAnswers(asked.questions, decision.answers);
-        answered = {
-          payload: JSON.stringify({ ...stored, answers: decision.answers }),
-          note: answersNote(asked.questions, decision.answers),
-          task: answersTaskText(id, row.title, asked.questions, decision.answers),
-        };
+        if (asked) throw new HqError("ANSWERS_REQUIRED", 422, `Approval #${id} carries questions: approve it with its answers.`);
       }
-      if (answered) note = answered.note;
+      if (isQuestion && decision.decision === "approved" && !asked) {
+        throw new HqError("INTERNAL", 500, `The questions of approval #${id} are unreadable.`);
+      }
       // The agent reads the new decision whether or not it read the previous one.
       db.prepare(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL, payload = COALESCE(?, payload) WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), answered?.payload ?? null, id);
-      if (answered) {
+      if (answered && isQuestion) {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,
@@ -211,7 +249,7 @@ export function decideApproval(
           row.room,
           row.agent_id,
           id,
-          revisionTaskText(id, row.title, row.type, note, annotations),
+          revisionTaskText(id, row.title, row.type, decision.note || null, annotations, answered?.lines),
           at,
           at,
         );
@@ -220,9 +258,16 @@ export function decideApproval(
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
            VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?)`,
-        ).run(row.room, row.agent_id, id, strings.tasks.executeApproved(id, row.title), at, at);
+        ).run(
+          row.room,
+          row.agent_id,
+          id,
+          answered ? `${strings.tasks.executeApproved(id, row.title)}\n${answered.lines.join("\n")}` : strings.tasks.executeApproved(id, row.title),
+          at,
+          at,
+        );
       }
-      if (decision.decision === "approved" && relayFor) deliverRelays(db, row);
+      if (decision.decision === "approved" && relayFor) deliverRelays(db, answered ? { ...row, payload: answered.payload } : row);
       return toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
     })
     .immediate();

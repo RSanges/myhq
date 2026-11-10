@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
-import { parseQuestionPayload, QUESTION_TYPE, type Question } from "@/server/questions";
+import { parseChoices, parseQuestionPayload, QUESTION_TYPE, type Question } from "@/server/questions";
 import { AnnotatedBody } from "./annotated-body";
 import { Attachments, type PointFocus } from "./attachments";
 import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
@@ -289,6 +289,7 @@ function PendingCard({
   annotations,
   onAnnotations,
   item,
+  questions,
 }: {
   approval: Approval;
   dispatch: Dispatch;
@@ -297,8 +298,13 @@ function PendingCard({
   /** The remarks made on the body so far: kept by the desk until the decision is sent. */
   annotations: Annotation[];
   onAnnotations: (next: Annotation[]) => void;
+  /** The questions the agent attached to this deliverable (hq_submit `questions`), if any. */
+  questions?: readonly Question[];
 }) {
   const [comment, setComment] = useState("");
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => (questions ?? []).map(emptyDraft));
+  // Complete answers, or null: approving needs them, a revision carries them only when complete.
+  const answers = questions ? draftAnswers(questions, drafts) : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -324,11 +330,12 @@ function PendingCard({
   const main = primaryDecision(comment, annotations.length);
   const sendMain = () => {
     if (main === "approved") {
-      void send({ decision: "approved" });
+      void send({ decision: "approved", ...(answers ? { answers } : {}) });
       return;
     }
     void send({
       decision: "revise",
+      ...(answers ? { answers } : {}),
       ...(comment.trim() !== "" ? { note: comment.trim() } : {}),
       ...(annotations.length > 0 ? { annotations } : {}),
     });
@@ -340,6 +347,15 @@ function PendingCard({
     <DeskItem approval={approval} {...item}>
       <ApprovalHeader approval={approval} />
       <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
+      {questions && (
+        <QuestionForm
+          itemId={approval.id}
+          questions={questions}
+          drafts={drafts}
+          disabled={busy}
+          onChange={(index, next) => setDrafts((all) => all.map((draft, i) => (i === index ? next : draft)))}
+        />
+      )}
       <div className="space-y-1">
         <label htmlFor={commentId} className="block text-sm font-medium">
           {strings.desk.commentLabel}
@@ -354,7 +370,12 @@ function PendingCard({
           disabled={busy}
         />
         {annotations.length > 0 && <p className="text-xs text-muted">{strings.annotations.attached(annotations.length)}</p>}
-        {main === "approved" && <p className="text-xs text-muted">{strings.desk.commentHint}</p>}
+        {main === "approved" && !questions && <p className="text-xs text-muted">{strings.desk.commentHint}</p>}
+        {questions && answers === null && (
+          <p className="text-xs text-muted">
+            {main === "approved" ? strings.question.desk.missing(unanswered(questions, drafts)) : strings.question.desk.reviseNote}
+          </p>
+        )}
       </div>
       <RejectRow
         approvalId={approval.id}
@@ -364,7 +385,12 @@ function PendingCard({
           void send({ decision: "rejected", note: reason, ...(annotations.length > 0 ? { annotations } : {}) })
         }
         lead={
-          <button type="button" className={buttonClass("primary")} disabled={busy} onClick={sendMain}>
+          <button
+            type="button"
+            className={buttonClass("primary")}
+            disabled={busy || (main === "approved" && questions !== undefined && answers === null)}
+            onClick={sendMain}
+          >
             {busy ? strings.desk.sending : main === "approved" ? strings.desk.approve : strings.desk.sendToRevise}
           </button>
         }
@@ -881,6 +907,7 @@ export function Desk({
             <ul className="space-y-2">
               {pending.map((approval) => {
                 const asked = approval.type === QUESTION_TYPE ? parseQuestionPayload(approval.payload) : null;
+                const choices = asked ? null : parseChoices(approval.payload);
                 return asked ? (
                   <QuestionCard
                     key={approval.id}
@@ -899,6 +926,7 @@ export function Desk({
                     annotations={drafts[approval.id] ?? NO_ANNOTATIONS}
                     onAnnotations={(next) => setDrafts((all) => ({ ...all, [approval.id]: next }))}
                     item={itemProps(approval)}
+                    questions={choices?.questions}
                   />
                 );
               })}

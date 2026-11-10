@@ -147,6 +147,8 @@ export const strings = {
       answer: "Répondre",
       missing: (count: number) =>
         count === 1 ? "Il reste 1 question sans réponse." : `Il reste ${count} questions sans réponse.`,
+      /** Under the questions of a deliverable, when the owner is sending it back with a comment. */
+      reviseNote: "Tes réponses partent avec la demande de révision seulement si toutes les questions en ont une.",
     },
   },
   /** What the onboarding run asks its agent to write, per language of the home. */
@@ -921,8 +923,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       APPROVAL_ALREADY_DECIDED: "Cet item a déjà été traité.",
       APPROVAL_NOT_DECIDABLE: "Cet item n'attend aucune décision : marque-le comme vu.",
       INVALID_ANSWERS: "Les réponses ne correspondent pas aux questions : il en manque une, ou une option n'existe pas.",
-      ANSWERS_REQUIRED: "Cet item est une question : réponds-y (Approuver ne suffit pas), ou refuse-le.",
-      ANSWERS_NOT_EXPECTED: "Seul un item de questions prend des réponses.",
+      ANSWERS_REQUIRED: "Cet item pose des questions : réponds-y sur le bureau pour l'approuver, ou refuse-le.",
+      ANSWERS_NOT_EXPECTED: "Cet item ne pose aucune question : il ne prend pas de réponses.",
       QUESTION_NOT_REVISABLE: "Une question ne se renvoie pas à retravailler : réponds-y ou refuse-la.",
       APPROVAL_NOT_WATCHABLE: "Cet item n'est pas à regarder : il attend une décision ou a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
@@ -953,6 +955,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
   notify: {
     approvalPending: (p: { room: string; agent: string; type: string; title: string; id: number }) =>
       `MyHQ : un item attend ta validation (#${p.id})\n${p.room} / ${p.agent} : ${p.type}\n${p.title}`,
+    /** The line added to the alert of a deliverable that carries questions (hq_submit `questions`): they are answered on the desk. */
+    choicesOnDesk: (count: number) =>
+      count === 1 ? "Cet item pose 1 question : réponds-y sur le bureau pour l'approuver." : `Cet item pose ${count} questions : réponds-y sur le bureau pour l'approuver.`,
     /** The first message of an item of questions (hq_ask): who asks, about what; one message per question follows. */
     questionIntro: (p: { room: string; agent: string; title: string; id: number; count: number; context: string | null; polling: boolean }) =>
       [

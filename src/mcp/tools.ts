@@ -20,7 +20,7 @@ import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStat
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { MESSAGE_EXPECTS } from "../server/portier";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
-import { QUESTION_TYPE, questionsSchema, renderQuestionsBody } from "../server/questions";
+import { CHOICES_KEY, QUESTION_TYPE, questionsSchema, renderQuestionsBody } from "../server/questions";
 import { idSchema, loadHome, type Home } from "../server/rooms";
 import {
   isSupervisor,
@@ -176,6 +176,11 @@ export const inputs = {
       .optional()
       .describe(
         "Messages MyHQ delivers itself, in your name, the moment the owner approves the item (for example the order to a studio to produce the approved script): each one gets the item's title, body and files appended and wakes its recipient. You are not woken to relay them. The recipients are checked now, as hq_message checks them.",
+      ),
+    questions: questionsSchema
+      .optional()
+      .describe(
+        "Use it when the deliverable offers variants or options the owner has to choose between (two voices, three music seeds, a few titles): put the choices here, 2 to 6 concrete options per question, instead of a separate hq_ask. The owner sees the deliverable and the questions together, and approving needs every question answered. The answers come back to you with the decision. Not for a yes or no (that is the approval itself).",
       ),
   },
   hq_ask: {
@@ -504,6 +509,12 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
   }
   // The recipients of onApprove are checked now, so that the agent can fix them within the same run.
   const relays = relayMessages(db, ctx, parsed.onApprove);
+  if (parsed.questions) {
+    if (parsed.type === QUESTION_TYPE || parsed.type === ROOM_PROPOSAL || parsed.type === AGENT_PROPOSAL) {
+      throw new ToolError(`questions are for an ordinary deliverable: not for type "${parsed.type}" (to only ask, use hq_ask).`);
+    }
+    payload = { ...(payload ?? {}), [CHOICES_KEY]: { questions: parsed.questions } };
+  }
   // Checked before anything is written, so that the agent can fix its paths within the same run.
   const files: ResolvedAttachment[] = [];
   if (parsed.attachments && parsed.attachments.length > 0) {
@@ -528,6 +539,9 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
       parsed.type !== AGENT_PROPOSAL &&
       ctx.home !== undefined &&
       readNotifyTypes(ctx.home).includes(parsed.type));
+  if (informational && parsed.questions) {
+    throw new ToolError("questions are for an item the owner decides: this type is informational, nothing is answered.");
+  }
   const at = now();
   const insert = db.prepare(
     `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,

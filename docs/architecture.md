@@ -126,7 +126,7 @@ room) and writes directly to SQLite. Eighteen tools, all validated with zod:
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
-| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). |
+| `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). `questions`: multiple-choice questions attached to the deliverable (see "Questions attached to a deliverable"). |
 | `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
 | `hq_status(text)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). |
 | `hq_task_update(status, note)` | Report the state of the current task. |
@@ -398,6 +398,32 @@ the receptionist cannot ask.
   answered as on the desk. A question message is found from the `(#12, 2/3)`
   tag of its first line, so a reply works after a restart. Without
   HQ_TELEGRAM_POLLING the messages carry no button and send the owner to the desk.
+
+#### Questions attached to a deliverable
+
+When a deliverable offers variants the owner must choose between (two voices,
+three music seeds), the agent passes `questions` (same schema as `hq_ask`) to
+the `hq_submit` of that deliverable instead of asking separately. Not for
+`question`, `room_proposal`, `agent_proposal` or informational types. They are
+stored in the payload under `ownerChoices` (`{ questions, answers? }`,
+`CHOICES_KEY` in `src/server/questions.ts`), apart from the agent's own payload
+keys.
+
+- **On the desk** the card shows the body and files, then the question form,
+  then the usual comment box. Approving needs every question answered (the
+  button is disabled, with a hint). With a comment or remarks the button is
+  « Envoyer à retravailler »: the answers go with the revision only when all
+  the questions are answered, otherwise none.
+- **Deciding**: `approved` requires `answers` (`ANSWERS_REQUIRED`), `revise`
+  accepts them, `rejected` refuses them. They are checked as for `hq_ask`
+  (`INVALID_ANSWERS`), kept in `payload.ownerChoices.answers`, and prefixed as
+  « Q : ... / R : ... » lines to the decision note (the owner's comment follows).
+  The agent reads them in the decision (`hq_read_decisions`, the briefing of its
+  next prompt), in the revision task, in the approval task of an
+  `onApproval: "task"` agent, and in the messages of `onApprove`.
+- **On Telegram** the alert adds a line saying the questions are answered on the
+  desk; « Approuver » there answers `ANSWERS_REQUIRED` with the same hint, and
+  nothing is decided.
 
 #### Folded items on the desk
 

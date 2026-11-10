@@ -50,6 +50,20 @@ export type Answer = z.infer<typeof answerSchema>;
 
 export const answersSchema = z.array(answerSchema).min(1).max(MAX_QUESTIONS);
 
+/**
+ * The key of an ordinary deliverable's payload (hq_submit `questions`) that
+ * holds its questions, then the answers: `{ questions, answers? }`, the shape of
+ * a question item's payload. Distinct from the keys an agent puts in its own
+ * `payload`.
+ */
+export const CHOICES_KEY = "ownerChoices";
+
+/** The questions attached to a stored deliverable (and the answers, once given), or null when it has none. */
+export function parseChoices(payload: unknown): QuestionPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  return parseQuestionPayload((payload as Record<string, unknown>)[CHOICES_KEY]);
+}
+
 /** The payload of a stored question item, or null when it is not readable as one. */
 export function parseQuestionPayload(payload: unknown): QuestionPayload | null {
   const parsed = z
@@ -111,13 +125,18 @@ export function answersNote(questions: readonly Question[], answers: readonly An
 
 /** The task that wakes the agent: its questions and the owner's answers. English, like the revision task. */
 export function answersTaskText(id: number, title: string, questions: readonly Question[], answers: readonly Answer[]): string {
-  const lines = questions.flatMap((question, index) => [
-    `Q${index + 1}: ${question.question}`,
-    `A${index + 1}: ${answerText(question, answers[index]!, (text) => `Other: ${text}`)}`,
-  ]);
+  const lines = answersLines(questions, answers);
   return [
     `The owner answered your questions #${id} "${title}".`,
     ...lines,
     "Go on with your work using these answers; do not ask the same questions again.",
   ].join("\n");
+}
+
+/** « Q1: ... / A1: ... » for each question, in English: what an agent reads of the owner's answers. */
+export function answersLines(questions: readonly Question[], answers: readonly Answer[]): string[] {
+  return questions.flatMap((question, index) => [
+    `Q${index + 1}: ${question.question}`,
+    `A${index + 1}: ${answerText(question, answers[index]!, (text) => `Other: ${text}`)}`,
+  ]);
 }

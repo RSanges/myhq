@@ -189,7 +189,8 @@ export async function clearChat(): Promise<void> {
 
 export type Decision =
   | { decision: "approved"; answers?: Answer[] }
-  | { decision: "rejected" | "revise"; note?: string; annotations?: Annotation[] };
+  | { decision: "rejected"; note?: string; annotations?: Annotation[] }
+  | { decision: "revise"; note?: string; annotations?: Annotation[]; answers?: Answer[] };
 
 export async function decideApproval(id: number, decision: Decision): Promise<Approval> {
   return (await request(`/api/approvals/${id}`, approvalResponseSchema, jsonInit("PATCH", decision))).approval;

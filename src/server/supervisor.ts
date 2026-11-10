@@ -7,6 +7,7 @@ import { liveConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
 import { recordExpects, type MessageExpects } from "./portier";
+import { answersLines, parseChoices } from "./questions";
 import { startRelaunchRequests } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import { loadHome, type Home } from "./rooms";
@@ -191,12 +192,20 @@ export function relayAppendix(db: Db, row: ApprovalRow): string {
     const copy = attachmentPath(dataDir, row.id, file.id, file.name);
     return `- ${file.name}${fs.existsSync(copy) ? ` (${copy})` : ""}`;
   });
+  let chosen: string[] = [];
+  try {
+    const choices = parseChoices(JSON.parse(row.payload));
+    if (choices?.answers) chosen = ["", "The owner's answers to the questions of this item:", ...answersLines(choices.questions, choices.answers)];
+  } catch {
+    // An unreadable payload carries no answers.
+  }
   return [
     "",
     "",
     `--- Approved item #${row.id} (${row.type}): ${row.title}`,
     "",
     row.body.trim(),
+    ...chosen,
     ...(lines.length > 0 ? ["", "Files (read-only copies kept by MyHQ):", ...lines] : []),
   ].join("\n");
 }

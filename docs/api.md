@@ -30,9 +30,9 @@ Every error has the same shape and an HTTP status:
 | `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
-| `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) without `answers`. |
+| `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) or a deliverable that carries questions (`hq_submit` `questions`) without `answers`. |
 | `INVALID_ANSWERS` | 422 | The `answers` do not fit the questions: not one per question, an option that does not exist or is picked twice, nothing answered, or several answers to a single-select question. Nothing is decided. |
-| `ANSWERS_NOT_EXPECTED` | 400 | `answers` on an item that is not an item of questions. |
+| `ANSWERS_NOT_EXPECTED` | 400 | `answers` on an item that carries no questions. |
 | `QUESTION_NOT_REVISABLE` | 409 | `revise` on an item of questions: answer it or reject it. |
 | `DAILY_CAP_REACHED` | 429 | `HQ_MAX_RUNS_PER_DAY` runs (or `maxRunsPerDay` of `myhq.json`, which wins) were already started today (local day, all agents). |
 | `SHUTTING_DOWN` | 503 | The app is stopping (`architecture.md`, "Stopping and restarting"): no run starts, and no agent takes a question, until it is back. |
@@ -788,6 +788,8 @@ An item of questions (`type: "question"`, created by the agent's `hq_ask`) is no
 ```json
 { "decision": "approved", "answers": [{ "options": [1] }, { "options": [0, 2], "other": "Podcast" }] }
 ```
+
+An ordinary deliverable can carry questions too (the agent's `hq_submit` `questions`, kept in `payload.ownerChoices.questions`). Then `approved` requires `answers` (`ANSWERS_REQUIRED` otherwise), `revise` accepts them (optional), `rejected` refuses them; they are checked like above and added to `decisionNote` as « Q : ... / R : ... » lines, to `payload.ownerChoices.answers`, and to the agent's tasks. `answers` on an item that carries no questions stay refused (`ANSWERS_NOT_EXPECTED`).
 
 The answers are kept in the item's `payload.answers` and, as `Q : ... / R : ...` lines, in its `decisionNote`. The agent is woken like for a revision (run `reason` `revise`, so `onRevise: "queue"` makes it wait for its next run) with a task that holds its questions and the answers; it also reads the decision with `hq_read_decisions`. `rejected` (with a reason) is how the owner says the question has no place; nothing wakes. `revise` is refused.
 

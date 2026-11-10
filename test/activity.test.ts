@@ -290,3 +290,12 @@ test("the prompt of a run asks for hq_status at the start and at each notable st
   assert.match(prompt, /60 characters at most/);
   assert.match(prompt, /never a technical detail/);
 });
+
+test("the prompt of a run keeps a revision on the subject of the item it names", () => {
+  const config = makeHome();
+  const home = loadHome(config.home);
+  const room = home.rooms[0]!;
+  const prompt = buildPrompt({ room, agent: room.agents[0]!, runId: 1, task: "T", mailbox: [], language: "fr" });
+  assert.match(prompt, /A revision \(a task of source revise\) is about the item it names/);
+  assert.match(prompt, /do not start one: ask with hq_ask/);
+});
