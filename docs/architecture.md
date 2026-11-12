@@ -1179,8 +1179,12 @@ work is proposed as a run, never done (see "A task or a discussion" below).
 The user message names the agent, gives the earlier exchanges of the
 discussion (the last 10 answered ones, each answer cut to 2000 characters,
 with what became of the run it proposed), the question
-(4000 characters at most, zod), the agent's memory (as a run's briefing gives
-it, `memoryText`) and the date line.
+(4000 characters at most, zod), the agent's run state read from `runs` when
+the question is asked (`activeRunOf`: no run in progress, or the run that
+holds the agent lock with its id, reason, start, task cut to 1000 characters
+and its last 3 `hq_status` steps), given as the source of truth above the
+memory, which may say a run ended while it still runs, then the agent's memory
+(as a run's briefing gives it, `memoryText`) and the date line.
 
 **Read only, by configuration.** The prompt is not the guard:
 
@@ -1292,6 +1296,14 @@ by hand. `dismiss` sets it aside. A proposal is decided once
 aside). The context of the next questions says it too, after the answer
 (« You proposed a run: ... The owner started it (run #12) »), so that the
 agent knows where the discussion stands.
+
+**No proposal while the agent runs.** A run in progress would make
+« Lancer le tour » fail (`AGENT_BUSY`). The run state of the prompt tells the
+agent so: it says the run is still going and what it does or waits for as far
+as its steps show, proposes no run, and says the work can be started once that
+run ends. The server does not rely on it: a block in an answer that closes
+while the agent has a run in progress is dropped, and no proposal is recorded.
+The message is not queued for that run.
 
 ### The write guard
 

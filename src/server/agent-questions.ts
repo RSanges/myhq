@@ -87,6 +87,35 @@ export const QUESTION_DENIED_TOOLS = [
 
 /** How much of a proposed task the agent reads again in the context of the next questions. */
 export const QUESTION_CONTEXT_PROPOSAL_CHARS = 500;
+/** How much of the task of the agent's run in progress, and how many of its latest steps (hq_status), a question gives. */
+export const QUESTION_CONTEXT_RUN_TASK_CHARS = 1_000;
+export const QUESTION_CONTEXT_RUN_STATUSES = 3;
+
+/** The agent's run in progress, as a question reads it from `runs` (the agent lock of `startRun`). */
+export type ActiveRun = {
+  id: number;
+  task: string;
+  reason: string | null;
+  startedAt: string;
+  /** What the agent said last in this run (hq_status), oldest first. */
+  statuses: { text: string; at: string }[];
+};
+
+/** The run of this agent in progress, if any: the one that makes `startRun` refuse another (AGENT_BUSY). */
+export function activeRunOf(db: Db, room: string, agentId: string): ActiveRun | null {
+  const run = db
+    .prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+    .get(room, agentId) as RunRow | undefined;
+  if (!run) return null;
+  const statuses = (
+    db
+      .prepare("SELECT text, created_at FROM run_statuses WHERE run_id = ? ORDER BY id DESC LIMIT ?")
+      .all(run.id, QUESTION_CONTEXT_RUN_STATUSES) as { text: string; created_at: string }[]
+  )
+    .reverse()
+    .map((row) => ({ text: row.text, at: row.created_at }));
+  return { id: run.id, task: run.task, reason: run.reason, startedAt: run.started_at, statuses };
+}
 
 export const askSchema = z.strictObject({
   question: z.string().trim().min(1).max(QUESTION_MAX_CHARS),
@@ -304,13 +333,44 @@ function proposalNote(proposal: ProposalDto): string {
   return `[You proposed a run: "${task}". ${fate}]`;
 }
 
-/** The user message of a question: who the agent is, the discussion so far, the question, its memory and the date. */
+/**
+ * The agent's run state, read from the database when the question is asked:
+ * above its memory, which may say a run ended when the lock says it runs.
+ */
+function runStateText(run: ActiveRun | null, checkedAt: string): string {
+  const heading = `Your run state, read from the MyHQ database at ${checkedAt}: this is the source of truth, above your memory, your notes and the discussion so far.`;
+  if (!run) return `${heading}\nYou have no run in progress.`;
+  const task =
+    run.task.length > QUESTION_CONTEXT_RUN_TASK_CHARS ? `${run.task.slice(0, QUESTION_CONTEXT_RUN_TASK_CHARS)}... [cut]` : run.task;
+  const lines = [
+    heading,
+    `You have run #${run.id} in progress, started at ${run.startedAt} (${run.reason ? `reason: ${run.reason}` : "started by hand or by a routine"}).`,
+    `Its task: "${task}"`,
+  ];
+  if (run.statuses.length > 0) {
+    lines.push("What you said last in this run (hq_status), oldest first:");
+    for (const status of run.statuses) lines.push(`- ${status.at}: ${status.text}`);
+  } else {
+    lines.push("You have said nothing yet in this run (no hq_status).");
+  }
+  lines.push(
+    `This run is still going: never say you have no run in progress or that run #${run.id} ended. When the owner asks where you stand, say it runs and what it is doing or waiting for, as far as the lines above show, without inventing more.`,
+    `Do not propose a run (no block): MyHQ refuses a second run of an agent while one runs. If the owner asks for work, say it can be started once run #${run.id} ends.`,
+  );
+  return lines.join("\n");
+}
+
+/** The user message of a question: who the agent is, the discussion so far, the question, its run state, its memory and the date. */
 export function buildQuestionPrompt(params: {
   room: Room;
   agent: Agent;
   question: string;
   /** The earlier answered exchanges of the discussion, oldest first, with the run an answer proposed. */
   previous: readonly { question: string; answer: string; proposal?: ProposalDto | null }[];
+  /** The agent's run in progress (null: none); undefined: not given. */
+  run?: ActiveRun | null;
+  /** When the run state was read. */
+  checkedAt?: string;
   memory: string;
   today: string;
 }): string {
@@ -328,7 +388,9 @@ export function buildQuestionPrompt(params: {
       if (exchange.proposal) lines.push(proposalNote(exchange.proposal));
     }
   }
-  lines.push("", "The owner's question:", params.question, "", params.memory, "", params.today);
+  lines.push("", "The owner's question:", params.question);
+  if (params.run !== undefined) lines.push("", runStateText(params.run, params.checkedAt ?? now()));
+  lines.push("", params.memory, "", params.today);
   return lines.join("\n");
 }
 
@@ -344,7 +406,9 @@ function homeLanguage(home: string): string {
  * Asks an agent a question: records it (`running`) and lets the agent answer
  * in the background. Refused while the app stops, and while the agent answers
  * another one (QUESTION_BUSY): one at a time per agent. A run of the agent in
- * progress does not matter. Returns the question as recorded.
+ * progress does not refuse it: the agent is told about that run, and its
+ * answer proposes no run then (`startRun` would refuse it, AGENT_BUSY).
+ * Returns the question as recorded.
  */
 export function askAgent(request: { room: string; agent: string; question: string }, deps: QuestionDeps = {}): QuestionRow {
   const config = deps.config ?? getConfig();
@@ -463,6 +527,8 @@ async function answerQuestion(p: {
       agent,
       question: row.question,
       previous: p.previous,
+      run: activeRunOf(db, room.name, agent.id),
+      checkedAt: now(),
       memory,
       today: todayLine(new Date(), liveConfig(config).timeZone, homeLanguage(config.home)),
     });
@@ -554,8 +620,9 @@ async function answerQuestion(p: {
     now(),
     row.id,
   ).changes;
-  // Recorded once the answer is: a question closed meanwhile (the app stopped) proposes nothing.
-  if (closed > 0 && parsed?.task) {
+  // Recorded once the answer is: a question closed meanwhile (the app stopped) proposes nothing,
+  // and neither does one answered while the agent has a run in progress, which the agent lock would refuse.
+  if (closed > 0 && parsed?.task && !activeRunOf(db, room.name, agent.id)) {
     db.prepare("INSERT OR IGNORE INTO question_proposals (question_id, task, state, created_at) VALUES (?, ?, 'pending', ?)").run(
       row.id,
       parsed.task,
