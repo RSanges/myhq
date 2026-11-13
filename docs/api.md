@@ -30,7 +30,7 @@ Every error has the same shape and an HTTP status:
 | `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | A room gesture (`POST /api/rooms/[room]/pause`, `resume`, `archive`, `restore`) sent without `content-type: application/json`. |
 | `ROOM_BUSY` | 409 | Archiving a room while a run of it is in progress. |
-| `ROOM_ARCHIVED` | 409 | A gesture on an archived room other than restoring or deleting it. |
+| `ROOM_ARCHIVED` | 409 | A gesture on an archived room other than restoring or deleting it, or a decision on an item of an archived room (`PATCH /api/approvals/[id]`: restore the room first). |
 | `ROOM_NOT_ARCHIVED` | 404 | Restoring a room that is not archived. |
 | `ROOM_LAST_AGENT` | 409 | Removing the last agent of a room. |
 | `AGENT_HAS_PENDING` | 409 | Removing an agent while one of its items waits for a decision. |

@@ -496,8 +496,14 @@ export function syncHome(db: Db, home: Home): void {
        role_path = excluded.role_path, synced_at = excluded.synced_at`,
   );
   const removeStaleAgents = db.prepare("DELETE FROM agents WHERE room = ? AND synced_at <> ?");
+  const archive = db.prepare("INSERT OR REPLACE INTO archived_rooms (name, archived_at) VALUES (?, ?)");
   const addSupervisor = db.prepare("INSERT INTO supervisors (room, agent_id, synced_at) VALUES (?, ?, ?)");
   db.transaction(() => {
+    // The archived rooms, as myhq.json says now: their items leave the lists (db.ts, liveItem).
+    if (home.archived !== undefined) {
+      db.prepare("DELETE FROM archived_rooms").run();
+      for (const entry of home.archived) archive.run(entry.room.name, entry.archivedAt);
+    }
     // The supervisors of the Standard, as room.json says now (see supervisor.ts).
     db.prepare("DELETE FROM supervisors").run();
     for (const room of home.rooms) for (const agent of room.agents) if (agent.supervisor) addSupervisor.run(room.name, agent.id, at);

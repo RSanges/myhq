@@ -279,7 +279,9 @@ manages the rooms of the home in its « Salles » tab
   `room.json`), and remembers which agents were armed (`room_pauses`,
   migration 24). Resuming re-arms exactly those (the ones still in the room)
   and forgets the pause. An agent can still be armed by hand while its room is
-  paused; its agents still answer when they are spoken to.
+  paused. A pause only disarms routines: a message of another agent, a
+  revision or an approval still wakes an agent of a paused room, and it still
+  answers when spoken to.
 - **Archive and restore.** An archived room is named in `archivedRooms` of
   `myhq.json`, kept by MyHQ in the home rather than in the database, so that
   the home stays a plain Git folder that says which rooms are live, and an
@@ -290,10 +292,18 @@ manages the rooms of the home in its « Salles » tab
   manual runs and wake-ups (`ROOM_NOT_FOUND`), and `syncHome`, which no longer
   refreshes its row, so the HQ tools stop offering it as a current room. Its
   folder, its working directories and its rows in the database (runs, costs,
-  items, the agents' armed state) stay as they are; its items still pending
-  stay on the desk. Archiving pauses the room first and is refused while a run
-  of the room is in progress (`ROOM_BUSY`); restoring removes the name from the
-  list and the room comes back paused.
+  items, the agents' armed state) stay as they are. Its items waiting for a
+  decision or a look (`pending`, `unseen`, of the room or delivered to it) are
+  set aside: `syncHome` mirrors the archived names into `archived_rooms`
+  (migration 25) and every list of items leaves them out (the desk and its
+  counts, the state, `/pending`, `hq_pending`, the assistant's preamble); a
+  decision on one is refused (`ROOM_ARCHIVED`), since nothing would carry it
+  out. The history stays visible. Archiving pauses the room first and is
+  refused while a run of the room is in progress (`ROOM_BUSY`); restoring
+  removes the name from the list, the room comes back paused and its items
+  come back as they were. A task that waited in an agent's mailbox may then
+  wake it. `archivedRooms` is read entry by entry: an entry MyHQ cannot read
+  is reported on `/reglages` and kept as it is by every write.
 - **Remove an agent.** Its block leaves `room.json`, written by the same code
   as the proposals (`writeRoomFile` of `agent-proposal.ts`) and loaded again
   with `loadRoom` (the file is put back when the room would no longer load).

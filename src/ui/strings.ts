@@ -402,7 +402,7 @@ export const strings = {
       runningSince: (agent: string, since: string) => `Tour en cours : ${agent}, depuis ${since}`,
       pending: (n: number) => (n === 1 ? "1 item attend ta décision sur le bureau" : `${n} items attendent ta décision sur le bureau`),
       pausedSince: (when: string, n: number) =>
-        `Mise en pause ${when} : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}, rien ne démarre seul.`,
+        `Mise en pause ${when} : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}. Un message, une révision ou une validation réveillent encore ses agents.`,
       pause: "Mettre en pause",
       resume: "Reprendre",
       archive: "Archiver",
@@ -418,7 +418,7 @@ export const strings = {
         room ? `L'agent d'accueil propose la salle ${room}. Elle attend ta décision sur le bureau.` : "L'agent d'accueil propose une salle. Elle attend ta décision sur le bureau.",
       proposalLink: "Voir la proposition",
       archivedTitle: "Salles archivées",
-      archivedHint: "Elles ont quitté l'étage : configuration, dossiers et historique sont conservés. Restaurer une salle la remet sur l'étage, en pause.",
+      archivedHint: "Elles ont quitté l'étage et le bureau : configuration, dossiers et historique sont conservés, leurs items en attente sont mis de côté. Restaurer une salle la remet sur l'étage, en pause, avec ses items ; une tâche qui attendait dans la boîte d'un agent peut alors le réveiller.",
       archivedEmpty: "Aucune salle archivée. Archiver une salle la retire de l'étage sans rien effacer.",
       archivedLine: (p: { at: string; agents: number; runs: number; cost: string }) =>
         `Archivée le ${p.at}, ${p.agents} ${p.agents === 1 ? "agent" : "agents"}, ${p.runs} ${p.runs === 1 ? "tour" : "tours"} et ${p.cost} $ au total`,
@@ -426,8 +426,8 @@ export const strings = {
       toast: {
         paused: (room: string, n: number) => `Salle ${room} en pause : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}.`,
         resumed: (room: string) => `Salle ${room} reprise : ses routines sont réarmées.`,
-        archived: (room: string) => `Salle ${room} archivée. Ses items en attente restent sur le bureau.`,
-        restored: (room: string) => `Salle ${room} restaurée, en pause : Reprendre réarme ses routines.`,
+        archived: (room: string) => `Salle ${room} archivée. Ses items en attente sont mis de côté et reviendront à la restauration.`,
+        restored: (room: string) => `Salle ${room} restaurée, en pause : ses items en attente sont revenus sur le bureau, Reprendre réarme ses routines.`,
         removed: (agent: string) => `${agent} a quitté la salle. Son dossier et son historique restent.`,
         deleted: (room: string, dir: string) => `Salle ${room} supprimée. Sa configuration est rangée dans ${dir}/.`,
         close: "Fermer",
@@ -437,7 +437,7 @@ export const strings = {
     roomPanel: {
       close: "Fermer le panneau",
       pausedNote: (n: number) =>
-        `Salle en pause. Ses routines sont désarmées. Reprendre réarme ${n === 1 ? "l'agent qui l'était" : `les ${n} agents qui l'étaient`} ; tu peux aussi armer un agent à la main ci-dessous.`,
+        `Salle en pause : ses routines sont désarmées, mais un message, une révision ou une validation réveillent encore ses agents. Reprendre réarme ${n === 1 ? "l'agent qui l'était" : `les ${n} agents qui l'étaient`} ; tu peux aussi armer un agent à la main ci-dessous.`,
       nameTitle: "Nom affiché",
       nameHint: (name: string) => `Sur l'étage, au bureau, dans la salle de surveillance et ici. L'identifiant reste ${name} (dossiers, commandes). Vide : ${name}.`,
       nameInvalid: "60 caractères au plus.",
@@ -461,9 +461,9 @@ export const strings = {
       removeGo: "Retirer l'agent",
       keep: "Garder",
       gesturesTitle: "Gestes sur la salle",
-      pauseBody: "Désarme toutes les routines d'un clic. Les agents répondent encore quand tu leur parles. Réversible.",
+      pauseBody: "Désarme toutes les routines d'un clic. Un message d'un autre agent, une révision ou une validation réveillent encore ses agents, et ils répondent quand tu leur parles. Réversible.",
       resumeBody: "Réarme les routines qui l'étaient avant la pause.",
-      archiveBody: "La salle quitte l'étage, le bureau et le planificateur ; configuration, dossiers et historique sont conservés. Réversible.",
+      archiveBody: "La salle quitte l'étage, le bureau et le planificateur ; ses items en attente sont mis de côté jusqu'à sa restauration, configuration, dossiers et historique sont conservés. Réversible.",
       deleteBody: "Rare : la configuration de la salle part dans archives/rooms/. Ses dossiers de travail et son historique restent où ils sont.",
       deleteButton: "Supprimer...",
     },
@@ -1210,6 +1210,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     byCode: {
       INVALID_JSON: "Requête illisible.",
       INVALID_INPUT: "Saisie invalide.",
+      ROOM_ARCHIVED: "Cette salle est archivée : restaure-la pour décider de cet item.",
       ROOM_NOT_FOUND: "Salle introuvable.",
       AGENT_NOT_FOUND: "Agent introuvable.",
       APPROVAL_NOT_FOUND: "Item introuvable.",

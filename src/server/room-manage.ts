@@ -7,7 +7,7 @@ import { isInside, liveConfig, type HqConfig } from "./config";
 import { now, type Db } from "./db";
 import { HqError } from "./errors";
 import { writeHomeKeys } from "./home-file";
-import { readArchivedRooms } from "./home-settings";
+import { archivedRoomEntrySchema, readArchivedRooms, type ArchivedRoomEntry } from "./home-settings";
 import { loadHome, roomFileSchema, syncHome, toPosix, type Home, type Room } from "./rooms";
 import { isArmed, setArmed } from "./routines";
 import { dayKey } from "./time";
@@ -103,6 +103,21 @@ export function resumeRoom(config: HqConfig, db: Db, name: string): string[] {
 
 // --- Archives --------------------------------------------------------------------
 
+/**
+ * Rewrites `archivedRooms` of myhq.json through `update`, which sees the valid
+ * entries. An entry MyHQ could not read is kept as it is, and an entry whose
+ * room no longer has a folder (deleted, moved by hand) is dropped. Refuses
+ * (SETTINGS_FILE_INVALID) when the key is not a list: it is not rewritten.
+ */
+function writeArchivedRooms(config: HqConfig, update: (rooms: ArchivedRoomEntry[]) => ArchivedRoomEntry[]): void {
+  const { rooms, raw, list } = readArchivedRooms(config.home);
+  if (!list) throw new HqError("SETTINGS_FILE_INVALID", 409, "archivedRooms of myhq.json is not a list: fix it by hand, nothing was written.");
+  const unread = raw.filter((entry) => !archivedRoomEntrySchema.safeParse(entry).success);
+  const kept = update(rooms).filter((entry) => fs.existsSync(path.join(config.home, "rooms", entry.name)));
+  const next = [...kept, ...unread];
+  writeHomeKeys(config.home, { archivedRooms: next.length > 0 ? next : undefined });
+}
+
 /** The run of the room in progress, if any (the newest). */
 function runningRun(db: Db, room: string, agent?: string): { agent: string; since: string } | null {
   const row = db
@@ -127,8 +142,7 @@ export function archiveRoom(config: HqConfig, db: Db, name: string): void {
   const run = runningRun(db, name);
   if (run) throw new HqError("ROOM_BUSY", 409, `A run of "${name}" is in progress (${run.agent}): wait for its end.`);
   pauseRoom(config, db, name);
-  const list = readArchivedRooms(config.home).rooms.filter((entry) => entry.name !== name);
-  writeHomeKeys(config.home, { archivedRooms: [...list, { name, at: today(config) }] });
+  writeArchivedRooms(config, (rooms) => [...rooms.filter((entry) => entry.name !== name), { name, at: today(config) }]);
   syncHome(db, loadHome(config.home));
 }
 
@@ -137,10 +151,10 @@ export function archiveRoom(config: HqConfig, db: Db, name: string): void {
  * floor paused (its pause kept, or a new one when it has none).
  */
 export function restoreRoom(config: HqConfig, db: Db, name: string): void {
-  const list = readArchivedRooms(config.home).rooms;
-  if (!list.some((entry) => entry.name === name)) throw new HqError("ROOM_NOT_ARCHIVED", 404, `Room "${name}" is not archived.`);
-  const rest = list.filter((entry) => entry.name !== name);
-  writeHomeKeys(config.home, { archivedRooms: rest.length > 0 ? rest : undefined });
+  if (!readArchivedRooms(config.home).rooms.some((entry) => entry.name === name)) {
+    throw new HqError("ROOM_NOT_ARCHIVED", 404, `Room "${name}" is not archived.`);
+  }
+  writeArchivedRooms(config, (rooms) => rooms.filter((entry) => entry.name !== name));
   const home = loadHome(config.home);
   syncHome(db, home);
   // A room whose folder is gone or invalid has nothing to pause.

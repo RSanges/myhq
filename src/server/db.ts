@@ -794,6 +794,18 @@ CREATE TABLE IF NOT EXISTS room_pauses (
 );
 `,
   },
+  {
+    version: 25,
+    sql: `
+-- The archived rooms, mirrored from archivedRooms of myhq.json by syncHome
+-- (the file stays the source of truth), so that a query can leave their
+-- items out (liveItem). Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS archived_rooms (
+  name TEXT PRIMARY KEY,
+  archived_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {
@@ -853,6 +865,14 @@ export function getDbAt(dbPath: string): Db {
   }
   return db;
 }
+
+/**
+ * A WHERE condition that leaves out the items of an archived room (the room
+ * that submitted it or the one it is delivered to, `archived_rooms`): `alias`
+ * is the alias of the approvals table with its dot (`"a."`), or empty.
+ */
+export const liveItem = (alias = ""): string =>
+  `NOT EXISTS (SELECT 1 FROM archived_rooms ar WHERE ar.name = ${alias}room OR ar.name = ${alias}for_room)`;
 
 export function now(): string {
   return new Date().toISOString();

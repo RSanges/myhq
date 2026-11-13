@@ -300,30 +300,39 @@ export function readRunSummariesSetting(home: string): { enabled: boolean; fromF
  * `archivedRooms` of myhq.json: the rooms the owner archived, each with the day it was archived (YYYY-MM-DD).
  * An archived room keeps its folder; MyHQ leaves it out of the floor, the desk lists and the scheduler.
  */
-export const archivedRoomsSchema = z
-  .array(
-    z.strictObject({
-      name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, "a room name"),
-      at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a day YYYY-MM-DD"),
-    }),
-  )
-  .max(1000);
+export const archivedRoomEntrySchema = z.strictObject({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, "a room name"),
+  at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a day YYYY-MM-DD"),
+});
 
-export type ArchivedRoomEntry = z.infer<typeof archivedRoomsSchema>[number];
+export type ArchivedRoomEntry = z.infer<typeof archivedRoomEntrySchema>;
 
 /**
- * The archived rooms of myhq.json, none when the file or the key is absent. Read apart: an invalid list
- * archives nothing and gives the reason (the rooms come back on the floor rather than vanish). Never throws.
+ * The archived rooms of myhq.json, none when the file or the key is absent.
+ * Read entry by entry: a valid entry archives its room whatever the others
+ * hold, and an entry that cannot be read is reported and kept as it is in
+ * `raw` (every entry of the list, in order), so that no write drops it.
+ * `list` is false when the key is not a list at all: nothing is archived and
+ * nothing may rewrite it. Never throws.
  */
-export function readArchivedRooms(home: string): { rooms: ArchivedRoomEntry[]; error: string | null } {
+export function readArchivedRooms(home: string): {
+  rooms: ArchivedRoomEntry[];
+  raw: unknown[];
+  list: boolean;
+  error: string | null;
+} {
   const { block, error } = readBlock(home, "archivedRooms");
-  if (error || block === undefined) return { rooms: [], error };
-  const parsed = archivedRoomsSchema.safeParse(block);
-  if (!parsed.success) {
-    const details = parsed.error.issues.map((issue) => `archivedRooms.${issue.path.join(".")}: ${issue.message}`).join("; ");
-    return { rooms: [], error: `myhq.json: ${details}` };
-  }
-  return { rooms: parsed.data, error: null };
+  if (error) return { rooms: [], raw: [], list: false, error };
+  if (block === undefined) return { rooms: [], raw: [], list: true, error: null };
+  if (!Array.isArray(block)) return { rooms: [], raw: [], list: false, error: "myhq.json: archivedRooms must be a list" };
+  const rooms: ArchivedRoomEntry[] = [];
+  const problems: string[] = [];
+  block.forEach((entry, index) => {
+    const parsed = archivedRoomEntrySchema.safeParse(entry);
+    if (parsed.success) rooms.push(parsed.data);
+    else problems.push(...parsed.error.issues.map((issue) => `archivedRooms.${[index, ...issue.path].join(".")}: ${issue.message}`));
+  });
+  return { rooms, raw: block, list: true, error: problems.length > 0 ? `myhq.json: ${problems.join("; ")}` : null };
 }
 
 /** One top-level key of myhq.json, undefined when the file or the key is absent. Never throws. */
