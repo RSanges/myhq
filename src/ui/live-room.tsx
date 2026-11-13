@@ -526,7 +526,9 @@ function Panel(props: {
     let closed = false;
     fetchLiveRun(runId)
       .then((next) => {
-        if (!closed) setRun(next);
+        if (closed) return;
+        setRun(next);
+        setError(null);
       })
       .catch((failure: unknown) => {
         if (!closed) setError(errorText(failure));

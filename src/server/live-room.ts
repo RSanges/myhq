@@ -201,6 +201,25 @@ function findAgent(home: Home, roomName: string, agentId: string): { room: Room;
 /** The end of a run's window: when it ended, or now. */
 const windowEnd = (run: RunRow, now: number) => (run.ended_at ? Date.parse(run.ended_at) : now);
 
+/** A run the room still shows: in progress, or ended under LIVE_DONE_MS ago. Older ones answer nothing. */
+const inRoom = (run: RunRow, now: number) => run.status === "running" || (run.ended_at !== null && Date.parse(run.ended_at) >= now - LIVE_DONE_MS);
+
+/** How long a listing of a working directory and the cost of a run are reused: a read every few seconds walks no folder twice. */
+const CACHE_MS = 3_000;
+const cache = new Map<string, { at: number; value: unknown }>();
+
+function cached<T>(key: string, compute: () => T): T {
+  const at = Date.now();
+  const hit = cache.get(key);
+  if (hit && at - hit.at < CACHE_MS) return hit.value as T;
+  const value = compute();
+  cache.set(key, { at, value });
+  if (cache.size > 200) {
+    for (const [stale, entry] of cache) if (at - entry.at >= CACHE_MS) cache.delete(stale);
+  }
+  return value;
+}
+
 function version(runId: number, found: { relative: string; real: string; kind: PieceKind; mtimeMs: number; size: number }, at: string, caption: string | null): PieceVersionDto {
   const text = found.kind === "text";
   return {
@@ -214,27 +233,35 @@ function version(runId: number, found: { relative: string; real: string; kind: P
   };
 }
 
-/** The pieces the agent showed during the run, oldest first, those whose file is gone left out. */
+/**
+ * The pieces the agent showed during the run (hq_show), oldest first: the
+ * latest pin of each file, the PIECES_MAX newest, those whose file is gone or
+ * now leads out left out.
+ */
 function pinnedVersions(db: Db, run: RunRow, agent: Agent): PieceVersionDto[] {
-  const pins = db.prepare("SELECT path, caption, created_at FROM run_pins WHERE run_id = ? ORDER BY id").all(run.id) as {
-    path: string;
-    caption: string;
-    created_at: string;
-  }[];
+  const pins = db
+    .prepare(
+      `SELECT p.path, p.caption, p.created_at FROM run_pins p
+       WHERE p.run_id = ? AND p.id = (SELECT MAX(q.id) FROM run_pins q WHERE q.run_id = p.run_id AND q.path = p.path)
+       ORDER BY p.id DESC LIMIT ?`,
+    )
+    .all(run.id, PIECES_MAX) as { path: string; caption: string; created_at: string }[];
   const versions: PieceVersionDto[] = [];
-  for (const pin of pins) {
-    const kind = pieceKind(pin.path);
-    if (!kind) continue;
+  const seen = new Set<string>();
+  for (const pin of pins.reverse()) {
     let real: string;
+    let relative: string;
     let stat: fs.Stats;
     try {
-      ({ real } = resolveInside(agent.workDir, pin.path, "pin"));
+      ({ real, relative } = resolveInside(agent.workDir, pin.path, "pin"));
       stat = fs.statSync(real);
     } catch {
       continue;
     }
-    if (!stat.isFile()) continue;
-    versions.push(version(run.id, { relative: pin.path, real, kind, mtimeMs: stat.mtimeMs, size: stat.size }, pin.created_at, pin.caption));
+    const kind = pieceKind(relative);
+    if (!kind || !stat.isFile() || seen.has(relative)) continue;
+    seen.add(relative);
+    versions.push(version(run.id, { relative, real, kind, mtimeMs: stat.mtimeMs, size: stat.size }, pin.created_at, pin.caption));
   }
   return versions;
 }
@@ -244,13 +271,20 @@ function piece(db: Db, run: RunRow, agent: Agent | null, now: number): LiveTileD
   const pinned = pinnedVersions(db, run, agent);
   if (pinned.length > 0) return { source: "pin", versions: pinned };
   if (agent.pieces.length === 0) return null;
-  const found = listPieces(agent.workDir, agent.pieces, Date.parse(run.started_at), windowEnd(run, now));
+  const since = Date.parse(run.started_at);
+  const key = ["pieces", agent.workDir, ...agent.pieces, since, run.ended_at ?? "running"].join("\n");
+  const found = cached(key, () => listPieces(agent.workDir, agent.pieces, since, windowEnd(run, now)));
   if (found.length === 0) return null;
-  return { source: "auto", versions: found.reverse().map((each) => version(run.id, each, iso(each.mtimeMs), null)) };
+  return { source: "auto", versions: [...found].reverse().map((each) => version(run.id, each, iso(each.mtimeMs), null)) };
 }
 
 function costOf(db: Db, run: RunRow, agent: Agent | null, runsDir: string): number | null {
   if (run.status !== "running") return run.cost_usd;
+  return cached(["cost", runsDir, run.id].join("\n"), () => runningCost(db, run, agent, runsDir));
+}
+
+/** The cost of a run in progress, estimated from the tokens of its journal and its model. */
+function runningCost(db: Db, run: RunRow, agent: Agent | null, runsDir: string): number | null {
   const start = db.prepare("SELECT data FROM events WHERE run_id = ? AND type = 'start' ORDER BY id LIMIT 1").get(run.id) as
     | { data: string }
     | undefined;
@@ -324,7 +358,7 @@ export function readLiveRun(
   now: number = Date.now(),
 ): { tile: LiveTileDto; timeline: { text: string; at: string; waiting: boolean }[] } {
   const run = db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as RunRow | undefined;
-  if (!run) throw new HqError("RUN_NOT_FOUND", 404, `No run #${runId}.`);
+  if (!run || !inRoom(run, now)) throw new HqError("RUN_NOT_FOUND", 404, `No run #${runId} in the room.`);
   const timeline = (
     db
       .prepare(
@@ -337,12 +371,17 @@ export function readLiveRun(
 }
 
 /**
- * The media file of a run that GET /api/live/runs/<id>/file may serve: inside
- * the agent's working directory once links are followed, a regular file of a
- * media kind, at most `maxBytes`, and either shown by this run (hq_show) or
- * matching the agent's patterns with a modification time inside the run.
- * Anything else, a missing run or agent included, is the same 404, which does
- * not tell whether the file exists.
+ * The media file of a run that GET /api/live/runs/<id>/file may serve, opened
+ * once: inside the agent's working directory once links are followed, a
+ * regular file of a media kind, at most `maxBytes`, and either shown by this
+ * run (hq_show) or matching the agent's patterns, outside `.git`,
+ * `node_modules` and `.claude`, with a modification time inside the run. The
+ * run must still be in the room (in progress, or ended under LIVE_DONE_MS
+ * ago). The checks that matter are made on the open descriptor (a regular
+ * file, the same device and inode as the path checked, its size), which the
+ * caller streams from and closes: the file is never reopened by its path.
+ * Anything else, a missing run or agent or a file that vanishes included, is
+ * the same 404, which does not tell whether the file exists.
  */
 export function liveFile(
   db: Db,
@@ -351,11 +390,11 @@ export function liveFile(
   raw: string,
   maxBytes: number,
   now: number = Date.now(),
-): { path: string; name: string; mime: string; size: number; mtimeMs: number } {
+): { fd: number; path: string; name: string; mime: string; size: number; mtimeMs: number } {
   const notFound = () => new HqError("FILE_NOT_FOUND", 404, `Run #${runId} shows no such file: not found.`);
   const run = db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as RunRow | undefined;
   const found = run ? findAgent(home, run.room, run.agent_id) : null;
-  if (!run || !found) throw notFound();
+  if (!run || !found || !inRoom(run, now)) throw notFound();
   let inside: { real: string; relative: string };
   try {
     inside = resolveInside(found.agent.workDir, raw, "file");
@@ -364,19 +403,30 @@ export function liveFile(
     throw error;
   }
   const kind = pieceKind(inside.relative);
-  const stat = fs.statSync(inside.real);
-  if (!stat.isFile() || !kind || kind === "text" || stat.size > maxBytes) throw notFound();
+  if (!kind || kind === "text") throw notFound();
   const pinned = db.prepare("SELECT 1 FROM run_pins WHERE run_id = ? AND path = ?").get(runId, inside.relative) !== undefined;
-  const followed =
-    found.agent.pieces.some((pattern) => patternRegExp(pattern)?.test(inside.relative) ?? false) &&
-    stat.mtimeMs >= Date.parse(run.started_at) &&
-    stat.mtimeMs <= windowEnd(run, now);
-  if (!pinned && !followed) throw notFound();
-  return {
-    path: inside.real,
-    name: path.basename(inside.real),
-    mime: ATTACHMENT_TYPES[path.extname(inside.real).toLowerCase()]!.mime,
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-  };
+  const followable =
+    !inside.relative.split("/").some((segment) => SKIPPED_DIRS.has(segment)) &&
+    found.agent.pieces.some((pattern) => patternRegExp(pattern)?.test(inside.relative) ?? false);
+  if (!pinned && !followable) throw notFound();
+  let fd: number | undefined;
+  try {
+    const checked = fs.statSync(inside.real);
+    fd = fs.openSync(inside.real, "r");
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.dev !== checked.dev || stat.ino !== checked.ino || stat.size > maxBytes) throw notFound();
+    if (!pinned && (stat.mtimeMs < Date.parse(run.started_at) || stat.mtimeMs > windowEnd(run, now))) throw notFound();
+    return {
+      fd,
+      path: inside.real,
+      name: path.basename(inside.real),
+      mime: ATTACHMENT_TYPES[path.extname(inside.real).toLowerCase()]!.mime,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    // A file that vanished or cannot be read is refused like any other, without its path.
+    throw error instanceof HqError ? error : notFound();
+  }
 }

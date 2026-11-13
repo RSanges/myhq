@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { getDbAt, type Db } from "../src/server/db";
-import { listPieces, liveFile, readExcerpt, readLiveRoom, readLiveRun, LIVE_DONE_MS } from "../src/server/live-room";
+import { listPieces, liveFile, readExcerpt, readLiveRoom, readLiveRun, LIVE_DONE_MS, PIECES_MAX } from "../src/server/live-room";
 import { loadHome, syncHome, type Home } from "../src/server/rooms";
-import { hqShow, hqStatus } from "../src/mcp/tools";
+import { hqShow, hqStatus, PINS_MAX } from "../src/mcp/tools";
 import { makeHome } from "./helpers";
 
 const MINUTE = 60_000;
@@ -199,7 +199,7 @@ test("readLiveRoom: a later status ends the wait; a pin wins over the patterns a
 
 test("readLiveRun: one tile and the statuses of the run, oldest first, waits marked; an unknown run is a 404", () => {
   const { db, home, runsDir } = office();
-  const runId = addRun(db, "writer", NOW - 30 * MINUTE, { ms: NOW - 20 * MINUTE, status: "failed" });
+  const runId = addRun(db, "writer", NOW - 30 * MINUTE, { ms: NOW - 2 * MINUTE, status: "failed" });
   addStatus(db, runId, "writer", "écrit", NOW - 29 * MINUTE);
   addStatus(db, runId, "writer", "attend", NOW - 25 * MINUTE, true);
   const live = readLiveRun(db, home, runsDir, runId, NOW);
@@ -212,6 +212,12 @@ test("readLiveRun: one tile and the statuses of the run, oldest first, waits mar
   assert.throws(() => readLiveRun(db, home, runsDir, 999, NOW), /No run #999/);
 });
 
+test("readLiveRun: a run ended longer ago than the tile of a finished run is a 404, like an unknown one", () => {
+  const { db, home, runsDir } = office();
+  const old = addRun(db, "writer", NOW - 60 * MINUTE, { ms: NOW - LIVE_DONE_MS - MINUTE, status: "done" });
+  assert.throws(() => readLiveRun(db, home, runsDir, old, NOW), (error: unknown) => (error as { status?: number }).status === 404);
+});
+
 test("hq_status still feeds the room through the HQ tool: waiting shows as the tile's state", () => {
   const { db, home, runsDir } = office();
   const runId = addRun(db, "writer", Date.now() - MINUTE, null);
@@ -222,9 +228,56 @@ test("hq_status still feeds the room through the HQ tool: waiting shows as the t
   assert.equal(readLiveRoom(db, home, runsDir, Date.now())[0]!.state, "working");
 });
 
+// --- Pins ------------------------------------------------------------------------------
+
+test("pins: the latest pin per file only, the newest PIECES_MAX at most, and a cap on what a run stores", () => {
+  const { db, home, runsDir, work } = office();
+  const runId = addRun(db, "painter", Date.now() - 10 * MINUTE, null);
+  const dir = work("painter");
+  for (let i = 0; i < 20; i++) write(path.join(dir, "sheets", `s${String(i).padStart(2, "0")}.png`), "x", Date.now() - MINUTE);
+  const ctx = { dbPath: "", runId, agentId: "painter", room: "demo", workDir: dir };
+  hqShow(db, ctx, { path: "sheets/s00.png", caption: "first" });
+  hqShow(db, ctx, { path: "sheets\\s00.png", caption: "again" });
+  let versions = readLiveRoom(db, home, runsDir)[0]!.piece!.versions;
+  assert.deepEqual(versions.map((each) => [each.path, each.caption]), [["sheets/s00.png", "again"]], "twice the same file: one version, the latest caption");
+  assert.match(versions[0]!.url!, /path=sheets%2Fs00\.png&/);
+
+  for (let i = 1; i < 20; i++) hqShow(db, ctx, { path: `sheets/s${String(i).padStart(2, "0")}.png`, caption: `n${i}` });
+  versions = readLiveRoom(db, home, runsDir)[0]!.piece!.versions;
+  assert.equal(versions.length, PIECES_MAX);
+  assert.equal(versions.at(-1)!.path, "sheets/s19.png");
+  assert.equal(new Set(versions.map((each) => each.path)).size, versions.length, "no duplicate path");
+
+  const stored = (db.prepare("SELECT COUNT(*) AS n FROM run_pins WHERE run_id = ?").get(runId) as { n: number }).n;
+  for (let i = stored; i < PINS_MAX; i++) hqShow(db, ctx, { path: "sheets/s01.png", caption: "more" });
+  assert.throws(() => hqShow(db, ctx, { path: "sheets/s02.png", caption: "one too many" }), new RegExp(`already showed ${PINS_MAX} files`));
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM run_pins WHERE run_id = ?").get(runId) as { n: number }).n, PINS_MAX);
+});
+
+// --- The short cache of a read -----------------------------------------------------------
+
+test("a read of the room within a few seconds of the previous one reuses its listing of the working directory", () => {
+  const { db, home, runsDir, work } = office();
+  const runId = addRun(db, "painter", Date.now() - 10 * MINUTE, null);
+  write(path.join(work("painter"), "renders", "a.png"), "a", Date.now() - MINUTE);
+  assert.equal(readLiveRoom(db, home, runsDir)[0]!.piece!.versions.length, 1);
+  write(path.join(work("painter"), "renders", "b.png"), "b", Date.now() - MINUTE);
+  assert.equal(readLiveRoom(db, home, runsDir)[0]!.piece!.versions.length, 1, "cached for a few seconds");
+  assert.equal(readLiveRun(db, home, runsDir, runId).tile.runId, runId);
+});
+
 // --- liveFile: what the file route may serve ------------------------------------------
 
-test("liveFile: a media file pinned by the run, or matching the patterns in the run window; anything else is a 404", (t) => {
+const is404 = (error: unknown) => (error as { status?: number }).status === 404;
+
+/** liveFile, its descriptor closed at once: the tests only look at what it decided. */
+function served(...args: Parameters<typeof liveFile>) {
+  const file = liveFile(...args);
+  fs.closeSync(file.fd);
+  return file;
+}
+
+test("liveFile: a media file pinned by the run, or matching the patterns in the run window; anything else is a 404", () => {
   const { db, home, work } = office();
   const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);
   const otherRun = addRun(db, "critic", NOW - 10 * MINUTE, null);
@@ -238,13 +291,12 @@ test("liveFile: a media file pinned by the run, or matching the patterns in the 
   db.prepare("INSERT INTO run_pins (run_id, room, agent_id, path, caption, created_at) VALUES (?, 'demo', 'painter', 'pinned.wav', 'c', ?)").run(runId, iso(NOW));
   const cap = 1024;
 
-  const ok = liveFile(db, home, runId, "renders/a.png", cap, NOW);
+  const ok = served(db, home, runId, "renders/a.png", cap, NOW);
   assert.equal(ok.mime, "image/png");
   assert.equal(ok.name, "a.png");
-  assert.equal(ok.path, fs.realpathSync(path.join(dir, "renders", "a.png")));
   assert.equal(ok.size, 1);
-  assert.equal(liveFile(db, home, runId, "renders\\clip.mp4", cap, NOW).mime, "video/mp4");
-  assert.equal(liveFile(db, home, runId, "pinned.wav", cap, NOW).mime, "audio/wav", "pinned: served whatever its time");
+  assert.equal(served(db, home, runId, "renders\\clip.mp4", cap, NOW).mime, "video/mp4");
+  assert.equal(served(db, home, runId, "pinned.wav", cap, NOW).mime, "audio/wav", "pinned: served whatever its time");
 
   for (const [rel, why] of [
     ["renders/old.png", "written before the run"],
@@ -252,13 +304,101 @@ test("liveFile: a media file pinned by the run, or matching the patterns in the 
     ["renders/notes.md", "a text piece is never served raw"],
     ["../x.png", "climbs out"],
     ["C:/x.png", "absolute"],
+    ["/etc/x.png", "absolute, POSIX"],
+    ["\\\\server\\share\\x.png", "a UNC path"],
+    ["\\x.png", "rooted"],
     ["renders/none.png", "missing"],
     ["renders", "a folder"],
   ] as const) {
-    assert.throws(() => liveFile(db, home, runId, rel, cap, NOW), (error: unknown) => (error as { status?: number }).status === 404, `${rel}: ${why}`);
+    assert.throws(() => liveFile(db, home, runId, rel, cap, NOW), is404, `${rel}: ${why}`);
   }
   assert.throws(() => liveFile(db, home, runId, "renders/a.png", 0, NOW), /not found/i, "above the cap");
   assert.throws(() => liveFile(db, home, otherRun, "renders/a.png", cap, NOW), /not found/i, "another agent's run");
   assert.throws(() => liveFile(db, home, 999, "renders/a.png", cap, NOW), /not found/i, "no such run");
-  void t;
+});
+
+test("liveFile: an .svg or an .html matching a pattern, or a followed file under node_modules, .git or .claude, is never served", () => {
+  const agent = { id: "painter", name: "Painter", role: "roles/scout.md", model: "sonnet", allowedTools: ["Write"], pieces: ["out/*", "**/*.png"] };
+  const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [agent] });
+  const db = getDbAt(config.dbPath);
+  const home = loadHome(config.home);
+  syncHome(db, home);
+  const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);
+  const dir = path.join(config.home, "data", "work", "demo", "painter");
+  write(path.join(dir, "out", "logo.svg"), "<svg onload='x'/>", NOW - MINUTE);
+  write(path.join(dir, "out", "page.html"), "<script></script>", NOW - MINUTE);
+  write(path.join(dir, "out", "ok.png"), "p", NOW - MINUTE);
+  for (const skipped of ["node_modules", ".git", ".claude"]) write(path.join(dir, skipped, "x.png"), "x", NOW - MINUTE);
+  assert.equal(served(db, home, runId, "out/ok.png", 1024, NOW).mime, "image/png");
+  for (const rel of ["out/logo.svg", "out/page.html", "node_modules/x.png", ".git/x.png", ".claude/x.png"]) {
+    assert.throws(() => liveFile(db, home, runId, rel, 1024, NOW), is404, rel);
+  }
+});
+
+test("liveFile: a link or a junction leading out is a 404, even for a pinned file replaced later by one", (t) => {
+  const { db, home, work } = office();
+  const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);
+  const dir = work("painter");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-outside-"));
+  write(path.join(outside, "secret.png"), "s", NOW - MINUTE);
+  write(path.join(dir, "sheets", "secret.png"), "mine", NOW - MINUTE);
+  db.prepare("INSERT INTO run_pins (run_id, room, agent_id, path, caption, created_at) VALUES (?, 'demo', 'painter', 'sheets/secret.png', 'c', ?)").run(runId, iso(NOW));
+  assert.equal(served(db, home, runId, "sheets/secret.png", 1024, NOW).size, 4);
+  // The pinned folder becomes a junction to a folder outside.
+  fs.rmSync(path.join(dir, "sheets"), { recursive: true });
+  try {
+    fs.symlinkSync(outside, path.join(dir, "sheets"), "junction");
+    fs.symlinkSync(outside, path.join(dir, "renders"), "junction");
+  } catch {
+    t.skip("cannot create a directory link here");
+    return;
+  }
+  assert.throws(() => liveFile(db, home, runId, "sheets/secret.png", 1024, NOW), is404, "pinned, then a junction out");
+  assert.throws(() => liveFile(db, home, runId, "renders/secret.png", 1024, NOW), is404, "followed, through a junction out");
+  try {
+    fs.symlinkSync(path.join(outside, "secret.png"), path.join(dir, "link.png"), "file");
+  } catch {
+    return; // A file link needs a privilege on Windows: the junctions above already cover the escape.
+  }
+  db.prepare("INSERT INTO run_pins (run_id, room, agent_id, path, caption, created_at) VALUES (?, 'demo', 'painter', 'link.png', 'c', ?)").run(runId, iso(NOW));
+  assert.throws(() => liveFile(db, home, runId, "link.png", 1024, NOW), is404, "a file link out");
+});
+
+test("liveFile: a file that vanishes between the checks and the opening is the same 404, never an error with its path", (t) => {
+  const { db, home, work } = office();
+  const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);
+  write(path.join(work("painter"), "renders", "a.png"), "a", NOW - MINUTE);
+  const gone = Object.assign(new Error("ENOENT: no such file or directory, open 'C:\\secret\\a.png'"), { code: "ENOENT" });
+  t.mock.method(fs, "openSync", () => {
+    throw gone;
+  });
+  assert.throws(() => liveFile(db, home, runId, "renders/a.png", 1024, NOW), (error: unknown) => is404(error) && !String(error).includes("secret"));
+  t.mock.restoreAll();
+  t.mock.method(fs, "statSync", () => {
+    throw gone;
+  });
+  assert.throws(() => liveFile(db, home, runId, "renders/a.png", 1024, NOW), (error: unknown) => is404(error) && !String(error).includes("secret"));
+});
+
+test("liveFile: the file is opened once and checked on its descriptor, the same file as the one checked", () => {
+  const { db, home, work } = office();
+  const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);
+  const file = path.join(work("painter"), "renders", "a.png");
+  write(file, "abc", NOW - MINUTE);
+  const opened = liveFile(db, home, runId, "renders/a.png", 1024, NOW);
+  try {
+    const stat = fs.fstatSync(opened.fd);
+    const checked = fs.statSync(fs.realpathSync(file));
+    assert.equal(stat.ino, checked.ino);
+    assert.equal(stat.size, 3);
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+});
+
+test("liveFile: a run ended longer ago than the tile of a finished run serves nothing", () => {
+  const { db, home, work } = office();
+  const old = addRun(db, "painter", NOW - 60 * MINUTE, { ms: NOW - LIVE_DONE_MS - MINUTE, status: "done" });
+  write(path.join(work("painter"), "renders", "a.png"), "a", NOW - 30 * MINUTE);
+  assert.throws(() => liveFile(db, home, old, "renders/a.png", 1024, NOW), is404);
 });

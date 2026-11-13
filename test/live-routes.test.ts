@@ -57,6 +57,9 @@ test("the live routes: the tiles, one run, and its media file with a weak ETag t
     assert.equal((await liveFileResponse(new Request(`http://x${url}`, { headers: { "if-none-match": etag } }), String(runId))).status, 304);
     assert.equal((await liveFileResponse(new Request(`http://x${url}`, { method: "HEAD" }), String(runId))).status, 200);
 
+    const absent = await liveFileResponse(new Request("http://x/f?path=renders%2Fnone.png"), String(runId)).text();
+    const forbidden = await liveFileResponse(new Request("http://x/f?path=secret.png"), String(runId)).text();
+    assert.equal(forbidden, absent, "the same answer whether the file exists or not");
     for (const bad of ["secret.png", "renders/none.png", "../x.png"]) {
       const refused = await liveFileResponse(new Request(`http://x/f?path=${encodeURIComponent(bad)}`), String(runId));
       assert.equal(refused.status, 404, bad);

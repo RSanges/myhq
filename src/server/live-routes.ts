@@ -52,6 +52,7 @@ export function liveFileResponse(request: Request, rawId: string): Response {
     const file = liveFile(db, loadHome(config.home), id.data, raw, attachmentMaxBytes(process.env));
     return fileResponse(request, {
       path: file.path,
+      fd: file.fd,
       name: file.name,
       mime: file.mime,
       etag: `W/"${file.size}-${Math.floor(file.mtimeMs)}"`,

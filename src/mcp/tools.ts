@@ -119,6 +119,8 @@ const runIdShape = z.number().int().positive().describe("The number of the run (
 
 /** The longest caption hq_show takes. */
 export const SHOW_CAPTION_MAX = 200;
+/** The most files one run may show with hq_show: the room shows the latest ones only. */
+export const PINS_MAX = 50;
 
 /** Input shapes of the nineteen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
@@ -1045,6 +1047,10 @@ export function hqStatus(db: Db, ctx: HqContext, args: Args<"hq_status">) {
 export function hqShow(db: Db, ctx: HqContext, args: Args<"hq_show">) {
   const parsed = z.object(inputs.hq_show).parse(args);
   if (!ctx.workDir) throw new ToolError("hq_show: this run has no working directory, so it cannot show a file.");
+  const shown = (db.prepare("SELECT COUNT(*) AS n FROM run_pins WHERE run_id = ?").get(ctx.runId) as { n: number }).n;
+  if (shown >= PINS_MAX) {
+    throw new ToolError(`hq_show: this run already showed ${PINS_MAX} files: show only the file that matters now, in your next run.`);
+  }
   const { real, relative } = resolveInside(ctx.workDir, parsed.path, "hq_show");
   const stat = fs.statSync(real);
   if (!stat.isFile()) throw new ToolError(`hq_show: "${parsed.path}" is not a file.`);
