@@ -8,7 +8,8 @@ import { readRawHomeFile } from "./runtime-settings";
 // Shared by the settings page (settings.ts) and the room gestures
 // (room-manage.ts).
 
-function writeTextAtomic(file: string, text: string): void {
+/** Replaces `file` with `text`: written beside it, then renamed over it. */
+export function writeTextAtomic(file: string, text: string): void {
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
   try {
     fs.writeFileSync(temp, text, "utf8");

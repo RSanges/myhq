@@ -182,6 +182,7 @@ export const deletionCheckSchema = z.object({
           z.object({ kind: z.literal("dirty"), files: z.number() }),
           z.object({ kind: z.literal("unmerged"), commits: z.number(), branch: z.string() }),
           z.object({ kind: z.literal("unchecked"), detail: z.string() }),
+          z.object({ kind: z.literal("insideRoom") }),
         ])
         .nullable(),
       /** A working directory with its own repository: never inspected with Git, noted without blocking. */

@@ -541,6 +541,7 @@ function Check({ ok, note, title, hint, link }: { ok: boolean; note?: boolean; t
 function problemText(dir: string, problem: NonNullable<DeletionCheckView["workDirs"][number]["problem"]>): string {
   if (problem.kind === "dirty") return d.checks.dirty(dir, problem.files);
   if (problem.kind === "unmerged") return d.checks.unmerged(dir, problem.commits, problem.branch);
+  if (problem.kind === "insideRoom") return d.checks.insideRoom(dir);
   return d.checks.unchecked(dir, problem.detail);
 }
 

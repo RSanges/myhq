@@ -316,10 +316,15 @@ manages the rooms of the home in its « Salles » tab
   and the room leaves the floor (and `archivedRooms`). Its working
   directories, its worktrees and all its history (runs, costs, items, messages)
   stay exactly where they are; a later room of the same name would find that
-  history again. The owner types the room's name (`confirm`, checked on the
-  server), and the server refuses (`ROOM_DELETE_REFUSED`, with the reasons)
-  while a run of the room is in progress, while an item of the room (or one
-  addressed to it) waits for a decision, or while an agent's working directory
+  history again, but not its pause nor the armed state MyHQ kept for its
+  agents (reset at the deletion: it starts from its own `room.json`). The move
+  is the gesture; what follows it (cleaning `archivedRooms`, the pause, the
+  armed state) only logs a failure, and the deletion stands. The owner types
+  the room's name (`confirm`, checked on the server), and the server refuses
+  (`ROOM_DELETE_REFUSED`, with the reasons) while a run of the room is in
+  progress, while an item of the room (or one addressed to it) waits for a
+  decision, while an agent's working directory lies under `rooms/<name>/` (it
+  would move with the configuration), or while an agent's working directory
   holds work that is not safe: uncommitted changes in its files, or, when it
   is a Git repository or worktree of its own, commits of its HEAD that are on
   no default branch of its repository (`origin/HEAD`, else a local `main` or

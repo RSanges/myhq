@@ -1279,8 +1279,9 @@ Read only.
 
 `problem` is null for a folder that may stay as it is, else `dirty` (`files`:
 uncommitted changes), `unmerged` (`commits` of its HEAD on no default branch,
-`branch` the first one compared) or `unchecked` (`detail`: why Git could not
-check it). `notice` marks a folder that holds its own Git repository (its Git
+`branch` the first one compared), `unchecked` (`detail`: why Git could not
+check it) or `insideRoom` (the folder lies under `rooms/<room>/` and would move
+with it). `notice` marks a folder that holds its own Git repository (its Git
 directory inside the folder, where the agent may have written the
 configuration): MyHQ never runs Git there, since a configuration can make a
 mere `git status` run a program, and the folder blocks nothing, since a

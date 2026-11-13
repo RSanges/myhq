@@ -412,3 +412,48 @@ test("HTTP: a gesture needs a JSON body, so that a plain form of another page ca
   assert.equal(ok.status, 200);
   assert.equal(roomPauses(db).has("demo"), true);
 });
+
+test("an archive entry whose room is gone is ignored, and dropped at the next write", () => {
+  const { config, db } = office();
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ archivedRooms: [{ name: "vanished", at: "2026-10-01" }] }));
+  const home = loadHome(config.home);
+  assert.deepEqual([home.rooms.map((room) => room.name), home.archived?.length], [["demo"], 0]);
+  assert.deepEqual(buildSettingsView(config, db, {}).archivedRooms, []);
+  archiveRoom(config, db, "demo");
+  const list = (JSON.parse(fs.readFileSync(path.join(config.home, "myhq.json"), "utf8")) as { archivedRooms: { name: string }[] }).archivedRooms;
+  assert.deepEqual(list.map((entry) => entry.name), ["demo"]);
+});
+
+test("a deletion is refused while an agent's working directory lies under the room's folder", () => {
+  const { config, db } = office({}, [agent("scout", { workingDirectory: "rooms/demo/work" }), agent("writer")]);
+  fs.mkdirSync(path.join(config.home, "rooms", "demo", "work"), { recursive: true });
+  const check = deletionCheck(config, db, "demo");
+  assert.deepEqual(check.blocked, ["workDirs"]);
+  assert.deepEqual(check.workDirs.find((entry) => entry.agent === "scout")?.problem, { kind: "insideRoom" });
+  assert.equal(code(() => deleteRoom(config, db, "demo", "demo")), "ROOM_DELETE_REFUSED");
+  assert.ok(fs.existsSync(path.join(config.home, "rooms", "demo", "work")));
+});
+
+test("a room created again under a deleted room's name starts from its own room.json", () => {
+  const { config, db } = office();
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-room-copy-"));
+  fs.cpSync(path.join(config.home, "rooms", "demo"), copy, { recursive: true });
+  // MyHQ keeps the analyst armed and the scout disarmed, against room.json.
+  setArmed(config, db, "demo", "analyst", true);
+  setArmed(config, db, "demo", "scout", false);
+  pauseRoom(config, db, "demo");
+  deleteRoom(config, db, "demo", "demo");
+  fs.cpSync(copy, path.join(config.home, "rooms", "demo"), { recursive: true });
+  // room.json says scout armed, analyst not: that is what holds again.
+  assert.equal(armedOf(config, db, "scout"), true);
+  assert.equal(armedOf(config, db, "analyst"), false);
+  assert.equal(roomPauses(db).has("demo"), false);
+});
+
+test("removing an agent writes room.json atomically and leaves no temporary file", () => {
+  const { config, db } = office();
+  const dir = path.join(config.home, "rooms", "demo");
+  removeAgent(config, db, "demo", "writer");
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
+  assert.match(fs.readFileSync(path.join(dir, "room.json"), "utf8"), /\n$/);
+});

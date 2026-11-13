@@ -491,7 +491,8 @@ export const strings = {
         unmerged: (dir: string, commits: number, branch: string) =>
           `${dir} : ${commits} ${commits === 1 ? "commit absent" : "commits absents"} de ${branch}`,
         unchecked: (dir: string, detail: string) => `${dir} : impossible à vérifier avec Git (${detail})`,
-        gitHint: "Commite, fusionne ou abandonne ce travail d'abord. Un dossier qui n'est pas sous Git ne bloque rien.",
+        insideRoom: (dir: string) => `${dir} : rangé dans le dossier de la salle, il partirait avec elle`,
+        gitHint: "Commite, fusionne ou abandonne ce travail d'abord ; un dossier de travail rangé sous rooms/ doit d'abord en sortir. Un dossier qui n'est pas sous Git ne bloque rien.",
         ownRepo: "Dossier avec son propre dépôt Git, que MyHQ n'inspecte pas",
         ownRepoLine: (dir: string) => `${dir} : vérifie-le à la main`,
         ownRepoHint: "Son dépôt vit dans le dossier de l'agent, qui a pu en écrire la configuration : MyHQ n'y lance jamais Git. La suppression ne déplace pas ce dossier, cela ne bloque donc rien.",

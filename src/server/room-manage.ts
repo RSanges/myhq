@@ -293,7 +293,8 @@ const samePath = (a: string, b: string): boolean => {
 export type WorkDirProblem =
   | { kind: "dirty"; files: number }
   | { kind: "unmerged"; commits: number; branch: string }
-  | { kind: "unchecked"; detail: string };
+  | { kind: "unchecked"; detail: string }
+  | { kind: "insideRoom" };
 
 /**
  * A working directory that holds its own Git repository (its Git directory
@@ -412,7 +413,10 @@ export function deletionCheck(config: HqConfig, db: Db, name: string, git: GitRu
   const workDirs = room.agents.flatMap((agent) => {
     if (seen.has(agent.workDir)) return [];
     seen.add(agent.workDir);
-    const state = workDirProblem(agent.workDir, git);
+    // A working directory kept under rooms/<name>/ would move with the configuration: never.
+    const state: WorkDirProblem | WorkDirNotice | null = isInside(room.dir, agent.workDir)
+      ? { kind: "insideRoom" }
+      : workDirProblem(agent.workDir, git);
     const notice = state?.kind === "ownRepo" ? { kind: "ownRepo" as const, gitdir: toPosix(path.relative(config.home, state.gitdir)) } : null;
     const problem = state && state.kind !== "ownRepo" ? state : null;
     return [{ agent: agent.id, dir: toPosix(path.relative(config.home, agent.workDir)), problem, notice }];
@@ -475,14 +479,26 @@ export function deleteRoom(config: HqConfig, db: Db, name: string, confirm: stri
   }
   const target = path.join(config.home, check.destination);
   fs.renameSync(sourceReal, target);
-  const list = readArchivedRooms(config.home).rooms;
-  if (list.some((entry) => entry.name === name)) {
-    const rest = list.filter((entry) => entry.name !== name);
-    writeHomeKeys(config.home, { archivedRooms: rest.length > 0 ? rest : undefined });
+  // The room is deleted. What follows is cleaning: a failure is logged and the deletion stands (an
+  // archive entry left behind names a room that no longer exists, ignored and dropped at the next write).
+  try {
+    if (readArchivedRooms(config.home).rooms.some((entry) => entry.name === name)) {
+      writeArchivedRooms(config, (rooms) => rooms.filter((entry) => entry.name !== name));
+    }
+  } catch (error) {
+    console.error(`[rooms] ${name} moved to ${check.destination}, but archivedRooms was not cleaned: ${(error as Error).message}`);
   }
-  // The pause is no history: a new room of the same name starts unpaused.
-  db.prepare("DELETE FROM room_pauses WHERE room = ?").run(name);
-  syncHome(db, loadHome(config.home));
+  try {
+    // A room created later under the same name starts from its own room.json: no pause, no armed state
+    // kept by MyHQ (the rows of the agents stay, for the history; only their armed override goes).
+    db.transaction(() => {
+      db.prepare("DELETE FROM room_pauses WHERE room = ?").run(name);
+      db.prepare("UPDATE agents SET armed = NULL WHERE room = ?").run(name);
+    })();
+    syncHome(db, loadHome(config.home));
+  } catch (error) {
+    console.error(`[rooms] ${name} moved to ${check.destination}, but its pause and armed state were not reset: ${(error as Error).message}`);
+  }
   return { destination: check.destination };
 }
 
@@ -494,5 +510,7 @@ function describeProblem(problem: WorkDirProblem): string {
       return `${problem.commits} commit(s) not on ${problem.branch}`;
     case "unchecked":
       return `could not be checked (${problem.detail})`;
+    case "insideRoom":
+      return "it is inside the room's folder and would move with it";
   }
 }

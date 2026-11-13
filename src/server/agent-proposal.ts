@@ -6,6 +6,7 @@ import { isInside, type HqConfig } from "./config";
 import { replaceDashes } from "./dashes";
 import { now, type Db, type TaskSource } from "./db";
 import { HqError } from "./errors";
+import { writeJsonAtomic, writeTextAtomic } from "./home-file";
 import { agentSchema, idSchema, loadHome, loadRoom, roomFileSchema, syncHome, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
@@ -130,11 +131,11 @@ export function normalizeAgentProposal(payload: unknown, body: string): { payloa
  */
 export function writeRoomFile(config: HqConfig, dir: string, original: string, value: unknown, code: string): Room {
   const file = path.join(dir, "room.json");
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  writeJsonAtomic(file, value);
   try {
     return loadRoom(config.home, dir);
   } catch (error) {
-    fs.writeFileSync(file, original, "utf8");
+    writeTextAtomic(file, original);
     throw new HqError(code, 422, (error as Error).message);
   }
 }
