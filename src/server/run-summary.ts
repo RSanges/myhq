@@ -1,5 +1,6 @@
 import type { Env, HqConfig } from "./config";
 import { now, type Db, type RunRow } from "./db";
+import { readRunSummariesSetting } from "./home-settings";
 import { claudeSmallModelCall, type SmallModelAnswer, type SmallModelCall } from "./small-model";
 
 // The run summary: one line saying what an agent is asked to do in a run,
@@ -9,7 +10,8 @@ import { claudeSmallModelCall, type SmallModelAnswer, type SmallModelCall } from
 // and writes the line, once, without blocking the run (the portier's call,
 // small-model.ts). A task that is already one short line costs no call. Any
 // failure leaves no summary: the room shows the task. Every answered call is
-// stored with its cost (`run_summaries`, migration 23).
+// stored with its cost (`run_summaries`, migration 23). `runSummaries:
+// { "enabled": false }` in myhq.json (or the settings page) stops the calls.
 
 export const SUMMARY_MODEL = "haiku";
 /** The cap of one call (`--max-budget-usd`): far above what a summary costs. */
@@ -97,13 +99,15 @@ export type SummaryParams = {
 };
 
 /**
- * Asks the summary of a run, once: nothing when the task needs none. The call
+ * Asks the summary of a run, once: nothing when the task needs none or when
+ * summaries are off for the home (`runSummaries` of myhq.json). The call
  * is stored with its cost, and its usable text is the run's summary. Any
  * failure (the call, its answer, the storage) leaves no summary, silently.
  * Never rejects, never retries.
  */
 export async function summarizeRun(p: SummaryParams): Promise<void> {
   if (!needsSummary(p.run.task, p.mailbox)) return;
+  if (!readRunSummariesSetting(p.config.home).enabled) return;
   let answer: SmallModelAnswer;
   try {
     answer = await (p.call ?? claudeSmallModelCall)({

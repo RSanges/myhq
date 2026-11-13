@@ -780,6 +780,20 @@ CREATE TRIGGER IF NOT EXISTS run_summaries_changed_insert AFTER INSERT ON run_su
 BEGIN INSERT INTO changes (entity, entity_id) VALUES ('run', NEW.run_id); END;
 `,
   },
+  {
+    version: 24,
+    sql: `
+-- A room paused from the settings page (room-manage.ts): every armed routine
+-- of the room was disarmed at once, and armed holds the ids of the agents that
+-- were armed then (a JSON array), so that resuming re-arms exactly those.
+-- Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS room_pauses (
+  room TEXT PRIMARY KEY,
+  armed TEXT NOT NULL DEFAULT '[]',
+  paused_at TEXT NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

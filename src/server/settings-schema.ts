@@ -6,6 +6,13 @@ import { FLOOR_LAYOUTS } from "../ui/floor-mode";
 
 const sourceSchema = z.enum(["file", "env", "default"]);
 
+/** A runtime setting of myhq.json over its environment variable (runtime-settings.ts). */
+const runtimeValue = <T extends z.ZodType>(value: T) =>
+  z.object({ file: value.nullable(), effective: value, source: sourceSchema, fallback: value });
+
+/** Totals of the week since Monday (local time), as usage.ts counts them. */
+const weekSchema = z.object({ runs: z.number(), costUsd: z.number() });
+
 export const settingsViewSchema = z.object({
   layout: z.enum(FLOOR_LAYOUTS),
   language: z.object({
@@ -47,8 +54,18 @@ export const settingsViewSchema = z.object({
   rooms: z.array(
     z.object({
       name: z.string(),
+      /** room.json `label`, null to show the name. */
+      label: z.string().nullable(),
       color: z.string().nullable(),
       shared: z.boolean(),
+      /** Paused from the settings page (room-manage.ts): its routines were disarmed at once. */
+      state: z.enum(["active", "paused"]),
+      pause: z.object({ armed: z.array(z.string()), pausedAt: z.string() }).nullable(),
+      week: weekSchema,
+      lastRun: z.object({ agent: z.string(), status: z.string(), at: z.string() }).nullable(),
+      running: z.object({ agent: z.string(), since: z.string() }).nullable(),
+      /** Items of the room, or addressed to it, that wait for a decision. */
+      pending: z.number(),
       agents: z.array(
         z.object({
           id: z.string(),
@@ -57,6 +74,8 @@ export const settingsViewSchema = z.object({
           /** The armed state in force (the database wins over room.json). */
           armed: z.boolean(),
           hasRoutines: z.boolean(),
+          /** The cron expressions of its routines. */
+          routines: z.array(z.string()),
           maxBudgetUsd: z.number().nullable(),
           /** `notifyRuns: "summary"`. */
           notifySummary: z.boolean(),
@@ -65,9 +84,47 @@ export const settingsViewSchema = z.object({
     }),
   ),
   invalidRooms: z.array(z.object({ name: z.string(), error: z.string() })),
-  /** --max-budget-usd of an agent that sets none (HQ_DEFAULT_MAX_BUDGET_USD). */
+  /** The rooms archived from the settings page (myhq.json `archivedRooms`), out of the floor. */
+  archivedRooms: z.array(
+    z.object({
+      name: z.string(),
+      label: z.string().nullable(),
+      color: z.string().nullable(),
+      archivedAt: z.string(),
+      agents: z.number(),
+      totalRuns: z.number(),
+      totalCostUsd: z.number(),
+    }),
+  ),
+  /** Room proposals of the receptionist waiting on the desk. */
+  roomProposals: z.array(z.object({ id: z.number(), room: z.string().nullable(), title: z.string(), at: z.string() })),
+  /** --max-budget-usd of an agent that sets none, in force (myhq.json over HQ_DEFAULT_MAX_BUDGET_USD). */
   defaultMaxBudgetUsd: z.number(),
-  /** The portier (myhq.json `portier`, read-only here) and its latest verdicts, newest first. */
+  /** The budgets and run durations of myhq.json over their environment variables. */
+  budgets: z.object({
+    defaultMaxBudgetUsd: runtimeValue(z.number()),
+    weeklyBudgetUsd: runtimeValue(z.number().nullable()),
+    runTimeoutMinutes: runtimeValue(z.number()),
+    runHardLimitMinutes: runtimeValue(z.number()),
+  }),
+  /** Runs started today (the daily cap counts them). */
+  runsToday: z.number(),
+  /** What the runs cost since Monday, by room (rooms without cost left out). */
+  spend: z.object({
+    totalUsd: z.number(),
+    byRoom: z.array(z.object({ room: z.string(), label: z.string().nullable(), color: z.string().nullable(), costUsd: z.number() })),
+  }),
+  /** The run summaries (run-summary.ts): on or off (myhq.json `runSummaries`) and their calls over 7 days. */
+  summaries: z.object({
+    enabled: z.boolean(),
+    source: z.enum(["file", "default"]),
+    week: z.object({ calls: z.number(), costUsd: z.number() }),
+  }),
+  /** Whether each secret of the environment is set (never its value). */
+  secrets: z.array(z.object({ name: z.string(), set: z.boolean() })),
+  /** The cap on one attached file, in MB (HQ_ATTACHMENT_MAX_MB). */
+  attachmentMaxMb: z.number(),
+  /** The portier (myhq.json `portier`) and its latest verdicts, newest first. */
   portier: z.object({
     enabled: z.boolean(),
     model: z.string(),

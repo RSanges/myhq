@@ -4,8 +4,11 @@ import { z } from "zod";
 import { isValidTimeZone } from "./time";
 
 // Runtime settings that also exist as environment variables and are not
-// secrets: `scheduler` (HQ_SCHEDULER), `timeZone` (HQ_TIMEZONE) and
-// `maxRunsPerDay` (HQ_MAX_RUNS_PER_DAY). When `<home>/myhq.json` sets one, it
+// secrets: `scheduler` (HQ_SCHEDULER), `timeZone` (HQ_TIMEZONE),
+// `maxRunsPerDay` (HQ_MAX_RUNS_PER_DAY), `defaultMaxBudgetUsd`
+// (HQ_DEFAULT_MAX_BUDGET_USD), `weeklyBudgetUsd` (HQ_WEEKLY_BUDGET_USD),
+// `runTimeoutMinutes` (HQ_RUN_TIMEOUT_MINUTES) and `runHardLimitMinutes`
+// (HQ_RUN_HARD_LIMIT_MINUTES). When `<home>/myhq.json` sets one, it
 // wins over the variable; the variable stays the fallback. Each key is parsed
 // apart, so that an invalid value never breaks the others nor the rest of the
 // file. This module only needs the file system and zod (config.ts imports it).
@@ -22,15 +25,41 @@ export const timeZoneSettingSchema = z
 /** `maxRunsPerDay` of myhq.json: runs per local day, all agents together (0 stops every run). */
 export const maxRunsSettingSchema = z.number().int().min(0);
 
-export const RUNTIME_KEYS = ["scheduler", "timeZone", "maxRunsPerDay"] as const;
+/** `defaultMaxBudgetUsd` and `weeklyBudgetUsd` of myhq.json: dollars, more than 0. */
+export const budgetSettingSchema = z.number().positive().max(10_000);
+
+/** `runTimeoutMinutes` and `runHardLimitMinutes` of myhq.json: minutes, more than 0 (a week at most). */
+export const minutesSettingSchema = z.number().positive().max(10_080);
+
+export const RUNTIME_KEYS = [
+  "scheduler",
+  "timeZone",
+  "maxRunsPerDay",
+  "defaultMaxBudgetUsd",
+  "weeklyBudgetUsd",
+  "runTimeoutMinutes",
+  "runHardLimitMinutes",
+] as const;
 export type RuntimeKey = (typeof RUNTIME_KEYS)[number];
 
-export type RuntimeOverrides = { scheduler?: boolean; timeZone?: string; maxRunsPerDay?: number };
+export type RuntimeOverrides = {
+  scheduler?: boolean;
+  timeZone?: string;
+  maxRunsPerDay?: number;
+  defaultMaxBudgetUsd?: number;
+  weeklyBudgetUsd?: number;
+  runTimeoutMinutes?: number;
+  runHardLimitMinutes?: number;
+};
 
 const keySchemas: Record<RuntimeKey, z.ZodType> = {
   scheduler: schedulerSettingSchema,
   timeZone: timeZoneSettingSchema,
   maxRunsPerDay: maxRunsSettingSchema,
+  defaultMaxBudgetUsd: budgetSettingSchema,
+  weeklyBudgetUsd: budgetSettingSchema,
+  runTimeoutMinutes: minutesSettingSchema,
+  runHardLimitMinutes: minutesSettingSchema,
 };
 
 /** The raw content of `<home>/myhq.json`: null when absent, an `error` when it is not a JSON object. */

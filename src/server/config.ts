@@ -79,11 +79,11 @@ export type HqConfig = {
    */
   portier?: PortierSetting;
   /**
-   * The values of `scheduler`, `timeZone` and `maxRunsPerDay` before the
-   * overrides of `myhq.json` (environment, else default). Set by getConfig;
-   * liveConfig starts from them to read the file again.
+   * The values of the runtime settings before the overrides of `myhq.json`
+   * (environment, else default). Set by getConfig; liveConfig starts from
+   * them to read the file again.
    */
-  fromEnv?: Pick<HqConfig, "scheduler" | "timeZone" | "maxRunsPerDay">;
+  fromEnv?: Pick<HqConfig, RuntimeField>;
 };
 
 function emptyToUndefined(env: Env): Record<string, string | undefined> {
@@ -130,12 +130,23 @@ export function getConfig(env: Env = process.env): HqConfig {
   });
 }
 
+/** The fields of the configuration that `myhq.json` may override (runtime-settings.ts). */
+type RuntimeField =
+  | "scheduler"
+  | "timeZone"
+  | "maxRunsPerDay"
+  | "defaultMaxBudgetUsd"
+  | "weeklyBudgetUsd"
+  | "runTimeoutMs"
+  | "runHardLimitMs";
+
 const reportedErrors = new Set<string>();
 
 /**
  * Applies the runtime settings of `<home>/myhq.json` (`scheduler`,
- * `timeZone`, `maxRunsPerDay`) over the values taken from the environment.
- * A key that is invalid is logged once and ignored.
+ * `timeZone`, `maxRunsPerDay`, the budgets and the run durations) over the
+ * values taken from the environment. A key that is invalid is logged once and
+ * ignored.
  */
 function withHomeOverrides(base: HqConfig): HqConfig & { fromEnv: NonNullable<HqConfig["fromEnv"]> } {
   const { overrides, errors } = readRuntimeOverrides(base.home);
@@ -149,7 +160,20 @@ function withHomeOverrides(base: HqConfig): HqConfig & { fromEnv: NonNullable<Hq
     scheduler: overrides.scheduler ?? base.scheduler,
     timeZone: overrides.timeZone ?? base.timeZone,
     maxRunsPerDay: overrides.maxRunsPerDay ?? base.maxRunsPerDay,
-    fromEnv: { scheduler: base.scheduler, timeZone: base.timeZone, maxRunsPerDay: base.maxRunsPerDay },
+    defaultMaxBudgetUsd: overrides.defaultMaxBudgetUsd ?? base.defaultMaxBudgetUsd,
+    weeklyBudgetUsd: overrides.weeklyBudgetUsd ?? base.weeklyBudgetUsd,
+    runTimeoutMs: overrides.runTimeoutMinutes !== undefined ? overrides.runTimeoutMinutes * 60_000 : base.runTimeoutMs,
+    runHardLimitMs:
+      overrides.runHardLimitMinutes !== undefined ? overrides.runHardLimitMinutes * 60_000 : base.runHardLimitMs,
+    fromEnv: {
+      scheduler: base.scheduler,
+      timeZone: base.timeZone,
+      maxRunsPerDay: base.maxRunsPerDay,
+      defaultMaxBudgetUsd: base.defaultMaxBudgetUsd,
+      weeklyBudgetUsd: base.weeklyBudgetUsd,
+      runTimeoutMs: base.runTimeoutMs,
+      runHardLimitMs: base.runHardLimitMs,
+    },
   };
 }
 
