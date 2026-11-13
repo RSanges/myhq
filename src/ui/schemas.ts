@@ -429,6 +429,24 @@ export const deskObjectSchema = z.object({
   slots: z.array(z.object({ start: z.string(), end: z.string(), label: z.string().nullable() })).nullable(),
   note: z.string().nullable(),
   spines: z.array(z.object({ approvalId: z.number().int(), room: z.string(), color: z.string().nullable() })).nullable(),
+  /** For a source with `blocked`: the closures by the supervisor of the last 7 days, newest first. */
+  closures: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        room: z.string(),
+        agentId: z.string(),
+        agentName: z.string(),
+        by: z.string(),
+        reason: z.string(),
+        entryReason: z.string(),
+        text: z.string(),
+        color: z.string().nullable(),
+        closedAt: z.string(),
+        reopenedAt: z.string().nullable(),
+      }),
+    )
+    .optional(),
   updatedAt: z.string(),
 });
 export const deskSchema = z.object({ objects: z.array(deskObjectSchema), configError: z.string().nullable() });
@@ -452,6 +470,8 @@ export const relaunchResponseSchema = z.object({
   waiting: z.object({ code: z.string(), message: z.string() }).nullable(),
 });
 export const closeResponseSchema = z.object({ tasks: z.array(z.number().int()) });
+/** POST /api/blocked/reopen. */
+export const reopenResponseSchema = z.object({ closure: z.number().int(), tasks: z.array(z.number().int()) });
 
 export type DeskObject = z.infer<typeof deskObjectSchema>;
 export type DeskItem = z.infer<typeof deskItemSchema>;

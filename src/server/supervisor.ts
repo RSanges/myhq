@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { strings } from "../ui/strings";
 import { attachmentPath } from "./attachments";
-import { listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
+import { handedOff, listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
 import { liveConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
@@ -16,8 +16,9 @@ import { runsToday, startRun, WAITS, type RunnerDeps } from "./runner";
 // The supervisor of the Standard: an agent with `supervisor: true` in its
 // room.json. It does for the owner what the owner did by hand: read what is
 // stuck, check the facts, write to the agent concerned, relaunch what failed
-// for a passing reason, and hand to the owner, with one sentence, what needs
-// a decision. It never approves, rejects or closes anything. MyHQ wakes it
+// for a passing reason, close what it settled (hq_blocked_close, with its
+// reason, closures.ts), and hand to the owner, with one sentence, only what
+// needs a decision. It never approves nor rejects anything. MyHQ wakes it
 // when a new entry appears on the Standard, and every 30 minutes at most
 // while entries remain that were not handed to the owner. See
 // docs/architecture.md, "The supervisor".
@@ -75,7 +76,7 @@ function relaunchedTasks(db: Db): Map<number, { id: number; handled: boolean; ru
 
 /** An entry of the Standard as a supervisor reads it (hq_blocked). */
 export type SupervisedEntry = {
-  /** What hq_relaunch and hq_blocked_note take for it. */
+  /** What hq_relaunch, hq_blocked_note and hq_blocked_close take for it. */
   target: BlockedTarget;
   entry: BlockedEntry["entry"];
   room: string;
@@ -247,7 +248,8 @@ export type RelaunchRequestResult =
  * of the supervisor, and the request is recorded: the app starts the run at
  * once (`startRelaunchRequests`), and that run takes the whole mailbox. A task
  * a supervisor relaunched once is never relaunched by one again
- * (`ALREADY_RELAUNCHED`): its entry goes to the owner.
+ * (`ALREADY_RELAUNCHED`): its entry goes to the owner. An entry handed to the
+ * owner is never relaunched by a supervisor (`HANDED_OFF`).
  */
 export function requestRelaunch(
   db: Db,
@@ -262,6 +264,13 @@ export function requestRelaunch(
       const found = targetTasks(db, target);
       if (found.room === by.room && found.agentId === by.agentId) {
         throw new HqError("OWN_ENTRY", 409, "This entry is yours: a supervisor never relaunches itself.");
+      }
+      if (handedOff(db, found.ids)) {
+        throw new HqError(
+          "HANDED_OFF",
+          409,
+          "This entry is handed to the owner: it is the owner's to relaunch or close, whoever handed it. Leave it; a note with hq_blocked_note is all you may add.",
+        );
       }
       const relaunched = relaunchedTasks(db);
       const earlier = found.ids.map((id) => relaunched.get(id)).find((each) => each !== undefined);
@@ -324,11 +333,15 @@ function entryLines(list: readonly BlockedEntry[]): string[] {
   return [...list.slice(0, TASK_ENTRIES_MAX).map(entryLine), ...(more > 0 ? [`And ${entries(more)} more: hq_blocked lists them.`] : [])];
 }
 
+/** What the supervisor does with an entry once it checked the facts, said in each wake-up task. */
+const SETTLE =
+  "Close with hq_blocked_close, with the reason in one sentence, what you settled or what has no more reason to be, but never a request of the owner (a task from the conversation, a send-back or answers: hand it over). Hand to the owner only what needs the owner's decision (hq_blocked_note, handOff: true); an entry handed to the owner is the owner's for good, never close nor relaunch it.";
+
 /** The task of a wake-up for new entries. */
 export function newEntriesTask(fresh: readonly BlockedEntry[], open: number): string {
   const others = open - fresh.length;
   return [
-    `New on the Standard: ${entries(fresh.length)}. Check the facts of each one with hq_blocked and hq_items, then act as your role says.`,
+    `New on the Standard: ${entries(fresh.length)}. Check the facts of each one with hq_blocked and hq_items, then act as your role says. ${SETTLE}`,
     ...entryLines(fresh),
     ...(others > 0 ? [`Also open, already given to you: ${entries(others)} (hq_blocked lists them).`] : []),
   ].join("\n");
@@ -337,7 +350,7 @@ export function newEntriesTask(fresh: readonly BlockedEntry[], open: number): st
 /** The task of the review wake-up, while entries remain open. */
 export function reviewTask(open: readonly BlockedEntry[]): string {
   return [
-    `Review of the Standard: ${entries(open.length)} still open (not handed to the owner). Check where each one stands with hq_blocked and hq_items; hand to the owner what you cannot move.`,
+    `Review of the Standard: ${entries(open.length)} still open (not handed to the owner). Check where each one stands with hq_blocked and hq_items. ${SETTLE}`,
     ...entryLines(open),
   ].join("\n");
 }

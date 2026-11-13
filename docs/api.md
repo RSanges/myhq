@@ -61,6 +61,9 @@ Every error has the same shape and an HTTP status:
 | `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a task id that does not exist. |
 | `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close`, or `GET /api/live/runs/<id>`, with a run id that does not exist. |
 | `NOT_BLOCKED` | 409 | `POST /api/blocked/relaunch` or `/close` on a task that is neither `blocked` nor `pending`, or on a run that is not failed or interrupted, or has no task left blocked or given back. Nothing is changed. |
+| `CLOSURE_NOT_FOUND` | 404 | `POST /api/blocked/reopen` with a closure id that does not exist. |
+| `ALREADY_REOPENED` | 409 | `POST /api/blocked/reopen` on a closure already reopened. |
+| `STATE_CHANGED` | 409 | `POST /api/blocked/reopen` on a closure one of whose tasks changed since (taken again by a run, relaunched, closed by the owner). Nothing is restored. |
 | `DESK_OBJECT_NOT_FOUND` | 404 | `POST /api/desk/<id>/seen` or `/actions/<action>` with an id that is not an object of the desk. |
 | `DESK_ACTION_NOT_FOUND` | 404 | `POST /api/desk/<id>/actions/<action>` for an action the object does not declare (a core source declares none; a command source declares `add` and `done` in its `actions`). |
 | `ACTION_FAILED` | 422 | An action command refused (`{ "ok": false, "message" }`). The `message` is the command's own, in the language of the home, and meant to be shown. |
@@ -614,6 +617,9 @@ A failing command never fails the route: its object has `status: "error"`.
   (`POST /api/desk/<id>/actions/<action>`): those a command source declares in
   its `actions` while its data is readable, `[]` for a core source or a failing
   command.
+- `closures`: for a source with `blocked` only, the closures by the supervisor
+  of the Standard of the last 7 days, newest first (see below); absent for any
+  other object.
 - `configError`: why the `desk` block was not used (the default desk is then
   returned), `null` otherwise.
 
@@ -645,7 +651,21 @@ when it is stuck, `reason` one sentence in
 the language of the interface. `note` is the latest note of the supervisor of
 the Standard on the entry (`{ text, by, at }`, `by` its name; null when there is
 none), and `handedOff` says that it handed the entry to the owner: those
-entries come first (see "The supervisor" in `architecture.md`).
+entries come first (see "The supervisor" in `architecture.md`). A hand-off is
+for good: `handedOff` is true as soon as one note handed the entry over, by the
+supervisor, by MyHQ or by a reopening, whatever note came after.
+
+A closure by the supervisor (`closures[]` of the `blocked` object):
+
+```json
+{ "id": 3, "room": "demo", "agentId": "scout", "agentName": "Scout", "by": "Supervisor", "reason": "Le rendu a été refait, la tâche n'a plus lieu d'être.", "entryReason": "Bloquée par l'agent : Which version?", "text": "Render the trailer.", "color": "#ff3d7f", "closedAt": "2026-11-04T08:30:00.000Z", "reopenedAt": null }
+```
+
+`by` is the supervisor's name (the page titles the list with it when every
+closure listed is from the same supervisor), `reason` its sentence, `entryReason` why the
+entry was stuck when it closed it, `text` the text of the task (for a run, its
+instruction and the tasks it gave back). `reopenedAt` is set once the owner
+reopened it. A closed entry is neither among the `items` nor in the `count`.
 
 ### `POST /api/desk/[id]/seen`
 
@@ -707,6 +727,21 @@ Errors: `INVALID_INPUT`, `TASK_NOT_FOUND` or `RUN_NOT_FOUND` (404), `NOT_BLOCKED
 the note « Close par le propriétaire. ». Nothing wakes.
 
 Response `200`: `{ "tasks": [12] }`. Errors: as for the relaunch.
+
+### `POST /api/blocked/reopen`
+
+« Rouvrir » a closure by the supervisor of the Standard (`hq_blocked_close`).
+Body: `{ "id": 3 }`, the `id` of a closure of `GET /api/desk`, sent with
+`content-type: application/json`; unknown fields are refused. Each task of the
+closure goes back to the state it had before (status, note, run, time), the
+entry is handed to the owner with a note of MyHQ's, and the closure is marked
+reopened (it stays listed). Nothing wakes, and nothing closes or relaunches the
+entry again on its own.
+
+Response `200`: `{ "closure": 3, "tasks": [12, 13] }`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT` (400), `UNSUPPORTED_MEDIA_TYPE` (415),
+`CLOSURE_NOT_FOUND` (404), `ALREADY_REOPENED`, `STATE_CHANGED` (409).
 
 ### `GET /api/sprites/[room]/[agent]`
 
@@ -1643,7 +1678,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its nineteen tools write to the same
+for each run (see `architecture.md`). Its twenty tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

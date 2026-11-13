@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { blockedTargetSchema } from "../server/blocked";
+import { closeBySupervisor, closeReasonSchema } from "../server/closures";
 import { getConfig, type Env, type HqConfig } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
 import {
@@ -122,7 +123,7 @@ export const SHOW_CAPTION_MAX = 200;
 /** The most files one run may show with hq_show: the room shows the latest ones only. */
 export const PINS_MAX = 50;
 
-/** Input shapes of the nineteen tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the twenty tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -293,7 +294,13 @@ export const inputs = {
     handOff: z
       .boolean()
       .optional()
-      .describe("true: the entry is handed to the owner (shown first on the Standard, and you are no longer woken for it)."),
+      .describe("true: the entry is handed to the owner for good (shown first on the Standard, you are no longer woken for it, and a later note takes nothing back)."),
+  },
+  hq_blocked_close: {
+    ...targetShape,
+    reason: closeReasonSchema.describe(
+      "For the owner, one sentence of the home's language (10 to 500 characters): what you did that settled the entry, or why it has no more reason to be. Kept and shown to the owner with the closure.",
+    ),
   },
   hq_run_status: { runId: runIdShape },
   hq_run_extend: {
@@ -494,7 +501,7 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
   const supervisor = isSupervisor(db, ctx.room, ctx.agentId);
   if (supervisor && parsed.type !== OWNER_NOTE) {
     throw new ToolError(
-      `You are the supervisor of the Standard: you submit nothing to approve, only a note to the owner (type "${OWNER_NOTE}"). To tell the owner about an entry of the Standard, use hq_blocked_note.`,
+      `You are the supervisor of the Standard: you submit nothing to approve, only a note to the owner (type "${OWNER_NOTE}"). To tell the owner about an entry of the Standard, use hq_blocked_note; to close an entry you settled, hq_blocked_close.`,
     );
   }
   // A shared room delivers to the room that ordered: the item goes to that room's pile.
@@ -979,6 +986,17 @@ export function hqBlockedNote(db: Db, ctx: HqContext, args: Args<"hq_blocked_not
     parsed.text,
     parsed.handOff ?? false,
   );
+}
+
+/** hq_blocked_close: closes an entry the supervisor settled, as « Clore » does, with its reason; the owner may reopen it. */
+export function hqBlockedClose(db: Db, ctx: HqContext, args: Args<"hq_blocked_close">) {
+  assertSupervisor(db, ctx, "hq_blocked_close");
+  const parsed = z.object(inputs.hq_blocked_close).parse(args);
+  const { home, config } = office(ctx);
+  return {
+    ...closeBySupervisor(db, home, config, { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId }, { kind: parsed.kind, id: parsed.id }, parsed.reason),
+    note: "Closed: its tasks are done and the entry leaves the Standard. The owner sees it among your closures, with your reason, and may reopen it: a reopened entry is handed to the owner, never close it again.",
+  };
 }
 
 /** The runs folder of the home: the journals are `<home>/data/runs/<id>.jsonl`, next to the database. */

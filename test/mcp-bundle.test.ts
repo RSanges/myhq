@@ -73,6 +73,7 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
     const expected = [
       "hq_ask",
       "hq_blocked",
+      "hq_blocked_close",
       "hq_blocked_note",
       "hq_items",
       "hq_memory_read",

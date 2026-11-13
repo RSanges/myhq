@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { closeBlocked, errorText, markSeen, relaunchBlocked, type BlockedTarget } from "./api";
+import { closeBlocked, errorText, markSeen, relaunchBlocked, reopenClosure, type BlockedTarget } from "./api";
 import { addDayKey, formatFullDay, formatHour, formatLongDay, formatDateTime, localDayKey } from "./format";
 import { Markdown } from "./markdown-view";
 import type { TeamAgent } from "./model";
@@ -392,10 +392,99 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
   );
 }
 
+type Closure = NonNullable<DeskObject["closures"]>[number];
+
+/** A closure by the supervisor: who, why it was stuck, the supervisor's reason, when, and « Rouvrir » while it stays closed. */
+function ClosureEntry({ closure, onDone }: { closure: Closure; onDone: (outcome: Outcome) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const c = t.standard.closures;
+  const tint = chipStyle(closure.color);
+  const room = closure.room === RECEPTION_ROOM ? strings.room.reception.name : closure.room;
+  const reopen = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await reopenClosure(closure.id);
+      onDone({ tone: "ok", text: t.standard.outcome(closure.agentName, c.reopened) });
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li
+      style={tint ?? undefined}
+      className={`space-y-2 rounded-lg border border-line bg-card p-3 ${tint ? "border-l-4 border-l-[var(--room-color)]" : ""}`}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-xs font-medium">
+          <span aria-hidden className={`size-2 rounded-full ${tint ? "bg-[var(--room-color)]" : "bg-muted"}`} />
+          {room}
+        </span>
+        <span className="font-semibold break-words">{closure.agentName}</span>
+        {closure.reopenedAt && <Badge tone="neutral">{c.reopenedAt(formatDateTime(closure.reopenedAt))}</Badge>}
+        <span className="text-xs text-muted sm:ml-auto">{c.closedAt(formatDateTime(closure.closedAt))}</span>
+      </div>
+      <p className="rounded-md bg-soft px-3 py-2 text-sm break-words">
+        <span className="font-medium">{c.reason(closure.by)}</span> {closure.reason}
+      </p>
+      <p className="text-xs text-muted break-words">
+        {c.was} {closure.entryReason}
+      </p>
+      {closure.text && (
+        <details className="rounded-md bg-soft">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+            {t.standard.taskText}
+          </summary>
+          <div className="px-3 pb-3 text-sm">
+            <Markdown source={closure.text} />
+          </div>
+        </details>
+      )}
+      {!closure.reopenedAt && (
+        <button type="button" className={buttonClass()} disabled={busy} aria-label={c.reopenFor(closure.agentName)} onClick={() => void reopen()}>
+          {busy ? t.standard.sending : c.reopen}
+        </button>
+      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </li>
+  );
+}
+
+/** The closures by the supervisor of the last 7 days, folded by default; none: nothing is shown. */
+function Closures({ closures, onDone }: { closures: readonly Closure[]; onDone: (outcome: Outcome) => void }) {
+  if (closures.length === 0) return null;
+  const c = t.standard.closures;
+  const open = closures.filter((closure) => !closure.reopenedAt).length;
+  // The supervisor's name when every closure listed is its own; otherwise each line names its own.
+  const by = new Set(closures.map((closure) => closure.by));
+  return (
+    <details className="rounded-lg border border-line bg-card">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+        {by.size === 1 ? c.title(closures[0]!.by) : c.titleSeveral}{" "}
+        <span className="ml-1">
+          <Badge tone="neutral">{c.count(open)}</Badge>
+        </span>
+      </summary>
+      <div className="space-y-3 px-4 pb-4">
+        <p className="text-sm text-muted">{c.hint}</p>
+        <ul className="space-y-2">
+          {closures.map((closure) => (
+            <ClosureEntry key={closure.id} closure={closure} onDone={onDone} />
+          ))}
+        </ul>
+      </div>
+    </details>
+  );
+}
+
 /**
  * The Standard: what is stuck at the agents, newest first. Each entry says
  * its room, its agent, since when and why, with the text of the task folded,
  * and two actions behind a light confirmation: « Relancer » and « Clore ».
+ * Below, folded, what the supervisor closed itself, each with « Rouvrir ».
  */
 export function StandardView({ object, onChange }: { object: DeskObject; onChange: () => void }) {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -428,6 +517,13 @@ export function StandardView({ object, onChange }: { object: DeskObject; onChang
           ))}
         </ul>
       )}
+      <Closures
+        closures={object.closures ?? []}
+        onDone={(next) => {
+          setOutcome(next);
+          onChange();
+        }}
+      />
     </div>
   );
 }

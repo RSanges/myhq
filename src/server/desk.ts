@@ -4,6 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { app } from "./app";
 import { listBlocked, stuckAgents, type BlockedEntry } from "./blocked";
+import { listClosures, type ClosureDto } from "./closures";
 import { isInside, type Env, type HqConfig } from "./config";
 import { liveItem, now, type ApprovalRow, type Db, type RunRow } from "./db";
 import {
@@ -207,6 +208,8 @@ export type DeskObjectDto = {
   note: string | null;
   /** For a source with `approvals`: the room colour of each pending item, oldest first (the spines of the pile; `room` is the one that ordered it for a shared room's delivery). */
   spines: { approvalId: number; room: string; color: string | null }[] | null;
+  /** For a source with `blocked`: the closures by the supervisor of the last 7 days, newest first; absent otherwise. */
+  closures?: ClosureDto[];
   /** When the data was read (for a command, when it ran). */
   updatedAt: string;
 };
@@ -564,6 +567,7 @@ async function resolveObject(object: DeskObjectConfig, deps: DeskDeps & { home: 
     note: null,
     spines: list.includes("approvals") ? spines(deps.db, deps.home) : null,
     updatedAt: deps.at.toISOString(),
+    ...(list.includes("blocked") ? { closures: listClosures(deps.db, deps.home, deps.at) } : {}),
   };
 }
 

@@ -29,6 +29,7 @@ import {
   liveRunSchema,
   proposalResponseSchema,
   relaunchResponseSchema,
+  reopenResponseSchema,
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
@@ -154,6 +155,9 @@ export const relaunchBlocked = (target: BlockedTarget) => request("/api/blocked/
 
 /** « Clore »: the tasks are done, closed by the owner. */
 export const closeBlocked = (target: BlockedTarget) => request("/api/blocked/close", closeResponseSchema, jsonInit("POST", target));
+
+/** « Rouvrir » a closure by the supervisor: the entry is back on the Standard as it was, handed to the owner. */
+export const reopenClosure = (id: number) => request("/api/blocked/reopen", reopenResponseSchema, jsonInit("POST", { id }));
 
 export const fetchRoutines = () => request("/api/routines", routinesResponseSchema);
 
