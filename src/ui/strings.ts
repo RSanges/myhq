@@ -1462,7 +1462,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       closures: {
         title: (name: string) => `Clos par ${name}`,
         hint: "Ce qu'il a réglé et clos lui-même ces 7 derniers jours. Rouvrir remet l'entrée au Standard telle qu'elle était, remise au propriétaire.",
-        count: (open: number) => (open === 1 ? "1 entrée" : `${open} entrées`),
+        /** How many are still closed (a reopened one stays listed). */
+        count: (open: number) => (open === 1 ? "1 encore close" : `${open} encore closes`),
         closedAt: (date: string) => `Close le ${date}`,
         reopenedAt: (date: string) => `Rouverte le ${date}`,
         reason: (name: string) => `Raison de ${name} :`,
