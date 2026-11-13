@@ -29,7 +29,7 @@ export function RoadmapView() {
       <header className="wall-hero">
         <div className="wall-wrap">
           <div className="wall-hero-top">
-            <SiteNav current="roadmap" />
+            <SiteNav current={null} />
             <p className="wall-live" role="status" data-connected={connected ? "" : undefined}>
               <span className="wall-live-dot" aria-hidden>
                 {pulse > 0 && <span key={pulse} className="wall-live-ping" />}

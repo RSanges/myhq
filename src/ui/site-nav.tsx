@@ -2,18 +2,19 @@ import Link from "next/link";
 import { strings } from "./strings";
 
 // The navigation between the pages of MyHQ, the same in the header of every
-// page: the floor (the home page), the desk, the roadmap and the settings.
+// page: the floor (the home page), the desk, the surveillance room and the
+// settings. The roadmap stays at /roadmap, out of the navigation.
 // The page shown is marked (aria-current) and stays a link, so a module page
 // of the desk goes back to the desk with the same words.
 
-export type SitePage = "floor" | "desk" | "roadmap" | "settings";
+export type SitePage = "floor" | "desk" | "live" | "settings";
 
 const t = strings.nav;
 
 const LINKS: { page: SitePage; href: string; label: string }[] = [
   { page: "floor", href: "/", label: t.floor },
   { page: "desk", href: "/bureau", label: t.desk },
-  { page: "roadmap", href: "/roadmap", label: t.roadmap },
+  { page: "live", href: "/surveillance", label: t.live },
   { page: "settings", href: "/reglages", label: t.settings },
 ];
 
