@@ -992,7 +992,8 @@ behind a shared resource have no run and no tile.
 - `previous`: the statuses before `status`, newest first, three at most.
 - `piece`: null for a text-only tile (no `pieces` patterns, no file shown,
   nothing found). `source: "pin"`: the files the agent showed with `hq_show`,
-  each with its `caption`, oldest first; it wins over the patterns.
+  each with its `caption`, oldest first, the latest showing of each file and
+  the 12 newest at most; it wins over the patterns.
   `source: "auto"`: the files matching the agent's `pieces` (home-layout.md)
   written during the run, oldest first, the 12 newest at most.
 - A version: `kind` is `video`, `image`, `audio` or `text`. A media file has a
@@ -1003,8 +1004,9 @@ behind a shared resource have no run and no tile.
 
 ### `GET /api/live/runs/[runId]`
 
-One run of the surveillance room, for its detail panel, whenever it ended:
-`{ tile, timeline }`. `tile` has the shape of a tile above; `timeline` holds
+One run of the surveillance room, for its detail panel: a run in progress, or
+one ended under 5 minutes ago, as for the tiles (an older run is a 404, like
+an unknown one): `{ tile, timeline }`. `tile` has the shape of a tile above; `timeline` holds
 every status of the run, oldest first: `[{ text, at, waiting }]`. The panel
 mixes them with the versions of the piece by time.
 
@@ -1017,13 +1019,20 @@ in its working directory. `HEAD` works the same, without the body. It is
 served only when all of these hold, else `404 FILE_NOT_FOUND`, the same
 answer whether the file exists or not:
 
-- the run and its agent exist;
+- the run and its agent exist, and the run is in progress or ended under
+  5 minutes ago;
 - `path` is relative to the agent's working directory, without `..`, and
   stays inside it once every link is followed;
 - it is a regular file of a media kind, at most the attachment cap
   (`HQ_ATTACHMENT_MAX_MB`);
-- the run showed it (`hq_show`), or it matches the agent's `pieces` and was
-  modified between the start of the run and its end (or now).
+- the run showed it (`hq_show`), or it matches the agent's `pieces`, lies
+  outside `.git`, `node_modules` and `.claude`, and was modified between the
+  start of the run and its end (or now).
+
+The file is opened once and checked on its descriptor (a regular file, the
+same device and inode as the path checked, its size), then streamed from that
+descriptor: it is never reopened by its path. A file that vanishes during the
+checks is the same 404.
 
 Headers as for item files (`Content-Type`, `nosniff`, `inline`, ranges with
 `206` and `416`), except the cache: the file may still change, so its `ETag`

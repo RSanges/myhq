@@ -319,8 +319,14 @@ renders leave control frames next to them).
 
 An agent may also choose its piece itself, with `hq_show(path, caption)`: the
 file it shows wins over the patterns for the rest of the run, marked
-« Montré par l'agent », with its caption. With no pattern and no file shown,
-the tile shows the agent's words only.
+« Montré par l'agent », with its caption (the latest showing of each file,
+the 12 newest; a run may show 50 files at most). With no pattern and no file
+shown, the tile shows the agent's words only.
+
+What the room shows, the owner and anyone who reads the room sees: a text
+piece shows its first lines (40 lines or 4 KB). A role must never declare in
+`pieces`, nor show with `hq_show`, a file that holds a secret (a `.env`, a
+token, a key, a configuration with a password).
 
 #### Skills
 
