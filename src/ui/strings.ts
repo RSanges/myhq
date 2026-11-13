@@ -202,7 +202,6 @@ export const strings = {
     /** The files of the home stay the source of truth: the page only edits them. */
     problemsTitle: "Problèmes dans myhq.json",
     problemsHint: "Ces clés sont ignorées : la valeur de l'environnement ou la valeur par défaut s'applique. Enregistrer le groupe concerné les remplace par une valeur valide.",
-    invalidRoomsTitle: "Salles invalides (à corriger dans leur room.json)",
     errors: {
       SETTINGS_FILE_INVALID: "myhq.json est illisible ou n'est pas un objet JSON : rien n'a été écrit. Corrige-le à la main, puis réessaie.",
       SETTINGS_GROUP_NOT_FOUND: "Ce groupe de réglages n'existe pas.",
@@ -265,8 +264,6 @@ export const strings = {
       capInvalid: "Un nombre entier, 0 ou plus.",
     },
     notifications: {
-      title: "Notifications",
-      hint: "Ce qui part sur Telegram sans que tu aies rien demandé.",
       typesTitle: "Alertes d'information",
       typesHint: "Un item de ces types n'attend aucune décision : il part en entier sur Telegram et reste sous « À regarder » jusqu'à ce que tu l'aies vu.",
       typesEmpty: "Aucun type rencontré pour l'instant : ajoute-en un ci-dessous.",
@@ -286,35 +283,18 @@ export const strings = {
       summary: "Résumé sur Telegram",
     },
     rooms: {
-      title: "Salles et agents",
-      hint: "La couleur de chaque salle, puis le modèle, les routines et le budget de chaque agent.",
-      color: "Couleur",
       colorPicker: (room: string) => `Couleur de la salle ${room}`,
-      colorHex: (room: string) => `Code hexadécimal de la salle ${room}`,
       colorNone: "Sans couleur",
       colorInvalid: "Un code comme #ff3d7f ou #f37.",
       neutral: "Neutre",
       shared: "Salle partagée",
-      model: "Modèle",
       modelNames: { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" } as Record<string, string>,
-      armed: "Routines armées",
-      armedOn: "Armées",
-      armedOff: "Désarmées",
-      armedHint: "L'armement est gardé par MyHQ et l'emporte sur room.json.",
       noRoutine: "Aucune routine",
-      budget: "Budget par tour (USD)",
-      budgetDefault: (usd: number) => `Sans valeur : ${usd}`,
       budgetInvalid: "Un nombre plus grand que 0.",
-      empty: "Aucune salle valide dans ce dossier.",
     },
     portier: {
-      title: "Portier",
-      hint: "Avant de réveiller un agent pour le message d'un autre agent, un petit modèle lit le message et dit s'il mérite un tour tout de suite ou s'il peut attendre le prochain. Un message qui pose une question, ou dont l'expéditeur attend une réponse ou une action, réveille sans lui. Se règle dans myhq.json, clé portier.",
-      state: (enabled: boolean, model: string) =>
-        enabled ? `Activé, sur ${model}.` : "Désactivé : chaque message réveille son destinataire, comme avant.",
       week: (p: { calls: number; skips: number; cost: string }) =>
         `Sur 7 jours : ${p.calls} avis, ${p.skips} ${p.skips === 1 ? "réveil évité" : "réveils évités"}, ${p.cost} $ en tout.`,
-      latest: "Derniers avis",
       empty: "Aucun avis pour l'instant.",
       verdict: { wake: "Réveil", skip: "Attend son prochain tour" } as Record<string, string>,
       failed: "échec, réveil par prudence",
@@ -486,7 +466,6 @@ export const strings = {
       archiveBody: "La salle quitte l'étage, le bureau et le planificateur ; configuration, dossiers et historique sont conservés. Réversible.",
       deleteBody: "Rare : la configuration de la salle part dans archives/rooms/. Ses dossiers de travail et son historique restent où ils sont.",
       deleteButton: "Supprimer...",
-      saveHint: "Le nom, la couleur, les modèles, les budgets et l'armement s'enregistrent avec le bouton ci-dessous.",
     },
     deleteDialog: {
       title: (room: string) => `Supprimer la salle ${room} ?`,
