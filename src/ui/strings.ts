@@ -1461,7 +1461,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       /** The closures by the supervisor of the last 7 days, folded under the entries. */
       closures: {
         title: (name: string) => `Clos par ${name}`,
-        hint: "Ce qu'il a réglé et clos lui-même ces 7 derniers jours. Rouvrir remet l'entrée au Standard telle qu'elle était, remise au propriétaire.",
+        /** When the closures listed come from more than one supervisor. */
+        titleSeveral: "Clos par les superviseurs",
+        hint: "Ce que le superviseur a réglé et clos lui-même ces 7 derniers jours. Rouvrir remet l'entrée au Standard telle qu'elle était, remise au propriétaire.",
         /** How many are still closed (a reopened one stays listed). */
         count: (open: number) => (open === 1 ? "1 encore close" : `${open} encore closes`),
         closedAt: (date: string) => `Close le ${date}`,

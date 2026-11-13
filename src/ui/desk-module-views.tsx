@@ -433,6 +433,16 @@ function ClosureEntry({ closure, onDone }: { closure: Closure; onDone: (outcome:
       <p className="text-xs text-muted break-words">
         {c.was} {closure.entryReason}
       </p>
+      {closure.text && (
+        <details className="rounded-md bg-soft">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+            {t.standard.taskText}
+          </summary>
+          <div className="px-3 pb-3 text-sm">
+            <Markdown source={closure.text} />
+          </div>
+        </details>
+      )}
       {!closure.reopenedAt && (
         <button type="button" className={buttonClass()} disabled={busy} aria-label={c.reopenFor(closure.agentName)} onClick={() => void reopen()}>
           {busy ? t.standard.sending : c.reopen}
@@ -448,10 +458,12 @@ function Closures({ closures, onDone }: { closures: readonly Closure[]; onDone: 
   if (closures.length === 0) return null;
   const c = t.standard.closures;
   const open = closures.filter((closure) => !closure.reopenedAt).length;
+  // The supervisor's name when every closure listed is its own; otherwise each line names its own.
+  const by = new Set(closures.map((closure) => closure.by));
   return (
     <details className="rounded-lg border border-line bg-card">
       <summary className="cursor-pointer px-4 py-3 text-sm font-medium hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-        {c.title(closures[0]!.by)}{" "}
+        {by.size === 1 ? c.title(closures[0]!.by) : c.titleSeveral}{" "}
         <span className="ml-1">
           <Badge tone="neutral">{c.count(open)}</Badge>
         </span>
