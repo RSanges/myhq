@@ -94,7 +94,6 @@ function useRoomSnapshot(store: RoomStore, room: string | null, reduced: boolean
 }
 
 /** The name of a room of the home as the floor shows it: the onboarding room is the reception. */
-const roomLabel = (room: string): string => (room === RECEPTION_ROOM ? t.reception.name : room);
 
 export function RoomPage() {
   const [store] = useState<RoomStore>(createRoomStore);
@@ -117,6 +116,11 @@ export function RoomPage() {
 
   const roomNames = useMemo(() => model.rooms.map((room) => room.name), [model.rooms]);
   const roomColors = useMemo(() => new Map(model.rooms.map((each) => [each.name, each.color])), [model.rooms]);
+  // The name shown for a room: its label (room.json), the receptionist's for the reception.
+  const roomLabel = useMemo(() => {
+    const labels = new Map(model.rooms.map((each) => [each.name, each.label ?? each.name]));
+    return (name: string): string => (name === RECEPTION_ROOM ? t.reception.name : (labels.get(name) ?? name));
+  }, [model.rooms]);
   // The single floor of the home: every room on one floor, the buttons at the top take the view to a room.
   const single = model.floorLayout === "room-per-project";
   const { desk } = useDesk(subscribeDesk);
@@ -254,7 +258,7 @@ export function RoomPage() {
   );
   const labels = useMemo(
     () => ({ userDesk: t.userDesk, trayCount: t.trayCount, roomSign: roomLabel, officeSign: t.userDesk }),
-    [],
+    [roomLabel],
   );
 
   // What the sheet of the room says, rebuilt with the model (the stream keeps it live).
@@ -311,7 +315,7 @@ export function RoomPage() {
     return latest;
   }, [selected, model.events]);
 
-  const title = room === null || single ? t.title : t.floorTitle(room);
+  const title = room === null || single ? t.title : t.floorTitle(roomLabel(room));
 
   return (
     <div className="chat-shell">
@@ -332,7 +336,7 @@ export function RoomPage() {
                   className="wall-filter"
                   data-tint={tint ? "" : undefined}
                   style={tint ?? undefined}
-                  aria-label={count > 0 ? t.single.goToWithCount(name, count) : t.single.goTo(name)}
+                  aria-label={count > 0 ? t.single.goToWithCount(roomLabel(name), count) : t.single.goTo(roomLabel(name))}
                   aria-haspopup="dialog"
                   onClick={() => {
                     setFocus((before) => ({ room: name, seq: (before?.seq ?? 0) + 1 }));
@@ -342,7 +346,7 @@ export function RoomPage() {
                   }}
                 >
                   {tint && <span className="room-swatch" aria-hidden />}
-                  {name}
+                  {roomLabel(name)}
                   {count > 0 && (
                     <span className="wall-filter-count" aria-hidden>
                       {count}
@@ -368,7 +372,7 @@ export function RoomPage() {
                   onClick={() => setChosen(name)}
                 >
                   {tint && <span className="room-swatch" aria-hidden />}
-                  {name}
+                  {roomLabel(name)}
                 </button>
               );
             })}

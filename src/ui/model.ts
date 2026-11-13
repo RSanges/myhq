@@ -167,14 +167,15 @@ export function agentState(lastRun: Run | null | undefined): AgentState {
   return "idle";
 }
 
-export type TeamAgent = Agent & { room: string; key: string; state: AgentState; color: string | null };
+/** An agent of the floor, with its room's name (`room`, the identifier) and the name shown for it (`roomLabel`). */
+export type TeamAgent = Agent & { room: string; roomLabel?: string; key: string; state: AgentState; color: string | null };
 
 export function selectAgents(model: Model): TeamAgent[] {
   const agents = model.rooms.flatMap((room) =>
     room.agents.map((agent) => {
       const key = agentKey(room.name, agent.id);
       const lastRun = model.latestRuns[key] ?? null;
-      return { ...agent, lastRun, room: room.name, key, state: agentState(lastRun), color: room.color };
+      return { ...agent, lastRun, room: room.name, roomLabel: room.label ?? room.name, key, state: agentState(lastRun), color: room.color };
     }),
   );
   return agents.map((agent) => (agent.waitingFor?.length ? { ...agent, waitingFor: resourceWait(agent, agents) } : agent));

@@ -167,6 +167,8 @@ export const stateSchema = z.object({
   rooms: z.array(
     z.object({
       name: z.string(),
+      /** The name shown to the owner (room.json `label`); absent from an older server: the name. */
+      label: z.string().nullish(),
       color: z.string().nullable().default(null),
       logo: z.string().nullish(),
       /** How its suite is furnished; absent from an older server, or a decor this interface does not know: an office. */
@@ -500,6 +502,7 @@ export const pieceVersionSchema = z.object({
 export const liveTileSchema = z.object({
   runId: z.number().int(),
   room: z.string(),
+  roomLabel: z.string().nullish(),
   roomColor: z.string().nullable(),
   agentId: z.string(),
   agentName: z.string(),

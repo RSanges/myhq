@@ -133,7 +133,7 @@ export function AgentCard({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="break-words text-base font-semibold">{agent.name}</h3>
-          <p className="text-xs text-muted">{agent.room}</p>
+          <p className="text-xs text-muted">{agent.roomLabel ?? agent.room}</p>
         </div>
         <div className="flex flex-wrap justify-end gap-1">
           <Badge tone={stateTone[agent.state]}>{strings.team.state[agent.state]}</Badge>

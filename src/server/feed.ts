@@ -371,6 +371,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
     cursor,
     rooms: home.rooms.map((room) => ({
       name: room.name,
+      label: room.label ?? null,
       targetRepo: toPosix(path.relative(home.root, room.targetRepo)),
       color: room.color,
       logo: logoUrl(room),

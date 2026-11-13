@@ -624,7 +624,7 @@ export function AgentSheet({
           <h2 className="agent-name wall-display">{agent.name}</h2>
           <p className="agent-state" data-state={state.kind} role="status">
             <span className="agent-state-dot" aria-hidden />
-            <span className="agent-state-room">{agent.room}</span>
+            <span className="agent-state-room">{agent.roomLabel ?? agent.room}</span>
             <span className="agent-state-text">{stateText(state)}</span>
           </p>
         </div>

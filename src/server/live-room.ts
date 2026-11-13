@@ -167,6 +167,8 @@ export type LiveStatusDto = { text: string; at: string };
 export type LiveTileDto = {
   runId: number;
   room: string;
+  /** The name shown for the room (room.json `label`), null to show `room`. */
+  roomLabel: string | null;
   roomColor: string | null;
   agentId: string;
   agentName: string;
@@ -315,6 +317,7 @@ function tileOf(db: Db, home: Home, runsDir: string, run: RunRow, now: number): 
   return {
     runId: run.id,
     room: run.room,
+    roomLabel: found?.room.label ?? null,
     roomColor: found?.room.color ?? null,
     agentId: run.agent_id,
     agentName: found?.agent.name ?? run.agent_id,
