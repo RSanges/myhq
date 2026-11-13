@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { strings } from "../ui/strings";
 import { attachmentPath } from "./attachments";
-import { listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
+import { handedOff, listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
 import { liveConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
@@ -248,7 +248,8 @@ export type RelaunchRequestResult =
  * of the supervisor, and the request is recorded: the app starts the run at
  * once (`startRelaunchRequests`), and that run takes the whole mailbox. A task
  * a supervisor relaunched once is never relaunched by one again
- * (`ALREADY_RELAUNCHED`): its entry goes to the owner.
+ * (`ALREADY_RELAUNCHED`): its entry goes to the owner. An entry handed to the
+ * owner is never relaunched by a supervisor (`HANDED_OFF`).
  */
 export function requestRelaunch(
   db: Db,
@@ -263,6 +264,13 @@ export function requestRelaunch(
       const found = targetTasks(db, target);
       if (found.room === by.room && found.agentId === by.agentId) {
         throw new HqError("OWN_ENTRY", 409, "This entry is yours: a supervisor never relaunches itself.");
+      }
+      if (handedOff(db, found.ids)) {
+        throw new HqError(
+          "HANDED_OFF",
+          409,
+          "This entry is handed to the owner: it is the owner's to relaunch or close, whoever handed it. Leave it; a note with hq_blocked_note is all you may add.",
+        );
       }
       const relaunched = relaunchedTasks(db);
       const earlier = found.ids.map((id) => relaunched.get(id)).find((each) => each !== undefined);
@@ -327,7 +335,7 @@ function entryLines(list: readonly BlockedEntry[]): string[] {
 
 /** What the supervisor does with an entry once it checked the facts, said in each wake-up task. */
 const SETTLE =
-  "Close with hq_blocked_close, with the reason in one sentence, what you settled or what has no more reason to be; hand to the owner only what needs the owner's decision (hq_blocked_note, handOff: true).";
+  "Close with hq_blocked_close, with the reason in one sentence, what you settled or what has no more reason to be, but never a request of the owner (a task from the conversation, a send-back or answers: hand it over). Hand to the owner only what needs the owner's decision (hq_blocked_note, handOff: true); an entry handed to the owner is the owner's for good, never close nor relaunch it.";
 
 /** The task of a wake-up for new entries. */
 export function newEntriesTask(fresh: readonly BlockedEntry[], open: number): string {

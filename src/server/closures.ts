@@ -21,6 +21,14 @@ export const CLOSURES_SHOWN_MS = 7 * 24 * 60 * 60_000;
 /** The reason of a closure: one sentence for the owner, what was done or why the entry has no more reason to be. */
 export const closeReasonSchema = z.string().trim().min(10).max(500);
 
+/**
+ * The sources of a task that carry a request of the owner: a task given from
+ * the conversation (`chat`), and a send-back or the answers to questions
+ * (`revise`). Only the owner cancels those: an entry holding one is never
+ * closed by the supervisor.
+ */
+export const OWNER_SOURCES: readonly TaskRow["source"][] = ["chat", "revise"];
+
 /** POST /api/blocked/reopen. */
 export const reopenBodySchema = z.strictObject({ id: z.number().int().positive() });
 
@@ -53,8 +61,9 @@ const sameTarget = (a: BlockedTarget, b: BlockedTarget) => a.kind === b.kind && 
  * hq_blocked_close: closes an open entry of the Standard, as « Clore » does
  * (its tasks are done, nothing wakes), with the supervisor's reason as their
  * note, and records the closure. Refused on the supervisor's own entries, on
- * an entry handed to the owner (it is the owner's, whoever handed it), and on
- * a target that is not, or no longer, an entry of the Standard.
+ * an entry handed to the owner (it is the owner's, whoever handed it), on an
+ * entry holding a request of the owner (OWNER_SOURCES), and on a target that
+ * is not, or no longer, an entry of the Standard.
  */
 export function closeBySupervisor(
   db: Db,
@@ -94,8 +103,16 @@ export function closeBySupervisor(
         throw new HqError("HANDED_OFF", 409, "This entry is handed to the owner: it is the owner's to close, whoever handed it. Leave it.");
       }
       const before = db
-        .prepare("SELECT id, status, note, run_id, updated_at FROM tasks WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id")
-        .all(JSON.stringify(entry.taskIds)) as TaskBefore[];
+        .prepare("SELECT id, status, note, run_id, updated_at, source FROM tasks WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id")
+        .all(JSON.stringify(entry.taskIds)) as (TaskBefore & Pick<TaskRow, "source">)[];
+      const asked = before.find((task) => OWNER_SOURCES.includes(task.source));
+      if (asked) {
+        throw new HqError(
+          "OWNER_REQUEST",
+          409,
+          `Task #${asked.id} was asked for by the owner (${asked.source === "chat" ? "from the conversation" : "a send-back or answers to questions"}): only the owner cancels it. Hand the entry to the owner with hq_blocked_note and handOff: true, saying what you found.`,
+        );
+      }
       const { tasks } = closeBlocked(db, target, strings.deskModules.standard.closedBySupervisor(nameOf(home, by.room, by.agentId), reason));
       const closedAt = (db.prepare("SELECT updated_at FROM tasks WHERE id = ?").get(tasks[0]) as { updated_at: string }).updated_at;
       const closure = Number(
@@ -104,7 +121,7 @@ export function closeBySupervisor(
             `INSERT INTO supervisor_closes (target_kind, target_id, room, agent_id, entry_reason, entry_text, tasks, reason, by_room, by_agent, by_run, closed_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(target.kind, target.id, entry.room, entry.agentId, entry.reason, entry.text, JSON.stringify(before), reason, by.room, by.agentId, by.runId, closedAt)
+          .run(target.kind, target.id, entry.room, entry.agentId, entry.reason, entry.text, JSON.stringify(before.map((task): TaskBefore => ({ id: task.id, status: task.status, note: task.note, run_id: task.run_id, updated_at: task.updated_at }))), reason, by.room, by.agentId, by.runId, closedAt)
           .lastInsertRowid,
       );
       return { closure, tasks };

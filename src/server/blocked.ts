@@ -58,7 +58,7 @@ export type BlockedEntry = {
   taskIds: number[];
   /** The latest note of a supervisor on these tasks (hq_blocked_note), null when there is none. */
   note: BlockedNote | null;
-  /** A supervisor handed it to the owner: the owner is the one to act, and it is listed first. */
+  /** Handed to the owner (by a supervisor, by MyHQ, by a reopening), for good: the owner is the one to act, and it is listed first. */
   handedOff: boolean;
   /**
    * What MyHQ knows of why, as a code: the rules of the Standard read it (supervisor.ts, `entryRule`).
@@ -195,13 +195,16 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
   const entries: BlockedEntry[] = [];
   const listed = new Set<number>();
 
-  // The failed or interrupted runs of the window, unless a later run of the agent did the same work.
+  // The failed or interrupted runs of the window, unless a later run of the agent did the same work; and, at
+  // any age, a run whose closure by the supervisor the owner reopened (closures.ts), while its tasks are open.
   const runs = db
     .prepare(
       `SELECT * FROM runs r
-       WHERE r.status IN ('failed', 'cancelled') AND r.ended_at >= ?
-         AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.room = r.room AND n.agent_id = r.agent_id AND n.id > r.id
-           AND n.task = r.task AND n.status IN ('done', 'running'))
+       WHERE r.status IN ('failed', 'cancelled')
+         AND ((r.ended_at >= ?
+           AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.room = r.room AND n.agent_id = r.agent_id AND n.id > r.id
+             AND n.task = r.task AND n.status IN ('done', 'running')))
+           OR EXISTS (SELECT 1 FROM supervisor_closes c WHERE c.target_kind = 'run' AND c.target_id = r.id AND c.reopened_at IS NOT NULL))
        ORDER BY r.id`,
     )
     .all(new Date(at.getTime() - FAILED_RUN_WINDOW_MS).toISOString()) as RunRow[];
@@ -302,7 +305,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     });
   }
 
-  // The latest supervisor note of each entry; what was handed to the owner comes first.
+  // The latest supervisor note of each entry; what was handed to the owner (for good) comes first.
   const latest = db.prepare(
     `SELECT room, agent_id, text, handed_off, created_at FROM blocked_notes WHERE task_id IN (SELECT value FROM json_each(?))
      ORDER BY id DESC LIMIT 1`,
@@ -311,6 +314,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     const row = latest.get(JSON.stringify(entry.taskIds)) as
       | { room: string; agent_id: string; text: string; handed_off: number; created_at: string }
       | undefined;
+    entry.handedOff = handedOff(db, entry.taskIds);
     if (!row) continue;
     const byMyhq = row.room === MYHQ_NOTE_ROOM && row.agent_id === MYHQ_NOTE_AGENT;
     entry.note = {
@@ -320,10 +324,22 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       agentName: byMyhq ? "MyHQ" : nameOf(row.room, row.agent_id),
       at: row.created_at,
     };
-    entry.handedOff = row.handed_off === 1;
   }
   return entries.sort(
     (a, b) => Number(b.handedOff) - Number(a.handedOff) || b.since.localeCompare(a.since) || b.id - a.id,
+  );
+}
+
+/**
+ * Whether the tasks of an entry were handed to the owner: once a note with
+ * `handed_off` exists on one of them, by a supervisor, by MyHQ or by a
+ * reopening, the entry is the owner's, whatever note follows. A later note
+ * adds its sentence and takes nothing back.
+ */
+export function handedOff(db: Db, taskIds: readonly number[]): boolean {
+  return (
+    db.prepare("SELECT 1 FROM blocked_notes WHERE handed_off = 1 AND task_id IN (SELECT value FROM json_each(?)) LIMIT 1").get(JSON.stringify(taskIds)) !==
+    undefined
   );
 }
 

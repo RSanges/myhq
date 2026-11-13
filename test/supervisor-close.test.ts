@@ -3,16 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { POST as reopenRoute } from "../src/app/api/blocked/reopen/route";
-import { hqBlockedClose, hqBlockedNote, hqBlocked, type HqContext } from "../src/mcp/tools";
-import { listBlocked } from "../src/server/blocked";
-import { CLOSURES_SHOWN_MS, listClosures, reopenClosure } from "../src/server/closures";
+import { hqBlockedClose, hqBlockedNote, hqBlocked, hqRelaunch, type HqContext } from "../src/mcp/tools";
+import { listBlocked, relaunchBlocked } from "../src/server/blocked";
+import { closeBySupervisor, CLOSURES_SHOWN_MS, listClosures, reopenClosure } from "../src/server/closures";
 import type { HqConfig } from "../src/server/config";
 import { getDbAt, type Db, type TaskRow } from "../src/server/db";
 import { DeskCommands } from "../src/server/desk-command";
 import { resolveDesk } from "../src/server/desk";
 import { HqError } from "../src/server/errors";
 import { loadHome, syncHome } from "../src/server/rooms";
-import { newEntriesTask, reviewTask, watchStandard } from "../src/server/supervisor";
+import { wakeAgents } from "../src/server/runner";
+import { newEntriesTask, reviewTask, STANDARD_REVIEW_MS, watchStandard } from "../src/server/supervisor";
 import { strings } from "../src/ui/strings";
 import type { Engine } from "../src/server/engine";
 import { makeHome, waitForRun } from "./helpers";
@@ -256,6 +257,8 @@ test("close then reopen: a failed run comes back as it was, handed to the owner,
   assert.equal(count(db, "supervisor_relaunches"), 0);
   assert.equal(count(db, "runs WHERE reason = 'standard'"), 0);
   assert.match(refusal(() => hqBlockedClose(db, sup, { ...target, reason: REASON })), /handed to the owner/);
+  assert.match(refusal(() => hqRelaunch(db, sup, target)), /handed to the owner: it is the owner's to relaunch or close/);
+  assert.equal(count(db, "supervisor_relaunches"), 0);
   assert.throws(() => reopenClosure(db, home, closed.closure), (error) => error instanceof HqError && error.code === "ALREADY_REOPENED");
 });
 
@@ -324,4 +327,166 @@ test("the supervisor is told to close what it settled, with the reason, and to h
     assert.match(task, /hand to the owner only what needs/i);
     assert.match(task, new RegExp(`\\[task ${blocked}\\]`));
   }
+});
+
+// --- Handed to the owner, for good ------------------------------------------------------
+
+const failing = (): Engine => ({
+  name: "claude",
+  async *run() {
+    yield { type: "end", status: "failed", reason: "error", summary: "Server too slow.", usage, costUsd: 0 };
+  },
+});
+
+/** After a harmless note of the supervisor (no handOff), the entry stays handed: not closed, not relaunched, not reviewed. */
+async function staysHanded(config: HqConfig, db: Db, sup: HqContext, target: { kind: "task" | "run"; id: number }) {
+  hqBlockedNote(db, sup, { ...target, text: "J'ai vérifié : rien de neuf de mon côté." });
+  const entry = hqBlocked(db, sup).entries.find((each) => each.target.kind === target.kind && each.target.id === target.id);
+  assert.ok(entry);
+  assert.equal(entry.handedOff, true, "a later note takes nothing back");
+  assert.equal(entry.note?.text, "J'ai vérifié : rien de neuf de mon côté.", "the latest note is still shown");
+  assert.match(refusal(() => hqBlockedClose(db, sup, { ...target, reason: REASON })), /handed to the owner/);
+  assert.match(refusal(() => hqRelaunch(db, sup, target)), /handed to the owner/);
+  const later = new Date(Date.now() + 2 * STANDARD_REVIEW_MS);
+  const run = watchStandard(config, db, { engine: engine() }, later);
+  if (run) await waitForRun(db, run.id);
+  assert.equal(run, null, "no review lists it");
+}
+
+test("handed to the owner by the supervisor: a later note without handOff takes nothing back", async () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "Which version?" });
+  hqBlockedNote(db, sup, { kind: "task", id: blocked, text: "À toi de choisir entre A et B.", handOff: true });
+  await staysHanded(config, db, sup, { kind: "task", id: blocked });
+});
+
+test("handed to the owner by MyHQ after a second failure: a later note without handOff takes nothing back", async () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "Which version?" });
+  const announced = watchStandard(config, db, { engine: engine() });
+  assert.ok(announced);
+  await waitForRun(db, announced.id);
+  assert.equal(hqRelaunch(db, sup, { kind: "task", id: blocked }).relaunched, true);
+  const [relaunch] = wakeAgents(config, db, { engine: failing() });
+  assert.ok(relaunch);
+  await waitForRun(db, relaunch.id);
+  // handOffRelaunched hands it to the owner in the supervisor's name.
+  assert.equal(watchStandard(config, db, { engine: engine() }, new Date(Date.now() + 2 * STANDARD_REVIEW_MS)), null);
+  const entry = hqBlocked(db, sup).entries.find((each) => each.taskIds.includes(blocked));
+  assert.ok(entry);
+  assert.equal(entry.handedOff, true);
+  await staysHanded(config, db, sup, entry.target);
+});
+
+test("handed to the owner by a reopening: a later note without handOff takes nothing back", async () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "Which version?" });
+  const { closure } = hqBlockedClose(db, sup, { kind: "task", id: blocked, reason: REASON });
+  reopenClosure(db, loadHome(config.home), closure);
+  await staysHanded(config, db, sup, { kind: "task", id: blocked });
+  // The owner's own « Relancer » is not concerned.
+  const relaunched = relaunchBlocked(config, db, { kind: "task", id: blocked }, { engine: engine() });
+  assert.ok(relaunched.run);
+  await waitForRun(db, relaunched.run.id);
+});
+
+// --- A run reopened after its 24 hours ----------------------------------------------------
+
+test("a run closed then reopened 3 days after it ended is back on the Standard, handed to the owner, while its tasks are open", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const home = loadHome(config.home);
+  const ended = ago(3 * 24 * 60);
+  const failed = Number(
+    db
+      .prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, ended_at, summary) VALUES ('demo', 'social', 'claude', 'Post the weekly recap.', 'failed', ?, ?, 'Budget exceeded.')")
+      .run(ago(3 * 24 * 60 + 10), ended).lastInsertRowid,
+  );
+  const instruction = addTask(db, "demo", "social", { status: "blocked", source: "manual", run_id: failed, note: "Budget exceeded.", created_at: ago(3 * 24 * 60 + 10), updated_at: ended });
+  const given = addTask(db, "demo", "social", { status: "pending", source: "message", created_at: ago(3 * 24 * 60 + 20), updated_at: ended });
+  // Closed by the supervisor while the run was on the Standard (an hour after it ended).
+  const at = new Date(Date.parse(ended) + 60 * 60_000);
+  const { closure } = closeBySupervisor(db, home, config, { room: "assistant", agentId: "watcher", runId: sup.runId }, { kind: "run", id: failed }, REASON, at);
+  // A later routine run with the same instruction did its work: the run alone would not be listed.
+  db.prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, ended_at) VALUES ('demo', 'social', 'claude', 'Post the weekly recap.', 'done', ?, ?)").run(ago(2 * 24 * 60), ago(2 * 24 * 60 - 5));
+  assert.deepEqual(listBlocked(db, home, config), []);
+
+  reopenClosure(db, home, closure);
+  const entries = listBlocked(db, home, config);
+  assert.equal(entries.length, 1, "one entry: the run, its given-back task not listed apart");
+  assert.deepEqual(
+    { entry: entries[0]!.entry, id: entries[0]!.id, taskIds: entries[0]!.taskIds, handedOff: entries[0]!.handedOff },
+    { entry: "run", id: failed, taskIds: [instruction, given], handedOff: true },
+  );
+
+  // Once its tasks are done (the owner closed it), it is gone.
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id IN (?, ?)").run(instruction, given);
+  assert.deepEqual(listBlocked(db, home, config), []);
+});
+
+// --- What the owner asked for -------------------------------------------------------------
+
+test("hq_blocked_close: refused on an entry holding a request of the owner (chat, revise), with a hand-off to say so", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  for (const source of ["chat", "revise"] as const) {
+    const task = addTask(db, "demo", "scout", { status: "pending", source, created_at: ago(30), text: `A ${source} request.` });
+    assert.ok(hqBlocked(db, sup).entries.some((entry) => entry.target.id === task), `${source} is on the Standard`);
+    assert.match(
+      refusal(() => hqBlockedClose(db, sup, { kind: "task", id: task, reason: REASON })),
+      /asked for by the owner.*hq_blocked_note.*handOff: true/,
+      source,
+    );
+    assert.equal(taskOf(db, task).status, "pending");
+  }
+  // A failed run whose given-back tasks hold one.
+  const ended = ago(40);
+  const failed = Number(
+    db
+      .prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, ended_at, summary) VALUES ('demo', 'social', 'claude', 'Wake.', 'failed', ?, ?, 'Budget exceeded.')")
+      .run(ago(50), ended).lastInsertRowid,
+  );
+  addTask(db, "demo", "social", { status: "blocked", source: "manual", run_id: failed, created_at: ago(50), updated_at: ended });
+  addTask(db, "demo", "social", { status: "pending", source: "chat", created_at: ago(55), updated_at: ended });
+  assert.match(refusal(() => hqBlockedClose(db, sup, { kind: "run", id: failed, reason: REASON })), /asked for by the owner/);
+  assert.equal(count(db, "supervisor_closes"), 0);
+  // A message and a manual task stay closable.
+  for (const source of ["message", "manual"] as const) {
+    const task = addTask(db, "demo", "scout", { status: "blocked", source, note: "Stuck." });
+    assert.deepEqual(hqBlockedClose(db, sup, { kind: "task", id: task, reason: REASON }).tasks, [task], source);
+  }
+  // So does an approval to carry out.
+  const approval = addTask(db, "demo", "scout", { status: "blocked", source: "approval", note: "Stuck." });
+  assert.deepEqual(hqBlockedClose(db, sup, { kind: "task", id: approval, reason: REASON }).tasks, [approval]);
+});
+
+// --- The missing cases --------------------------------------------------------------------
+
+test("a pending entry, closed then reopened, is back pending as it was", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const home = loadHome(config.home);
+  const pending = addTask(db, "demo", "scout", { status: "pending", source: "manual", created_at: ago(40) });
+  const before = taskOf(db, pending);
+  const [entry] = listBlocked(db, home, config);
+  assert.equal(entry?.entry, "pending");
+  const { closure } = hqBlockedClose(db, sup, { kind: "task", id: pending, reason: REASON });
+  assert.equal(taskOf(db, pending).status, "done");
+  reopenClosure(db, home, closure);
+  assert.deepEqual(taskOf(db, pending), before);
+  const [back] = listBlocked(db, home, config);
+  assert.deepEqual({ entry: back?.entry, id: back?.id, handedOff: back?.handedOff }, { entry: "pending", id: pending, handedOff: true });
+});
+
+test("reopen: refused when only updated_at changed, the status still done", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "x" });
+  const { closure } = hqBlockedClose(db, sup, { kind: "task", id: blocked, reason: REASON });
+  db.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(new Date(Date.now() + 5_000).toISOString(), blocked);
+  assert.throws(() => reopenClosure(db, loadHome(config.home), closure), (error) => error instanceof HqError && error.code === "STATE_CHANGED");
+  assert.equal(taskOf(db, blocked).status, "done");
 });

@@ -294,7 +294,7 @@ export const inputs = {
     handOff: z
       .boolean()
       .optional()
-      .describe("true: the entry is handed to the owner (shown first on the Standard, and you are no longer woken for it)."),
+      .describe("true: the entry is handed to the owner for good (shown first on the Standard, you are no longer woken for it, and a later note takes nothing back)."),
   },
   hq_blocked_close: {
     ...targetShape,
