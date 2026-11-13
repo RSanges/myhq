@@ -118,9 +118,17 @@ export function limitsForm(settings: SettingsView): LimitsForm {
 export function limitsErrors(form: LimitsForm, settings: SettingsView): Partial<Record<keyof LimitsForm, true>> {
   const errors: Partial<Record<keyof LimitsForm, true>> = {};
   if (form.cap.trim() !== "" && !/^\d{1,6}$/.test(form.cap.trim())) errors.cap = true;
-  for (const key of ["defaultBudget", "weeklyBudget", "timeout", "hardLimit"] as const) {
+  for (const key of ["defaultBudget", "weeklyBudget"] as const) {
     if (!positiveOrEmpty(form[key])) errors[key] = true;
   }
+  // A run lasts one minute at least.
+  for (const key of ["timeout", "hardLimit"] as const) {
+    if (form[key].trim() !== "" && (parseDecimal(form[key]) ?? 0) < 1) errors[key] = true;
+  }
+  // The pair is checked once the owner touches one of the two: an incoherent pair kept in myhq.json
+  // (reported apart) never blocks the save of another setting of the tab.
+  const saved = limitsForm(settings);
+  if (form.timeout === saved.timeout && form.hardLimit === saved.hardLimit) return errors;
   const timeout = optionalNumber(form.timeout) ?? settings.budgets.runTimeoutMinutes.fallback;
   const hard = optionalNumber(form.hardLimit) ?? settings.budgets.runHardLimitMinutes.fallback;
   if (!errors.timeout && !errors.hardLimit && timeout >= hard) errors.timeout = true;

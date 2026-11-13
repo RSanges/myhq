@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { getConfig, liveConfig } from "../src/server/config";
+import { getConfig, liveConfig, runDurations } from "../src/server/config";
 import { getDbAt, type RunRow } from "../src/server/db";
 import { readPortierSetting, readRunSummariesSetting } from "../src/server/home-settings";
 import { summarizeRun } from "../src/server/run-summary";
 import { buildSettingsView, saveSettings } from "../src/server/settings";
+import { limitsErrors, limitsForm } from "../src/ui/settings-model";
 import { makeHome } from "./helpers";
 
 // « Limites et coûts »: the budgets and run durations of myhq.json over their
@@ -104,4 +105,56 @@ test("with run summaries off, summarizeRun makes no call", async () => {
   assert.equal(calls, 1);
   const view = buildSettingsView(config, db, {});
   assert.deepEqual(view.summaries.week, { calls: 1, costUsd: 0.0003 });
+});
+
+test("a run timeout that is not shorter than the hard limit is ignored as invalid, with the reason", () => {
+  const { home } = makeHome();
+  const env = { MYHQ_HOME: home, HQ_RUN_TIMEOUT_MINUTES: "30", HQ_RUN_HARD_LIMIT_MINUTES: "180" };
+  fs.writeFileSync(homeFile(home), JSON.stringify({ runTimeoutMinutes: 200 }));
+  const config = getConfig(env);
+  assert.deepEqual([config.runTimeoutMs, config.runHardLimitMs], [30 * 60_000, 180 * 60_000]);
+  assert.match(config.durationsError ?? "", /shorter than the hard limit.*environment applies/);
+  // Mixed with the environment: a file hard limit under the environment's timeout.
+  fs.writeFileSync(homeFile(home), JSON.stringify({ runHardLimitMinutes: 20 }));
+  assert.deepEqual([liveConfig(config).runTimeoutMs, liveConfig(config).runHardLimitMs], [30 * 60_000, 180 * 60_000]);
+  // An environment that is itself incoherent: the defaults.
+  assert.deepEqual(runDurations({}, { timeoutMs: 90 * 60_000, hardMs: 60 * 60_000 }).timeoutMs, 30 * 60_000);
+  assert.deepEqual(runDurations({ timeoutMinutes: 10 }, { timeoutMs: 30 * 60_000, hardMs: 180 * 60_000 }).error, null);
+});
+
+test("the settings report an incoherent pair, and a switch of the tab still saves", () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  // Written by hand: an hour of soft deadline for half an hour of hard limit.
+  fs.writeFileSync(homeFile(config.home), JSON.stringify({ runTimeoutMinutes: 60, runHardLimitMinutes: 30 }));
+  const view = buildSettingsView(config, db, {});
+  assert.ok(view.errors.some((line) => /runTimeoutMinutes, runHardLimitMinutes/.test(line)));
+  // The page sends every field: the untouched durations do not block the switch.
+  const form = { ...limitsForm(view), summaries: false };
+  assert.deepEqual(limitsErrors(form, view), {});
+  saveSettings(config, db, "limits", {
+    scheduler: null,
+    maxRunsPerDay: null,
+    defaultMaxBudgetUsd: null,
+    weeklyBudgetUsd: null,
+    runTimeoutMinutes: 60,
+    runHardLimitMinutes: 30,
+    portier: false,
+    runSummaries: false,
+  });
+  assert.deepEqual(readHome(config.home).runSummaries, { enabled: false });
+  // Touching one of them asks for a coherent pair again.
+  assert.throws(() => saveSettings(config, db, "limits", limits({ runHardLimitMinutes: 45 })), /shorter/);
+  assert.equal(limitsErrors({ ...form, hardLimit: "45" }, view).timeout, true);
+});
+
+test("a run lasts one minute at least, in the file and on the page", () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  assert.throws(() => saveSettings(config, db, "limits", limits({ runTimeoutMinutes: 0.5 })));
+  fs.writeFileSync(homeFile(config.home), JSON.stringify({ runTimeoutMinutes: 0.5 }));
+  assert.equal(getConfig({ MYHQ_HOME: config.home }).runTimeoutMs, 30 * 60_000);
+  const view = buildSettingsView(config, db, {});
+  assert.equal(limitsErrors({ ...limitsForm(view), timeout: "0,5" }, view).timeout, true);
+  assert.equal(limitsErrors({ ...limitsForm(view), hardLimit: "0" }, view).hardLimit, true);
 });

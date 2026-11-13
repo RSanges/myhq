@@ -146,15 +146,20 @@ export function saveLayout(config: HqConfig, input: LayoutInput): void {
 export function saveLimits(config: HqConfig, input: LimitsInput): void {
   const { data } = readHomeFileForWrite(config.home);
   const fromEnv = liveConfig(config).fromEnv;
-  // The soft deadline must come before the hard limit, as they will be in force.
-  const minutes = (key: "runTimeoutMinutes" | "runHardLimitMinutes", envMs: number): number => {
-    const sent = input[key];
-    if (sent !== undefined) return sent ?? envMs / 60_000;
-    const kept = minutesSettingSchema.safeParse(data[key]);
-    return kept.success ? kept.data : envMs / 60_000;
+  // The soft deadline must come before the hard limit, as they will be in force. Only checked when the
+  // save changes one of them: a switch of the same tab never fails on durations the owner did not touch.
+  type Duration = "runTimeoutMinutes" | "runHardLimitMinutes";
+  const kept = (key: Duration): number | undefined => {
+    const parsed = minutesSettingSchema.safeParse(data[key]);
+    return parsed.success ? parsed.data : undefined;
   };
-  if (minutes("runTimeoutMinutes", fromEnv.runTimeoutMs) >= minutes("runHardLimitMinutes", fromEnv.runHardLimitMs)) {
-    throw new HqError("INVALID_INPUT", 400, "runTimeoutMinutes must be shorter than runHardLimitMinutes.");
+  /** The value the file will hold for `key` after the save, undefined when none. */
+  const after = (key: Duration): number | undefined => (input[key] !== undefined ? (input[key] ?? undefined) : kept(key));
+  const touched = (key: Duration) => after(key) !== kept(key);
+  if (touched("runTimeoutMinutes") || touched("runHardLimitMinutes")) {
+    const timeout = after("runTimeoutMinutes") ?? fromEnv.runTimeoutMs / 60_000;
+    const hard = after("runHardLimitMinutes") ?? fromEnv.runHardLimitMs / 60_000;
+    if (timeout >= hard) throw new HqError("INVALID_INPUT", 400, "runTimeoutMinutes must be shorter than runHardLimitMinutes.");
   }
   const changes: Record<string, unknown> = {
     scheduler: input.scheduler ?? undefined,
@@ -353,6 +358,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
 
   const { overrides, errors: runtimeErrors } = readRuntimeOverrides(live.home);
   if (!raw.error) errors.push(...runtimeErrors);
+  if (live.durationsError) errors.push(`myhq.json runTimeoutMinutes, runHardLimitMinutes: ${live.durationsError}`);
 
   let selected: string[] = [];
   if (data.notifyTypes !== undefined) {

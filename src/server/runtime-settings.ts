@@ -28,8 +28,8 @@ export const maxRunsSettingSchema = z.number().int().min(0);
 /** `defaultMaxBudgetUsd` and `weeklyBudgetUsd` of myhq.json: dollars, more than 0. */
 export const budgetSettingSchema = z.number().positive().max(10_000);
 
-/** `runTimeoutMinutes` and `runHardLimitMinutes` of myhq.json: minutes, more than 0 (a week at most). */
-export const minutesSettingSchema = z.number().positive().max(10_080);
+/** `runTimeoutMinutes` and `runHardLimitMinutes` of myhq.json: minutes, 1 at least (a week at most). */
+export const minutesSettingSchema = z.number().min(1).max(10_080);
 
 export const RUNTIME_KEYS = [
   "scheduler",

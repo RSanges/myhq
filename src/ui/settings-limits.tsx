@@ -236,7 +236,7 @@ export function LimitsTab({ settings, onSaved, onDirtyChange }: Props) {
             value={form.hardLimit}
             placeholder={String(budgets.runHardLimitMinutes.fallback)}
             invalid={Boolean(errors.hardLimit)}
-            error={l.positiveInvalid}
+            error={l.hardLimitInvalid}
             onChange={(hardLimit) => set({ hardLimit })}
             hint={
               <>
