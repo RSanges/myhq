@@ -31,7 +31,8 @@ export type LiveRoomState =
 export function useLiveRoom(): { state: LiveRoomState; version: number; now: number; connected: boolean; retry: () => void } {
   const [state, setState] = useState<LiveRoomState>({ status: "loading" });
   const [version, setVersion] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  // 0 until the first read: the page is prerendered, where the time cannot be read.
+  const [now, setNow] = useState(0);
   const [connected, setConnected] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const sequence = useRef(0);
@@ -54,6 +55,7 @@ export function useLiveRoom(): { state: LiveRoomState; version: number; now: num
         const room = await fetchLiveRoom();
         if (closed || mine !== sequence.current) return;
         setState({ status: "ready", room });
+        setNow(Date.now());
         setVersion((value) => value + 1);
       } catch (error) {
         if (closed || mine !== sequence.current) return;

@@ -145,7 +145,7 @@ export function LiveRoomView() {
             <SiteNav current="live" />
             <p className="wall-live" role="status" data-connected={connected ? "" : undefined}>
               <span className="wall-live-dot watch-live-dot" aria-hidden />
-              {connected ? t.liveAt(formatTime(new Date(now).toISOString())) : t.reconnecting}
+              {connected && now > 0 ? t.liveAt(formatTime(new Date(now).toISOString())) : t.reconnecting}
             </p>
           </div>
           <div className="watch-hero-main">

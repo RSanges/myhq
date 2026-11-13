@@ -4966,3 +4966,8 @@ h2.watch-who {
     transition: none !important;
   }
 }
+
+/* The stage scrolls as a whole: its parts keep their height. */
+.watch-stage > * {
+  flex-shrink: 0;
+}
