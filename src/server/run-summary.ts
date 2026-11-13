@@ -50,7 +50,7 @@ export function summaryPrompt(p: { task: string; mailbox: readonly MailboxTask[]
   }
   lines.push(
     "",
-    `Write one line of at most ${SUMMARY_MAX - 10} characters, in the language of the tag "${p.language}", saying what the agent is asked to do.`,
+    `Write one line of at most 12 words and ${SUMMARY_MAX - 10} characters, in the language of the tag "${p.language}", saying what the agent is asked to do.`,
     "Start with a verb. Name the subject of the work: when the instruction only says to handle the mailbox, say what its tasks are about, never \"handle the mailbox\".",
     "No preamble, no quotes, no markdown, no final period.",
   );
