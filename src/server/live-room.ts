@@ -4,6 +4,7 @@ import { ATTACHMENT_TYPES, AttachmentError, resolveInside } from "./attachments"
 import type { Db, RunRow, RunStatus } from "./db";
 import { HqError } from "./errors";
 import { estimateCostUsd, journalUsage } from "./long-runs";
+import { runSummary } from "./run-summary";
 import type { Agent, Home, Room } from "./rooms";
 import { patternRegExp, relativeInside } from "./write-guard-lib.mjs";
 
@@ -170,6 +171,8 @@ export type LiveTileDto = {
   agentId: string;
   agentName: string;
   task: string;
+  /** What the agent is asked to do, in one line (run-summary.ts); null: none (yet), the task says it. */
+  taskSummary: string | null;
   /** working: its run is in progress; waiting: in progress, its latest status says it waits; done: ended under 5 minutes ago. */
   state: "working" | "waiting" | "done";
   runStatus: RunStatus;
@@ -316,6 +319,7 @@ function tileOf(db: Db, home: Home, runsDir: string, run: RunRow, now: number): 
     agentId: run.agent_id,
     agentName: found?.agent.name ?? run.agent_id,
     task: run.task,
+    taskSummary: runSummary(db, run.id),
     state: !running ? "done" : waiting ? "waiting" : "working",
     runStatus: run.status,
     startedAt: run.started_at,

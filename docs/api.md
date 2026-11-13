@@ -481,7 +481,7 @@ data: {Run}
 
 | `event` | `data` | Sent when |
 |---|---|---|
-| `run` | Run | a run starts, and when its status changes (end) |
+| `run` | Run | a run starts, when its status changes (end), and when it gets the summary of its task (`GET /api/live`) |
 | `event` | Event | the runner stores an event of a run |
 | `message` | Message | an agent sends a message |
 | `approval` | Approval | an agent submits an item, and when the item is decided |
@@ -965,7 +965,7 @@ behind a shared resource have no run and no tile.
   "tiles": [
     {
       "runId": 12, "room": "studio", "roomColor": "#f5a524", "agentId": "editor", "agentName": "Editor",
-      "task": "Cut the trailer", "state": "working", "runStatus": "running",
+      "task": "Cut the trailer", "taskSummary": null, "state": "working", "runStatus": "running",
       "startedAt": "2026-11-13T19:27:00.000Z", "endedAt": null, "costUsd": 0.42,
       "status": { "text": "rend l'essai 3", "at": "2026-11-13T20:03:00.000Z" },
       "previous": [{ "text": "recadre la fin du plan 2", "at": "2026-11-13T19:58:00.000Z" }],
@@ -984,6 +984,12 @@ behind a shared resource have no run and no tile.
 }
 ```
 
+- `taskSummary`: what the agent is asked to do, in one line of at most 90
+  characters written by a small model at the run's start (architecture.md,
+  "The surveillance room"); null when the task needs none (one line of at
+  most 120 characters), while it is being written, or when its call failed:
+  `task` then says it. A run that gets its summary sends a `run` event on
+  `GET /api/events`.
 - `state`: `working`; `waiting` (in progress, and its latest `hq_status` was
   given with `waiting`: `status.text` is the reason, `waitingSince` its time);
   `done` (ended under 5 minutes ago, whatever `runStatus` it ended with).

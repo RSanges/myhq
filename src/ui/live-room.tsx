@@ -22,6 +22,7 @@ import {
   mergeTimeline,
   pausedMinutes,
   shownIndex,
+  taskHeadline,
   type TimelineEntry,
 } from "./live-room-model";
 import type { LiveRun, LiveTile, PieceVersion } from "./schemas";
@@ -326,7 +327,7 @@ function Info({ tile, now, pin }: { tile: LiveTile; now: number; pin: PieceVersi
     <>
       <p className="watch-task">
         <small>{t.task}</small>
-        {tile.task}
+        {taskHeadline(tile)}
       </p>
       {tile.state === "waiting" && tile.status && (
         <p className="watch-wait">
@@ -582,7 +583,7 @@ function Panel(props: {
           <div className="watch-panel-body">
             <section className="watch-stage">
               <div className="watch-stage-top">
-                <h3 className="wall-display">{tile.task}</h3>
+                <h3 className="wall-display">{taskHeadline(tile)}</h3>
                 {canCompare(piece) && (
                   <div className="watch-seg" role="group" aria-label={t.panel.display}>
                     <button type="button" aria-pressed={!comparing} onClick={() => setCompare(false)}>
@@ -594,6 +595,12 @@ function Panel(props: {
                   </div>
                 )}
               </div>
+              {tile.taskSummary && (
+                <details className="watch-full-task">
+                  <summary>{t.panel.fullTask}</summary>
+                  <p>{tile.task}</p>
+                </details>
+              )}
               {tile.state === "waiting" && tile.status && (
                 <p className="watch-wait">
                   <HoldIcon />

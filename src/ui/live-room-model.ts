@@ -22,6 +22,9 @@ export function elapsedText(tile: LiveTile, now: number): string {
 /** The minutes since an instant, for « En pause depuis 3 min ». */
 export const pausedMinutes = minutesSince;
 
+/** What a tile says the agent is asked to do: the run's one-line summary when there is one, else its task. */
+export const taskHeadline = (tile: Pick<LiveTile, "task" | "taskSummary">): string => tile.taskSummary ?? tile.task;
+
 /** The figures of the hero: agents at work, agents waiting, and the cost of the runs in progress. */
 export function liveFigures(tiles: readonly LiveTile[]): { working: number; waiting: number; costUsd: number } {
   let working = 0;
@@ -102,7 +105,7 @@ export function mergeTimeline(tile: LiveTile, statuses: LiveRun["timeline"]): Ti
       }
     }
   }
-  const timeline: TimelineEntry[] = [{ key: "start", at: tile.startedAt, kind: "start", text: tile.task }, ...entries];
+  const timeline: TimelineEntry[] = [{ key: "start", at: tile.startedAt, kind: "start", text: taskHeadline(tile) }, ...entries];
   if (tile.state === "done" && tile.endedAt) timeline.push({ key: "end", at: tile.endedAt, kind: "end" });
   return timeline;
 }
