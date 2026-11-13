@@ -520,12 +520,14 @@ function Gesture({ title, body, danger, children }: { title: string; body: strin
   );
 }
 
-/** One verification of the deletion dialog. */
-function Check({ ok, title, hint, link }: { ok: boolean; title: ReactNode; hint: string; link?: ReactNode }) {
+/** One verification of the deletion dialog: passed, refused, or a note that blocks nothing. */
+function Check({ ok, note, title, hint, link }: { ok: boolean; note?: boolean; title: ReactNode; hint: string; link?: ReactNode }) {
+  const mark = note ? "!" : ok ? "✓" : "✕";
+  const tone = note ? "text-muted" : ok ? "text-ok" : "text-danger";
   return (
-    <li className="flex gap-3 px-3 py-2" data-ok={ok || undefined}>
-      <span className={`settings-check ${ok ? "text-ok" : "text-danger"}`} aria-hidden="true">
-        {ok ? "✓" : "✕"}
+    <li className="flex gap-3 px-3 py-2" data-ok={ok || undefined} data-note={note || undefined}>
+      <span className={`settings-check ${tone}`} aria-hidden="true">
+        {mark}
       </span>
       <div className="min-w-0 space-y-0.5">
         <p className="text-sm font-medium break-words">{title}</p>
@@ -577,6 +579,7 @@ function DeleteDialog({
 
   const blocked = check !== null && check.blocked.length > 0;
   const problems = check?.workDirs.filter((entry) => entry.problem !== null) ?? [];
+  const notices = check?.workDirs.filter((entry) => entry.notice !== null) ?? [];
 
   return (
     <Modal className="settings-dialog" labelledBy="delete-title" onClose={onClose}>
@@ -642,6 +645,25 @@ function DeleteDialog({
                 }
                 hint={problems.length === 0 ? d.checks.gitOkHint : d.checks.gitHint}
               />
+              {notices.length > 0 && (
+                <Check
+                  ok
+                  note
+                  title={
+                    <>
+                      {d.checks.ownRepo}
+                      <span className="block font-normal">
+                        {notices.map((entry) => (
+                          <span key={entry.dir} className="block break-all text-xs">
+                            {d.checks.ownRepoLine(entry.dir)}
+                          </span>
+                        ))}
+                      </span>
+                    </>
+                  }
+                  hint={d.checks.ownRepoHint}
+                />
+              )}
             </ul>
             {!blocked && (
               <>

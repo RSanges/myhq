@@ -184,6 +184,8 @@ export const deletionCheckSchema = z.object({
           z.object({ kind: z.literal("unchecked"), detail: z.string() }),
         ])
         .nullable(),
+      /** A working directory with its own repository: never inspected with Git, noted without blocking. */
+      notice: z.object({ kind: z.literal("ownRepo"), gitdir: z.string() }).nullable(),
     }),
   ),
   blocked: z.array(z.enum(["running", "pending", "workDirs"])),

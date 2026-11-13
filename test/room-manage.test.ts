@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
+import { POST as pausePost } from "../src/app/api/rooms/[room]/pause/route";
 import type { HqConfig } from "../src/server/config";
 import { getDbAt, type Db } from "../src/server/db";
 import { HqError } from "../src/server/errors";
@@ -301,18 +302,66 @@ test("a Git folder that cannot be checked refuses the deletion; a folder outside
   const plain = path.join(config.home, "data", "work", "demo", "scout");
   fs.mkdirSync(plain, { recursive: true });
   assert.equal(workDirProblem(plain), null);
-  // Git missing while the folder is a repository: refused, never a pass.
-  fs.mkdirSync(path.join(plain, ".git"));
-  const missing = () => {
+  // The home is a repository (its .git outside the working directory): Git runs, and a failure refuses.
+  fs.mkdirSync(path.join(config.home, ".git"));
+  const seen: string[][] = [];
+  const missing = (args: string[]) => {
+    seen.push(args);
     throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
   };
   assert.equal(workDirProblem(plain, missing)?.kind, "unchecked");
+  // Every Git command of the check turns fsmonitor off and takes no optional lock.
+  assert.deepEqual(seen[0]?.slice(0, 3), ["-c", "core.fsmonitor=false", "--no-optional-locks"]);
   const failing = () => {
     throw Object.assign(new Error("fatal"), { stderr: "fatal: unsafe repository" });
   };
   assert.equal(workDirProblem(plain, failing)?.kind, "unchecked");
+  const timedOut = () => {
+    throw Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT", signal: "SIGTERM" });
+  };
+  assert.deepEqual(workDirProblem(plain, timedOut), { kind: "unchecked", detail: "git took more than 5 s" });
   assert.deepEqual(deletionCheck(config, db, "demo", failing).blocked, ["workDirs"]);
   assert.equal(code(() => deleteRoom(config, db, "demo", "demo", failing)), "ROOM_DELETE_REFUSED");
+});
+
+test("a working directory with its own repository is never inspected with Git, and only noted", () => {
+  const { config, db } = office();
+  const work = path.join(config.home, "data", "work", "demo", "scout");
+  fs.mkdirSync(work, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: work, stdio: "ignore" });
+  // A configuration the agent could write: a plain git status would run this command.
+  const witness = path.join(config.home, "witness.txt");
+  execFileSync("git", ["config", "core.fsmonitor", `echo pwned > "${witness.replace(/\\/g, "/")}"`], { cwd: work, stdio: "ignore" });
+  fs.writeFileSync(path.join(work, "draft.md"), "draft\n");
+  let calls = 0;
+  const counting = (args: string[], cwd: string) => {
+    calls += 1;
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  };
+  const state = workDirProblem(work, counting);
+  assert.equal(state?.kind, "ownRepo");
+  assert.equal(calls, 0);
+  assert.equal(fs.existsSync(witness), false);
+  const check = deletionCheck(config, db, "demo");
+  assert.deepEqual(check.blocked, []);
+  assert.equal(check.workDirs.find((entry) => entry.agent === "scout")?.notice?.kind, "ownRepo");
+  assert.equal(check.workDirs.find((entry) => entry.agent === "scout")?.problem, null);
+  assert.equal(fs.existsSync(witness), false);
+
+  // A .git file that points to a Git directory inside the working directory is the same.
+  const other = path.join(config.home, "data", "work", "demo", "analyst");
+  fs.mkdirSync(path.join(other, "hidden", "objects"), { recursive: true });
+  fs.writeFileSync(path.join(other, ".git"), "gitdir: hidden\n");
+  calls = 0;
+  assert.equal(workDirProblem(other, counting)?.kind, "ownRepo");
+  assert.equal(calls, 0);
+  // The deletion goes through and leaves both folders where they are.
+  deleteRoom(config, db, "demo", "demo");
+  assert.ok(fs.existsSync(path.join(work, "draft.md")));
+  assert.equal(fs.existsSync(witness), false);
+  // The trap was real: a plain status in that folder runs the command.
+  execFileSync("git", ["status", "--porcelain"], { cwd: work, stdio: "ignore" });
+  assert.equal(fs.existsSync(witness), true);
 });
 
 test("a room folder that is a link out of the home is never moved", { skip: process.platform === "win32" }, () => {
@@ -326,3 +375,40 @@ test("a room folder that is a link out of the home is never moved", { skip: proc
   assert.ok(fs.existsSync(path.join(outside, "demo", "room.json")));
 });
 
+
+const savedHome = process.env.MYHQ_HOME;
+afterEach(() => {
+  if (savedHome === undefined) delete process.env.MYHQ_HOME;
+  else process.env.MYHQ_HOME = savedHome;
+});
+
+test("HTTP: a gesture needs a JSON body, so that a plain form of another page cannot send it", async () => {
+  const { config, db } = office();
+  process.env.MYHQ_HOME = config.home;
+  const post = (body: string, type: string | null) =>
+    pausePost(
+      new Request("http://localhost/api/rooms/demo/pause", {
+        method: "POST",
+        body,
+        headers: type ? { "content-type": type } : {},
+      }),
+      { params: Promise.resolve({ room: "demo" }) },
+    );
+  const errorCode = async (response: Response) => ((await response.json()) as { error: { code: string } }).error.code;
+
+  const form = await post("a=1", "application/x-www-form-urlencoded");
+  assert.equal(form.status, 415);
+  assert.equal(await errorCode(form), "UNSUPPORTED_MEDIA_TYPE");
+  const plain = await post("{}", "text/plain");
+  assert.equal(plain.status, 415);
+  const none = await post("{}", null);
+  assert.equal(none.status, 415);
+  const extra = await post(JSON.stringify({ room: "other" }), "application/json");
+  assert.equal(extra.status, 400);
+  assert.equal(await errorCode(extra), "INVALID_INPUT");
+  assert.equal(roomPauses(db).has("demo"), false);
+
+  const ok = await post("{}", "application/json; charset=utf-8");
+  assert.equal(ok.status, 200);
+  assert.equal(roomPauses(db).has("demo"), true);
+});

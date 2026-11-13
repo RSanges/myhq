@@ -28,6 +28,7 @@ Every error has the same shape and an HTTP status:
 | `QUESTION_NOT_FOUND` | 404 | A decision on a proposed run for a question that is not one of this agent's. |
 | `PROPOSAL_NOT_FOUND` | 404 | A decision on a proposed run for a question whose answer proposes none. |
 | `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | A room gesture (`POST /api/rooms/[room]/pause`, `resume`, `archive`, `restore`) sent without `content-type: application/json`. |
 | `ROOM_BUSY` | 409 | Archiving a room while a run of it is in progress. |
 | `ROOM_ARCHIVED` | 409 | A gesture on an archived room other than restoring or deleting it. |
 | `ROOM_NOT_ARCHIVED` | 404 | Restoring a room that is not archived. |
@@ -1236,6 +1237,13 @@ takes the room's name in the path (a room id, checked with zod), acts at once an
 returns every setting, `{ "settings": ... }` in the shape of `GET /api/settings`.
 None of them erases a file or a row of the database.
 
+The four `POST` take the body `{}` (no other field) and require
+`content-type: application/json`: a page of another site can post a plain form
+to the app without the browser asking first, never a JSON request, so such a
+form cannot pause or archive a room. Without that type they answer
+`UNSUPPORTED_MEDIA_TYPE` (415). The other routes of the app are not hardened
+this way yet.
+
 | Route | Does | Errors |
 |---|---|---|
 | `POST /api/rooms/[room]/pause` | Disarms every armed routine of the room and remembers which agents were armed. Nothing changes for a room already paused. | `ROOM_NOT_FOUND`, `ROOM_INVALID`, `ROOM_ARCHIVED` |
@@ -1256,8 +1264,9 @@ Read only.
     "running": null,
     "pending": 0,
     "workDirs": [
-      { "agent": "dev", "dir": "data/worktrees/demo/dev", "problem": { "kind": "unmerged", "commits": 2, "branch": "origin/main" } },
-      { "agent": "scout", "dir": "data/work/demo/scout", "problem": null }
+      { "agent": "dev", "dir": "data/worktrees/demo/dev", "problem": { "kind": "unmerged", "commits": 2, "branch": "origin/main" }, "notice": null },
+      { "agent": "scout", "dir": "data/work/demo/scout", "problem": null, "notice": null },
+      { "agent": "maker", "dir": "data/work/demo/maker", "problem": null, "notice": { "kind": "ownRepo", "gitdir": "data/work/demo/maker/.git" } }
     ],
     "blocked": ["workDirs"],
     "configDir": "rooms/demo",
@@ -1271,7 +1280,14 @@ Read only.
 `problem` is null for a folder that may stay as it is, else `dirty` (`files`:
 uncommitted changes), `unmerged` (`commits` of its HEAD on no default branch,
 `branch` the first one compared) or `unchecked` (`detail`: why Git could not
-check it). `blocked` lists `running`, `pending` and `workDirs` when they block.
+check it). `notice` marks a folder that holds its own Git repository (its Git
+directory inside the folder, where the agent may have written the
+configuration): MyHQ never runs Git there, since a configuration can make a
+mere `git status` run a program, and the folder blocks nothing, since a
+deletion does not move it; check it by hand. Elsewhere Git runs with
+`core.fsmonitor=false`, `--no-optional-locks` and 5 seconds per command, a
+timeout being a refusal like any failure. `blocked` lists `running`, `pending`
+and `workDirs` when they block.
 
 #### `DELETE /api/rooms/[room]`
 

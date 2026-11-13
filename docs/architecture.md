@@ -314,8 +314,15 @@ manages the rooms of the home in its « Salles » tab
   is a Git repository or worktree of its own, commits of its HEAD that are on
   no default branch of its repository (`origin/HEAD`, else a local `main` or
   `master`). The check is conservative: a Git folder it cannot check (Git
-  missing, no default branch, an error) refuses the deletion and says why; a
-  folder that is not under Git passes. Only the name of a room loaded from the
+  missing, no default branch, an error, 5 seconds without an answer) refuses
+  the deletion and says why; a folder that is not under Git passes. Git never
+  runs where the agent could have written its configuration: the Git
+  directory is found without Git (the nearest `.git` going up, a `.git` file
+  followed to its `gitdir:`), and when it lies inside the working directory
+  the folder is only noted, without blocking (a configuration such as
+  `core.fsmonitor` would make a mere `git status` run a program in the app's
+  process). Every other Git command of the check runs with
+  `core.fsmonitor=false` and `--no-optional-locks`. Only the name of a room loaded from the
   home is accepted, every path is resolved inside the home once its links are
   followed, and a room folder that is a link is never moved.
 

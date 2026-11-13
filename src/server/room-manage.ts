@@ -25,6 +25,9 @@ import { dayKey } from "./time";
 // - deleting a room moves `rooms/<name>/` to `archives/rooms/<name>-<day>/`
 //   and leaves its working directories, worktrees and history where they are.
 
+/** The body of the gestures POST /api/rooms/<room>/(pause|resume|archive|restore): an empty JSON object. */
+export const gestureBodySchema = z.strictObject({});
+
 /** The body of DELETE /api/rooms/<room>: the room's name typed by the owner. */
 export const deleteRoomSchema = z.strictObject({ confirm: z.string().max(200) });
 
@@ -200,22 +203,70 @@ export function removeAgent(config: HqConfig, db: Db, roomName: string, agentId:
 
 // --- Deleting a room -------------------------------------------------------------------
 
-/** Runs Git in `cwd` and returns its trimmed output; throws on a failure (exit code, missing binary). */
+/** Runs Git in `cwd` and returns its trimmed output; throws on a failure (exit code, missing binary, timeout). */
 export type GitRunner = (args: string[], cwd: string) => string;
 
+/** How long one Git command of the check may take. */
+export const GIT_TIMEOUT_MS = 5_000;
+
 const runGit: GitRunner = (args, cwd) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    timeout: GIT_TIMEOUT_MS,
+  }).trim();
+
+/**
+ * Every Git command of the check runs with these: no fsmonitor hook and no
+ * optional lock, so that a status never runs a program named in a
+ * configuration, nor writes the index.
+ */
+const SAFE_GIT = ["-c", "core.fsmonitor=false", "--no-optional-locks"];
 
 const gitMessage = (error: unknown): string => {
+  if ((error as { signal?: string }).signal === "SIGTERM" || (error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    return `git took more than ${GIT_TIMEOUT_MS / 1000} s`;
+  }
   const stderr = (error as { stderr?: string | Buffer }).stderr?.toString().trim();
   return stderr || (error instanceof Error ? error.message : String(error));
 };
 
-/** Whether `dir` or one of its parents holds a `.git` entry (Git would treat it as a repository). */
-function underGit(dir: string): boolean {
+const realOrResolved = (p: string): string => {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+
+/**
+ * The Git directory Git would use for `dir`, found without running Git: the
+ * nearest `.git` going up from `dir` (a folder is the Git directory; a file
+ * names it on its `gitdir:` line, relative to the file), with links followed.
+ * Null when there is none: the folder is not under Git. A `.git` file that
+ * cannot be read stands for itself.
+ */
+export function resolveGitDir(dir: string): string | null {
   for (let current = path.resolve(dir); ; current = path.dirname(current)) {
-    if (fs.existsSync(path.join(current, ".git"))) return true;
-    if (path.dirname(current) === current) return false;
+    const entry = path.join(current, ".git");
+    let stat: fs.Stats | null;
+    try {
+      stat = fs.statSync(entry);
+    } catch {
+      stat = null;
+    }
+    if (stat?.isDirectory()) return realOrResolved(entry);
+    if (stat?.isFile()) {
+      try {
+        const line = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(entry, "utf8"))?.[1];
+        return line ? realOrResolved(path.resolve(current, line)) : realOrResolved(entry);
+      } catch {
+        return realOrResolved(entry);
+      }
+    }
+    if (path.dirname(current) === current) return null;
   }
 }
 
@@ -231,34 +282,48 @@ export type WorkDirProblem =
   | { kind: "unchecked"; detail: string };
 
 /**
- * Checks an agent's working directory before its room is deleted. A folder
- * that does not exist or is not under Git passes. Under Git, the files of the
- * folder must have no uncommitted change (untracked files count, ignored ones
- * do not); and when the folder is a repository or a worktree of its own, its
- * HEAD must hold no commit that is not on the default branch of its
- * repository (`origin/HEAD`, else a local `main` or `master`). Conservative:
- * a Git folder that cannot be checked is a problem, never a pass.
+ * A working directory that holds its own Git repository (its Git directory
+ * inside it, where the agent may have written the configuration): MyHQ never
+ * runs Git there, and says so without blocking (a deletion does not move it).
  */
-export function workDirProblem(dir: string, git: GitRunner = runGit): WorkDirProblem | null {
+export type WorkDirNotice = { kind: "ownRepo"; gitdir: string };
+
+/**
+ * Checks an agent's working directory before its room is deleted. A folder
+ * that does not exist or is not under Git passes. Git only ever runs on a
+ * repository the agent cannot configure: when the Git directory (found
+ * without Git, `resolveGitDir`) is inside the working directory, the answer is
+ * a notice and no Git command runs, since a configuration written by the agent
+ * could make a mere `git status` run a program in this process. Otherwise,
+ * with fsmonitor off, no optional lock and a timeout: the files of the folder
+ * must have no uncommitted change (untracked files count, ignored ones do
+ * not); and when the folder is a worktree of its own, its HEAD must hold no
+ * commit that is not on the default branch of its repository (`origin/HEAD`,
+ * else a local `main` or `master`). Conservative: a Git folder that cannot be
+ * checked is a problem, never a pass.
+ */
+export function workDirProblem(dir: string, git: GitRunner = runGit): WorkDirProblem | WorkDirNotice | null {
   if (!fs.existsSync(dir)) return null;
+  const gitdir = resolveGitDir(dir);
+  if (gitdir === null) return null;
+  const real = realOrResolved(dir);
+  if (isInside(real, gitdir)) return { kind: "ownRepo", gitdir };
+  const run = (args: string[]) => git([...SAFE_GIT, ...args], dir);
   let top: string;
   try {
-    top = git(["rev-parse", "--show-toplevel"], dir);
+    top = run(["rev-parse", "--show-toplevel"]);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return underGit(dir) ? { kind: "unchecked", detail: "git is not available" } : null;
-    }
-    if (/not a git repository/i.test(gitMessage(error)) && !underGit(dir)) return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "unchecked", detail: "git is not available" };
     return { kind: "unchecked", detail: gitMessage(error) };
   }
   try {
-    const status = git(["status", "--porcelain", "--untracked-files=all", "--", "."], dir);
+    const status = run(["status", "--porcelain", "--untracked-files=all", "--", "."]);
     if (status !== "") return { kind: "dirty", files: status.split("\n").length };
     // A folder inside another repository (the home, say) holds no commit of its own.
-    if (!samePath(fs.realpathSync.native(top), fs.realpathSync.native(dir))) return null;
+    if (!samePath(realOrResolved(top), real)) return null;
     let head = true;
     try {
-      git(["rev-parse", "--verify", "-q", "HEAD"], dir);
+      run(["rev-parse", "--verify", "-q", "HEAD"]);
     } catch {
       head = false;
     }
@@ -266,13 +331,13 @@ export function workDirProblem(dir: string, git: GitRunner = runGit): WorkDirPro
     if (!head) return null;
     const refs: string[] = [];
     try {
-      refs.push(git(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], dir));
+      refs.push(run(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"]));
     } catch {
       // No remote default: the local branches below.
     }
     for (const branch of ["main", "master"]) {
       try {
-        git(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], dir);
+        run(["rev-parse", "--verify", "-q", `refs/heads/${branch}`]);
         refs.push(branch);
       } catch {
         // Not there.
@@ -280,7 +345,7 @@ export function workDirProblem(dir: string, git: GitRunner = runGit): WorkDirPro
     }
     const targets = refs.filter((ref) => ref !== "");
     if (targets.length === 0) return { kind: "unchecked", detail: "no default branch found (origin/HEAD, main or master)" };
-    const count = Number(git(["rev-list", "--count", "HEAD", "--not", ...targets], dir));
+    const count = Number(run(["rev-list", "--count", "HEAD", "--not", ...targets]));
     if (!Number.isInteger(count)) return { kind: "unchecked", detail: "git rev-list gave no count" };
     return count > 0 ? { kind: "unmerged", commits: count, branch: targets[0]! } : null;
   } catch (error) {
@@ -296,7 +361,8 @@ export type DeletionCheck = {
   /** Items of the room, or addressed to it, that wait for a decision. */
   pending: number;
   /** The working directories (relative to the home) and what blocks each, null when it may go. */
-  workDirs: { agent: string; dir: string; problem: WorkDirProblem | null }[];
+  /** And, apart, a working directory with its own repository: never inspected, never blocking. */
+  workDirs: { agent: string; dir: string; problem: WorkDirProblem | null; notice: WorkDirNotice | null }[];
   /** What blocks the deletion, empty when it may go. */
   blocked: ("running" | "pending" | "workDirs")[];
   /** The configuration folder, relative to the home, and where it would go. */
@@ -332,7 +398,10 @@ export function deletionCheck(config: HqConfig, db: Db, name: string, git: GitRu
   const workDirs = room.agents.flatMap((agent) => {
     if (seen.has(agent.workDir)) return [];
     seen.add(agent.workDir);
-    return [{ agent: agent.id, dir: toPosix(path.relative(config.home, agent.workDir)), problem: workDirProblem(agent.workDir, git) }];
+    const state = workDirProblem(agent.workDir, git);
+    const notice = state?.kind === "ownRepo" ? { kind: "ownRepo" as const, gitdir: toPosix(path.relative(config.home, state.gitdir)) } : null;
+    const problem = state && state.kind !== "ownRepo" ? state : null;
+    return [{ agent: agent.id, dir: toPosix(path.relative(config.home, agent.workDir)), problem, notice }];
   });
   const blocked: DeletionCheck["blocked"] = [];
   if (running) blocked.push("running");

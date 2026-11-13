@@ -117,7 +117,7 @@ export async function saveSettingsGroup(group: "layout" | "limits" | "notificati
 
 /** A gesture on a room of the settings page; returns every setting as it is now. */
 export async function roomGesture(room: string, gesture: "pause" | "resume" | "archive" | "restore"): Promise<SettingsView> {
-  return (await request(`/api/rooms/${encodeURIComponent(room)}/${gesture}`, settingsResponseSchema, { method: "POST" })).settings;
+  return (await request(`/api/rooms/${encodeURIComponent(room)}/${gesture}`, settingsResponseSchema, jsonInit("POST", {}))).settings;
 }
 
 /** Removes an agent from its room (room.json only); returns every setting as it is now. */
