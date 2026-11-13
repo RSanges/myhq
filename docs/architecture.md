@@ -121,7 +121,7 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Nineteen tools, all validated with zod:
+room) and writes directly to SQLite. Twenty tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
@@ -141,6 +141,7 @@ room) and writes directly to SQLite. Nineteen tools, all validated with zod:
 | `hq_blocked()` | Supervisor only: read the Standard, every entry but its own (see "The supervisor"). Read-only. |
 | `hq_relaunch(kind, id, message?)` | Supervisor only: « Relancer » an entry of the Standard, with its guards, once per task. |
 | `hq_blocked_note(kind, id, text, handOff?)` | Supervisor only: a sentence for the owner on an entry of the Standard; `handOff` hands it to the owner. |
+| `hq_blocked_close(kind, id, reason)` | Supervisor only: « Clore » an entry of the Standard it settled, with its reason; the owner may reopen it. |
 | `hq_run_status(runId)` | Supervisor only: a run as it checks it, with MyHQ's hints on its activity (see "Long runs"). Read-only. |
 | `hq_run_extend(runId, minutes)` | Supervisor only: 10 to 60 more minutes for a long run, never past its hard limit. |
 | `hq_run_stop(runId, reason)` | Supervisor only: interrupts a stuck run, with the reason shown on the Standard. |
@@ -1059,6 +1060,15 @@ stuck, not of entries. Two actions, with a light confirmation on the page:
 - **Clore** (`POST /api/blocked/close`): the tasks of the entry are `done`
   with the note « Close par le propriétaire. ». Nothing wakes.
 
+The count and the entries are only what is open: an entry closed, by the
+owner or by the supervisor, is off the Standard since its tasks are done.
+Under the entries, a list folded by default, « Clos par <its name> » (the name
+of the supervisor, from the home), shows what the supervisor closed itself in
+the last 7 days (`closures` of `GET /api/desk`): the agent, why it was stuck,
+the supervisor's reason and the date, with **Rouvrir** on each one still
+closed (`POST /api/blocked/reopen`, see "The supervisor"). A reopened one stays
+listed, marked « Rouverte le ... ».
+
 An entry also shows the latest note of the supervisor on its tasks (« Note de
 <its name> : ... », see below). An entry the supervisor handed to the owner is
 marked « Remis au propriétaire », drawn apart and listed first, whatever its
@@ -1076,18 +1086,20 @@ into the `supervisors` table, which the HQ MCP server reads.
 
 - **Rights.** `hq_blocked` lists the entries of the Standard, the
   supervisor's own excepted, with what `listBlocked` gives: `target` (the
-  `{ kind, id }` that `hq_relaunch` and `hq_blocked_note` take: `task` for a
+  `{ kind, id }` that `hq_relaunch`, `hq_blocked_note` and `hq_blocked_close` take: `task` for a
   blocked or pending task, `run` for a failed or interrupted run), room,
   agent, state, since, reason, the text of the task (1500 characters at most,
   `textTruncated`), its task ids, the supervisor's last `note`, `handedOff`,
   and `relaunched` (a supervisor already relaunched one of its tasks).
   `hq_message` reaches any agent of any room (an agent it wrote to may answer
   it, as a studio's requester can). `hq_items` reads the items of every room.
-- **Limits.** It approves, rejects and closes nothing: those are the owner's,
-  on the desk and Telegram, never an MCP tool. Its `hq_submit` takes only the
-  type `owner_note`, stored informational (`unseen`, it never waits for a
-  decision). Any other agent that calls `hq_blocked`, `hq_relaunch` or
-  `hq_blocked_note` gets a tool error that says the tool is the supervisor's.
+- **Limits.** It approves and rejects nothing: those are the owner's, on the
+  desk and Telegram, never an MCP tool. It closes only what it settled
+  (`hq_blocked_close`, below), never an entry handed to the owner. Its
+  `hq_submit` takes only the type `owner_note`, stored informational
+  (`unseen`, it never waits for a decision). Any other agent that calls
+  `hq_blocked`, `hq_relaunch`, `hq_blocked_note` or `hq_blocked_close` gets a
+  tool error that says the tool is the supervisor's.
 - **Relaunch.** `hq_relaunch` follows « Relancer »: the guards of a run
   (agent lock, shared resources, daily cap) are checked first, in the HQ MCP
   server, with the app's cap and anti ping-pong window passed to the run
@@ -1112,6 +1124,33 @@ into the `supervisors` table, which the HQ MCP server reads.
   the entry (text, supervisor, run, `handed_off`). The Standard shows the
   latest one of an entry; `handOff: true` hands it to the owner. A note never
   changes a task.
+- **Closing.** `hq_blocked_close(kind, id, reason)` closes an entry the
+  supervisor settled, or that has no more reason to be, so that the Standard
+  keeps only what the owner must look at. `reason` is one sentence for the
+  owner (10 to 500 characters, required). The effect is the owner's « Clore »
+  (`closeBlocked`): the tasks are `done` and nothing wakes; only their note
+  differs, « Close par <its name> : <reason> ». It is refused on an entry
+  handed to the owner (`HANDED_OFF`: it is the owner's, whoever handed it), on
+  the supervisor's own entries (`OWN_ENTRY`, the ones `hq_blocked` leaves
+  out), and on a target that is not, or no longer, an entry of the Standard
+  (`NOT_ON_STANDARD`, or `NOT_BLOCKED` and `TASK_NOT_FOUND` as for the
+  buttons; a task of a run's entry names the run's target). Each closure is a
+  row of `supervisor_closes` (`closures.ts`): the target, the agent, why it was
+  stuck and its text, the state of each task before (status, note, run,
+  `updated_at`), the reason, the supervisor, its run, and when. Rows are never
+  deleted; the Standard shows those of the last 7 days. A closed entry is off
+  the Standard, so it neither wakes the supervisor again nor counts.
+- **Reopening.** The owner's « Rouvrir » (`POST /api/blocked/reopen`) puts
+  each task back exactly as it was (so that a failed run's entry is
+  recognized again, by its tasks given back at its end), hands the entry to
+  the owner with a note of MyHQ's (« Rouverte par le propriétaire... »), and
+  marks the row `reopened_at`. A task changed since the closure (taken again
+  by a run, relaunched, closed by the owner: its status or `updated_at`
+  differ) refuses the reopening (`STATE_CHANGED`) and nothing is restored.
+  Since the entry is handed to the owner, neither MyHQ's rules nor the
+  wake-ups act on it, and `hq_blocked_close` refuses it. A failed run's entry
+  shows only within its 24 hours: reopened later, its tasks are back but, as
+  for any older run, only the tasks it gave back show, as pending entries.
 - **Rules first.** Much of the supervisor's method is a written rule, and MyHQ
   applies it itself before it wakes the supervisor (`settleByRule`, from
   `entryRule`). Each entry carries the code of why it is stuck (`cause`) and
@@ -1152,8 +1191,8 @@ into the `supervisors` table, which the HQ MCP server reads.
   ping-pong window of the pair.
 
 Migration 16 adds the tables `supervisors`, `blocked_notes`,
-`supervisor_relaunches` and `standard_announced` (idempotent, as every
-migration after 14).
+`supervisor_relaunches` and `standard_announced`, and migration 26 the table
+`supervisor_closes` (idempotent, as every migration after 14).
 
 ### Long runs
 
