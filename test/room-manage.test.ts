@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, test } from "node:test";
 import { POST as pausePost } from "../src/app/api/rooms/[room]/pause/route";
 import type { HqConfig } from "../src/server/config";
-import { getDbAt, type Db } from "../src/server/db";
+import { getDbAt, type Db, type RunRow } from "../src/server/db";
 import { HqError } from "../src/server/errors";
 import {
   archiveRoom,
@@ -102,11 +102,28 @@ test("pausing disarms every armed routine of the room and resuming re-arms exact
   assert.equal(code(() => pauseRoom(config, db, "nope")), "ROOM_NOT_FOUND");
 });
 
+/**
+ * What a fresh scheduler fires around 07:00 (Europe/Paris) on a day of
+ * November: a first tick plans each routine it sees, a second one at 07:00
+ * fires the routines due. A run is recorded instead of started.
+ */
+function firedAtSeven(config: HqConfig, db: Db): string[] {
+  const start = (request: { room: string; agent: string }) =>
+    db
+      .prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at) VALUES (?, ?, 'claude', 'routine', 'done', ?) RETURNING *")
+      .get(request.room, request.agent, new Date().toISOString()) as RunRow;
+  const scheduler = new Scheduler(config, db, { start }, () => {});
+  scheduler.tick(new Date("2026-11-16T05:59:00Z"), config);
+  return scheduler.tick(new Date("2026-11-16T06:00:10Z"), config).map((firing) => `${firing.room}/${firing.agentId} ${firing.outcome}`);
+}
+
 test("an archived room leaves the floor, the scheduler and the runs, keeps its folder and its base, and comes back paused", () => {
   const { config, db } = office();
   db.prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, cost_usd) VALUES ('demo', 'scout', 'claude', 't', 'done', ?, 0.5)").run(
     new Date().toISOString(),
   );
+  // Before: the scout's routine of 07:00 fires (the analyst's, at 08:00, is not due).
+  assert.deepEqual(firedAtSeven(config, db), ["demo/scout started"]);
   archiveRoom(config, db, "demo");
 
   const home = loadHome(config.home);
@@ -118,17 +135,17 @@ test("an archived room leaves the floor, the scheduler and the runs, keeps its f
   assert.match(file.archivedRooms[0]!.at, /^\d{4}-\d{2}-\d{2}$/);
   // The base keeps its rows: the room, its agents, its runs.
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM agents WHERE room = 'demo'").get() as { n: number }).n, 3);
-  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM runs WHERE room = 'demo'").get() as { n: number }).n, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM runs WHERE room = 'demo'").get() as { n: number }).n, 2);
   // Nothing of it fires: the scheduler sees no routine, and a gesture on it is refused.
-  const scheduler = new Scheduler(config, db, {}, () => {});
-  assert.deepEqual(scheduler.tick(new Date()), []);
+  // The same two ticks see no routine of it at all (not even a disarmed one to skip).
+  assert.deepEqual(firedAtSeven(config, db), []);
   assert.equal(code(() => pauseRoom(config, db, "demo")), "ROOM_ARCHIVED");
   assert.equal(code(() => setArmed(config, db, "demo", "scout", true)), "ROOM_NOT_FOUND");
   // The settings list it apart.
   const view = buildSettingsView(config, db, {});
   assert.deepEqual(view.rooms.map((room) => room.name), []);
   assert.equal(view.archivedRooms[0]?.name, "demo");
-  assert.equal(view.archivedRooms[0]?.totalRuns, 1);
+  assert.equal(view.archivedRooms[0]?.totalRuns, 2);
 
   restoreRoom(config, db, "demo");
   assert.deepEqual(loadHome(config.home).rooms.map((room) => room.name), ["demo"]);
@@ -364,15 +381,30 @@ test("a working directory with its own repository is never inspected with Git, a
   assert.equal(fs.existsSync(witness), true);
 });
 
-test("a room folder that is a link out of the home is never moved", { skip: process.platform === "win32" }, () => {
+/** A link to a folder: a junction on Windows (no privilege needed), a symbolic link elsewhere. */
+const linkDir = (target: string, link: string) => fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+
+test("a room folder that is a link out of the home is never moved", () => {
   const { config, db } = office();
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-outside-"));
   const roomDir = path.join(config.home, "rooms", "demo");
   fs.cpSync(roomDir, path.join(outside, "demo"), { recursive: true });
   fs.rmSync(roomDir, { recursive: true });
-  fs.symlinkSync(path.join(outside, "demo"), roomDir, "dir");
-  assert.equal(code(() => deleteRoom(config, db, "demo", "demo")), "ROOM_PATH_REFUSED");
+  linkDir(path.join(outside, "demo"), roomDir);
+  // A linked folder is no room of the home: it is not loaded, so it cannot be named for a deletion.
+  assert.deepEqual(loadHome(config.home).rooms, []);
+  assert.ok(["ROOM_NOT_FOUND", "ROOM_PATH_REFUSED"].includes(code(() => deleteRoom(config, db, "demo", "demo")) ?? ""));
   assert.ok(fs.existsSync(path.join(outside, "demo", "room.json")));
+});
+
+test("an archives folder that is a link out of the home receives nothing", () => {
+  const { config, db } = office();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-outside-"));
+  fs.mkdirSync(path.join(config.home, "archives"), { recursive: true });
+  linkDir(outside, path.join(config.home, "archives", "rooms"));
+  assert.equal(code(() => deleteRoom(config, db, "demo", "demo")), "ROOM_PATH_REFUSED");
+  assert.ok(fs.existsSync(path.join(config.home, "rooms", "demo", "room.json")));
+  assert.deepEqual(fs.readdirSync(outside), []);
 });
 
 
