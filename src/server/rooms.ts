@@ -6,6 +6,7 @@ import { isInside } from "./config";
 import { cronError } from "./cron";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
+import { patternRegExp } from "./write-guard-hook.mjs";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
 export const idSchema = z
@@ -164,6 +165,15 @@ export const agentSchema = z.strictObject({
    * program then arguments, relative to the home (its cwd). It reads the item as JSON on stdin.
    */
   approvalCommand: z.array(z.string().min(1).max(4_000)).min(1).max(64).optional(),
+  /**
+   * The piece the agent works on, shown large in the surveillance room: patterns relative to its working
+   * directory (`renders/**\/*.mp4`), as the write rules take them (docs/home-layout.md, "The piece").
+   */
+  pieces: z
+    .array(z.string().min(1).max(200).refine((pattern) => patternRegExp(pattern) !== null, "must name a place of the working directory"))
+    .min(1)
+    .max(8)
+    .optional(),
 });
 
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
@@ -251,6 +261,8 @@ export type Agent = {
   portier?: boolean;
   /** The command of `onApproval: "command"`, relative to the home; null otherwise. */
   approvalCommand?: string[] | null;
+  /** Patterns of its piece, relative to its working directory (room.json `pieces`); empty: no piece followed. */
+  pieces: string[];
 };
 
 export type Routine = { cron: string; task: string | null };
@@ -399,6 +411,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       cacheTtl: agent.cacheTtl ?? null,
       portier: agent.portier ?? true,
       approvalCommand: agent.approvalCommand ?? null,
+      pieces: agent.pieces ?? [],
     };
   });
 

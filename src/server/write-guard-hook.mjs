@@ -215,5 +215,13 @@ async function main() {
   }
 }
 
+// Started as a script, never when imported: bundled into another entry point (the frozen HQ MCP server
+// imports its pattern helpers), `import.meta.url` is that entry point, which is not the hook.
 const self = fileURLToPath(import.meta.url);
-if (process.argv[1] && key(path.resolve(process.argv[1]), process.platform) === key(self, process.platform)) void main();
+if (
+  path.basename(self) === "write-guard-hook.mjs" &&
+  process.argv[1] &&
+  key(path.resolve(process.argv[1]), process.platform) === key(self, process.platform)
+) {
+  void main();
+}

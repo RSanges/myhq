@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +113,24 @@ test("a build that fails leaves the previous frozen copy in place", async () => 
     await assert.rejects(buildMcpBundle(root));
     assert.ok(fs.existsSync(mcpBundleEntry(root)));
     assert.ok(!fs.existsSync(`${path.dirname(mcpBundleEntry(root))}.tmp`));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the frozen server never runs the write guard's hook it bundles: it does not read stdin as a hook call", async () => {
+  const root = scratchRepo();
+  try {
+    await buildMcpBundle(root);
+    // stdin closed at once: the server ends quietly, never with the hook's refusal (exit code 2).
+    const result = spawnSync(process.execPath, [mcpBundleEntry(root)], {
+      input: "",
+      env: { ...process.env, HQ_DB_PATH: path.join(root, "data", "hq.db"), HQ_RUN_ID: "1", HQ_AGENT_ID: "scout", HQ_ROOM: "demo" },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    assert.doesNotMatch(result.stderr, /write guard/);
+    assert.notEqual(result.status, 2);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

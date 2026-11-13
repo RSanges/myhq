@@ -222,6 +222,7 @@ function agentModeAgent(config: HqConfig, workDir: string, addDirs: string[], mo
     onRevise: null,
     notifyRuns: null,
     resources: [],
+    pieces: [],
   };
 }
 
