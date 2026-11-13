@@ -422,7 +422,7 @@ export const strings = {
       runningSince: (agent: string, since: string) => `Tour en cours : ${agent}, depuis ${since}`,
       pending: (n: number) => (n === 1 ? "1 item attend ta décision sur le bureau" : `${n} items attendent ta décision sur le bureau`),
       pausedSince: (when: string, n: number) =>
-        `En pause depuis ${when} : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}, rien ne démarre seul.`,
+        `Mise en pause ${when} : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}, rien ne démarre seul.`,
       pause: "Mettre en pause",
       resume: "Reprendre",
       archive: "Archiver",
@@ -467,7 +467,7 @@ export const strings = {
       agentsCount: (armed: number, routines: number) => `${armed} ${armed > 1 ? "armés" : "armé"} sur ${routines} avec une routine`,
       agentsHint: (usd: number) => `L'armement est gardé par MyHQ et l'emporte sur room.json. Budget vide : le budget par défaut (${usd} $, onglet Limites et coûts).`,
       noRoutine: "Aucune routine : travaille quand on lui demande",
-      routines: (crons: string[]) => crons.join(", "),
+      routines: (lines: string[]) => lines.join(" ; "),
       modelOf: (agent: string) => `Modèle de ${agent}`,
       budgetOf: (agent: string) => `Budget par tour de ${agent}, en dollars`,
       budgetDefault: (usd: number) => `Défaut : ${usd}`,

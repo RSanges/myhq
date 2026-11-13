@@ -6,6 +6,7 @@ import type { DeletionCheckView, SettingsView } from "@/server/settings-schema";
 import { ApiError, deleteRoom, fetchDeletionCheck, removeRoomAgent, roomGesture, saveSettingsGroup } from "./api";
 import { approvalHash, DESK_PATH } from "./deep-link";
 import { formatAge, formatClock, formatDay, formatWhen } from "./format";
+import { scheduleText } from "./schedule";
 import { formatUsd } from "./settings-format";
 import {
   filterRooms,
@@ -51,6 +52,15 @@ function pickerValue(hex: string): string {
 
 const armedCount = (room: Room) => room.agents.filter((agent) => agent.hasRoutines && agent.armed).length;
 const routineCount = (room: Room) => room.agents.filter((agent) => agent.hasRoutines).length;
+
+/** A bin, for the deletion button of a card (its name is in its label). */
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 6h17M8.5 6V4.5A1.5 1.5 0 0 1 10 3h4a1.5 1.5 0 0 1 1.5 1.5V6M18.5 6l-.8 13a2 2 0 0 1-2 1.9H8.3a2 2 0 0 1-2-1.9L5.5 6M10 11v5M14 11v5" />
+    </svg>
+  );
+}
 
 /** The round initial of a room. */
 function Avatar({ title }: { title: string }) {
@@ -171,8 +181,15 @@ function RoomCard({
           {t.archive}
         </button>
         <span className="flex-1" />
-        <button type="button" className={buttonClass("danger")} disabled={busy} onClick={onDelete} aria-label={t.deleteRoom(title)}>
-          {t.delete}
+        <button
+          type="button"
+          className={buttonClass("danger")}
+          disabled={busy}
+          onClick={onDelete}
+          aria-label={t.deleteRoom(title)}
+          title={t.deleteRoom(title)}
+        >
+          <TrashIcon />
         </button>
       </div>
     </article>
@@ -242,7 +259,9 @@ function AgentRow({
         <p className="text-sm font-medium">
           {agent.name} <code className="text-xs text-muted">{agent.id}</code>
         </p>
-        <p className="text-xs text-muted">{agent.routines.length > 0 ? p.routines(agent.routines) : p.noRoutine}</p>
+        <p className="text-xs text-muted">
+          {agent.routines.length > 0 ? p.routines(agent.routines.map((routine) => scheduleText(routine.schedule) ?? routine.cron)) : p.noRoutine}
+        </p>
       </div>
       <div className="grid min-w-0 grid-cols-2 gap-2">
         <select
@@ -707,6 +726,35 @@ function DeleteDialog({
   );
 }
 
+/**
+ * The message of a gesture, at the bottom of the screen. A manual popover, so
+ * that it sits in the top layer, over the room's panel (a modal dialog) too.
+ */
+function ToastHost({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = ref.current;
+    if (!host || typeof host.showPopover !== "function") return;
+    if (toast) {
+      // Shown again after a dialog opened, to stay above it.
+      if (host.matches(":popover-open")) host.hidePopover();
+      host.showPopover();
+    } else if (host.matches(":popover-open")) host.hidePopover();
+  }, [toast]);
+  return (
+    <div ref={ref} popover="manual" aria-live="polite" className="settings-toast-host">
+      {toast && (
+        <div className="settings-toast" data-tone={toast.tone} role={toast.tone === "error" ? "alert" : "status"}>
+          <p className="min-w-0 flex-1">{toast.text}</p>
+          <button type="button" className="text-sm underline" onClick={onClose}>
+            {t.toast.close}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** « Salles »: the rooms of the floor, the proposals waiting, the archived rooms; a room's panel; a deletion. */
 export function RoomsTab({
   settings,
@@ -898,16 +946,7 @@ export function RoomsTab({
         />
       )}
 
-      <div aria-live="polite" className="settings-toast-host">
-        {toast && (
-          <div className="settings-toast" data-tone={toast.tone} role={toast.tone === "error" ? "alert" : "status"}>
-            <p className="min-w-0 flex-1">{toast.text}</p>
-            <button type="button" className="text-sm underline" onClick={() => setToast(null)}>
-              {t.toast.close}
-            </button>
-          </div>
-        )}
-      </div>
+      <ToastHost toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

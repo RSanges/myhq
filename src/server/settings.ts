@@ -4,6 +4,7 @@ import { z } from "zod";
 import { FLOOR_LAYOUTS } from "../ui/floor-mode";
 import { liveConfig, type Env, type HqConfig } from "./config";
 import type { Db } from "./db";
+import { describeCron, parseCron } from "./cron";
 import { HqError } from "./errors";
 import { readHomeFileForWrite, writeHomeKeys, writeJsonAtomic } from "./home-file";
 import { attachmentMaxBytes } from "./attachments";
@@ -446,7 +447,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
         model: agent.model,
         armed: isArmed(db, room.name, agent),
         hasRoutines: agent.routines.length > 0,
-        routines: agent.routines.map((routine) => routine.cron),
+        routines: agent.routines.map((routine) => ({ cron: routine.cron, schedule: describeCron(parseCron(routine.cron)) })),
         maxBudgetUsd: agent.maxBudgetUsd,
         notifySummary: agent.notifyRuns === "summary",
         })),

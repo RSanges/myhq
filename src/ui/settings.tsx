@@ -61,7 +61,7 @@ function GeneralTab({ settings, onSaved, onDirtyChange }: TabProps) {
         onSaved(await saveSettingsGroup("layout", { layout: form.layout, language: form.language, timeZone: zone === "" ? null : zone }));
       }}
     >
-      <Card id="layout" title={t.layout.title} hint={t.layout.hint}>
+      <Card id="layout" title={t.layout.title}>
         <fieldset className="min-w-0 space-y-2">
           <legend className="text-sm font-medium">{t.layout.layoutLegend}</legend>
           <div className="grid gap-2 sm:grid-cols-2">

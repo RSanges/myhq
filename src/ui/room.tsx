@@ -287,7 +287,7 @@ export function RoomPage() {
         blocked,
       }),
     };
-  }, [single, sheetRoom, model.reception, model.rooms, model.events, model.usage, roomNames, roomAgents, roomColors, snapshot, pendingApprovals, deskObjects]);
+  }, [single, sheetRoom, model.reception, model.rooms, model.events, model.usage, roomNames, roomAgents, roomColors, roomLabel, snapshot, pendingApprovals, deskObjects]);
 
   // The items of the agent whose sheet is open, by id and status: its thread is read again when one comes or is decided.
   const selectedItems = useMemo(

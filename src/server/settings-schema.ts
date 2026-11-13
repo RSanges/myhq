@@ -74,8 +74,19 @@ export const settingsViewSchema = z.object({
           /** The armed state in force (the database wins over room.json). */
           armed: z.boolean(),
           hasRoutines: z.boolean(),
-          /** The cron expressions of its routines. */
-          routines: z.array(z.string()),
+          /** Its routines: the cron expression and its summary (cron.ts `describeCron`), for words. */
+          routines: z.array(
+            z.object({
+              cron: z.string(),
+              schedule: z.object({
+                times: z.array(z.string()).nullable(),
+                weekdays: z.array(z.number()).nullable(),
+                monthDays: z.array(z.number()).nullable(),
+                months: z.array(z.number()).nullable(),
+                dayRule: z.enum(["or", "and"]),
+              }),
+            }),
+          ),
           maxBudgetUsd: z.number().nullable(),
           /** `notifyRuns: "summary"`. */
           notifySummary: z.boolean(),
