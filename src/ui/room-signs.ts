@@ -15,9 +15,14 @@ export const LOGO_GAP = 4;
 /** Face pixels kept free above and below the logo. */
 export const LOGO_MARGIN = 2;
 
-/** The glyphs of `text` the font has (uppercase), the others dropped. */
+/**
+ * The glyphs of `text` the font has (uppercase), the others dropped. The font
+ * has no accented letter: an accent is taken off for the drawing only (« Démo
+ * client » is drawn DEMO CLIENT; the name keeps it everywhere else).
+ */
 export function signText(font: SignFont, text: string): string {
-  return [...text.toUpperCase()].filter((char) => font.glyphs[char] !== undefined).join("");
+  const plain = text.normalize("NFD").replace(/\p{M}/gu, "");
+  return [...plain.toUpperCase()].filter((char) => font.glyphs[char] !== undefined).join("");
 }
 
 /** Width of `text` on the face, in face pixels. */

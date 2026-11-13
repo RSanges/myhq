@@ -76,7 +76,9 @@ test("a board as long as its name and logo need, in whole segments, and the name
   assert.ok(faceWidth(sign, tight.segments) >= 2 * SIGN_PADDING + textWidth(font, tight.text));
   const over = placeSign(sign, font, "a-very-long-room-name", 14, 5 * CELL, false);
   assert.ok(over.from < 0 && over.from + over.length > 5 * CELL, "it overhangs both ends of its wall, centred");
-  assert.equal(signText(font, "été"), "T", "characters the font lacks are left out");
+  assert.equal(signText(font, "a€b"), "AB", "characters the font lacks are left out");
+  assert.equal(signText(font, "Démo client"), "DEMO CLIENT", "an accent is taken off, never the letter");
+  assert.equal(signText(font, "Été à Noël"), "ETE A NOEL");
   assert.equal(textWidth(font, "I"), GLYPH_SCALE * 3);
 });
 
