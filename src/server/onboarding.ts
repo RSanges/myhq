@@ -255,6 +255,7 @@ function onboardingAgent(config: HqConfig, target: string, addDirs: string[], mo
     onRevise: null,
     notifyRuns: null,
     resources: [],
+    pieces: [],
   };
 }
 

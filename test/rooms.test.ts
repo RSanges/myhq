@@ -189,3 +189,35 @@ test("an optional sprite is resolved inside the home, and absent by default", ()
   assert.equal(scout!.sprite, path.join(config.home, "rooms", "demo", "sprites", "scout.PNG"));
   assert.equal(writer!.sprite, null);
 });
+
+test("an agent may declare its piece with 1 to 8 patterns; none by default", () => {
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "x",
+      agents: [{ ...agent, pieces: ["renders/**/*.mp4", "./notes/draft-*.md"] }, { ...agent, id: "writer", name: "Writer" }],
+    },
+  );
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  const [scout, writer] = home.rooms[0]!.agents as [Agent, Agent];
+  assert.deepEqual(scout.pieces, ["renders/**/*.mp4", "./notes/draft-*.md"]);
+  assert.deepEqual(writer.pieces, []);
+});
+
+for (const [label, pieces] of [
+  ["an empty list", []],
+  ["more than 8 patterns", Array.from({ length: 9 }, (_, i) => `out/${i}.png`)],
+  ["a pattern that climbs out", ["../elsewhere/*.png"]],
+  ["a pattern under the user's home", ["~/renders/*.png"]],
+  ["an absolute pattern", ["//renders/*.png"]],
+  ["a blank pattern", ["  "]],
+] as const) {
+  test(`rejects pieces with ${label}`, () => {
+    const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [{ ...agent, pieces }] });
+    const home = loadHome(config.home);
+    assert.equal(home.rooms.length, 0);
+    assert.match(home.invalid[0]!.error, /pieces/);
+  });
+}

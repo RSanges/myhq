@@ -29,7 +29,14 @@ async function serve(request: Request, ctx: Params): Promise<Response> {
       throw new HqError("FILE_NOT_FOUND", 404, `Approval #${id.data} has no file #${fileId.data}.`);
     }
     const download = new URL(request.url).searchParams.get("download") === "1";
-    return fileResponse(request, { path: found.file, name: found.name, mime: found.mime, sha256: found.sha256, download });
+    return fileResponse(request, {
+      path: found.file,
+      name: found.name,
+      mime: found.mime,
+      etag: `"${found.sha256}"`,
+      immutable: true,
+      download,
+    });
   } catch (error) {
     return errorResponse(error);
   }

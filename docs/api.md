@@ -20,7 +20,7 @@ Every error has the same shape and an HTTP status:
 | `ROOM_NOT_FOUND` | 404 | No `rooms/<room>/` in the home. |
 | `AGENT_NOT_FOUND` | 404 | The room has no such agent. |
 | `APPROVAL_NOT_FOUND` | 404 | No approval with this id. |
-| `FILE_NOT_FOUND` | 404 | `GET /api/approvals/<id>/files/<fileId>`: the item has no such file, or its copy is gone. |
+| `FILE_NOT_FOUND` | 404 | `GET /api/approvals/<id>/files/<fileId>`: the item has no such file, or its copy is gone. `GET /api/live/runs/<id>/file`: the run does not show that file (whether it exists is not told). |
 | `ROOM_INVALID` | 422 | The room's `room.json` failed validation. The message carries the validation error. |
 | `CHAT_NOT_CONFIGURED` | 404 | `POST /api/chat` (without `to`) while the home has no `chat` section in `assistant.json`. |
 | `AGENT_BUSY` | 409 | The agent already has a run in progress (one run at a time per agent). |
@@ -50,7 +50,7 @@ Every error has the same shape and an HTTP status:
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `SETTINGS_FILE_INVALID` | 409 | A save of the settings page that writes `myhq.json` while the file is not valid JSON or not a JSON object. Nothing is written; the file is left for the user to fix. |
 | `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a task id that does not exist. |
-| `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a run id that does not exist. |
+| `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close`, or `GET /api/live/runs/<id>`, with a run id that does not exist. |
 | `NOT_BLOCKED` | 409 | `POST /api/blocked/relaunch` or `/close` on a task that is neither `blocked` nor `pending`, or on a run that is not failed or interrupted, or has no task left blocked or given back. Nothing is changed. |
 | `DESK_OBJECT_NOT_FOUND` | 404 | `POST /api/desk/<id>/seen` or `/actions/<action>` with an id that is not an object of the desk. |
 | `DESK_ACTION_NOT_FOUND` | 404 | `POST /api/desk/<id>/actions/<action>` for an action the object does not declare (a core source declares none; a command source declares `add` and `done` in its `actions`). |
@@ -952,6 +952,95 @@ same, without the body.
 
 Errors: `INVALID_INPUT` (an id that is not a positive integer), `FILE_NOT_FOUND` (404).
 
+### `GET /api/live`
+
+The surveillance room (`/surveillance`): one tile per agent, for every run in
+progress (oldest first), then the runs ended under 5 minutes ago (newest
+first); an agent with a run in progress shows that one. Agents merely queued
+behind a shared resource have no run and no tile.
+
+```json
+{
+  "now": "2026-11-13T20:05:00.000Z",
+  "tiles": [
+    {
+      "runId": 12, "room": "studio", "roomColor": "#f5a524", "agentId": "editor", "agentName": "Editor",
+      "task": "Cut the trailer", "state": "working", "runStatus": "running",
+      "startedAt": "2026-11-13T19:27:00.000Z", "endedAt": null, "costUsd": 0.42,
+      "status": { "text": "rend l'essai 3", "at": "2026-11-13T20:03:00.000Z" },
+      "previous": [{ "text": "recadre la fin du plan 2", "at": "2026-11-13T19:58:00.000Z" }],
+      "waitingSince": null,
+      "piece": {
+        "source": "auto",
+        "versions": [
+          {
+            "path": "renders/take-03.mp4", "kind": "video", "at": "2026-11-13T20:03:00.000Z", "size": 1048576,
+            "url": "/api/live/runs/12/file?path=renders%2Ftake-03.mp4&v=1794600180000", "excerpt": null, "caption": null
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+- `state`: `working`; `waiting` (in progress, and its latest `hq_status` was
+  given with `waiting`: `status.text` is the reason, `waitingSince` its time);
+  `done` (ended under 5 minutes ago, whatever `runStatus` it ended with).
+- `costUsd`: the final cost of an ended run; while it runs, an estimate from
+  the tokens of its journal and its model, null when it cannot be made.
+- `previous`: the statuses before `status`, newest first, three at most.
+- `piece`: null for a text-only tile (no `pieces` patterns, no file shown,
+  nothing found). `source: "pin"`: the files the agent showed with `hq_show`,
+  each with its `caption`, oldest first, the latest showing of each file and
+  the 12 newest at most; it wins over the patterns.
+  `source: "auto"`: the files matching the agent's `pieces` (home-layout.md)
+  written during the run, oldest first, the 12 newest at most.
+- A version: `kind` is `video`, `image`, `audio` or `text`. A media file has a
+  `url` (below, with `v` its modification time so that a new version is a new
+  address); a text file has no `url` but an `excerpt`: its first 40 lines or
+  4 KB, null when it holds a NUL byte (not text). A text file is never served
+  raw.
+
+### `GET /api/live/runs/[runId]`
+
+One run of the surveillance room, for its detail panel: a run in progress, or
+one ended under 5 minutes ago, as for the tiles (an older run is a 404, like
+an unknown one): `{ tile, timeline }`. `tile` has the shape of a tile above; `timeline` holds
+every status of the run, oldest first: `[{ text, at, waiting }]`. The panel
+mixes them with the versions of the piece by time.
+
+Errors: `INVALID_INPUT` (an id that is not a positive integer), `RUN_NOT_FOUND` (404).
+
+### `GET /api/live/runs/[runId]/file?path=<relative path>`
+
+A media file of a run (video, image or sound), read where the agent wrote it,
+in its working directory. `HEAD` works the same, without the body. It is
+served only when all of these hold, else `404 FILE_NOT_FOUND`, the same
+answer whether the file exists or not:
+
+- the run and its agent exist, and the run is in progress or ended under
+  5 minutes ago;
+- `path` is relative to the agent's working directory, without `..`, and
+  stays inside it once every link is followed;
+- it is a regular file of a media kind, at most the attachment cap
+  (`HQ_ATTACHMENT_MAX_MB`);
+- the run showed it (`hq_show`), or it matches the agent's `pieces`, lies
+  outside `.git`, `node_modules` and `.claude`, and was modified between the
+  start of the run and its end (or now).
+
+The file is opened once and checked on its descriptor (a regular file, the
+same device and inode as the path checked, its size), then streamed from that
+descriptor: it is never reopened by its path. A file that vanishes during the
+checks is the same 404.
+
+Headers as for item files (`Content-Type`, `nosniff`, `inline`, ranges with
+`206` and `416`), except the cache: the file may still change, so its `ETag`
+is weak, from its size and modification time (`W/"<size>-<mtimeMs>"`, `304`
+on `If-None-Match`), with `Cache-Control: private, no-cache`.
+
+Errors: `INVALID_INPUT` (no `path`, or a run id that is not a positive integer), `FILE_NOT_FOUND` (404).
+
 ### `GET /api/usage`
 
 Tokens and cost of the runs, by local calendar day of the server, per agent,
@@ -1434,7 +1523,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its eighteen tools write to the same
+for each run (see `architecture.md`). Its nineteen tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the

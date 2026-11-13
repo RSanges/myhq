@@ -19,6 +19,8 @@ import {
   discussionClearedSchema,
   errorBodySchema,
   itemAskResponseSchema,
+  liveRoomSchema,
+  liveRunSchema,
   proposalResponseSchema,
   relaunchResponseSchema,
   routinesResponseSchema,
@@ -32,6 +34,8 @@ import {
   type ChatTurn,
   type Desk,
   type DirListing,
+  type LiveRoom,
+  type LiveRun,
   type Run,
   type State,
   type Thread,
@@ -92,6 +96,10 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
 export const fetchState = (): Promise<State> => request("/api/state", stateSchema);
 
 export const fetchRoadmap = (): Promise<Roadmap> => request("/api/roadmap", roadmapSchema);
+
+export const fetchLiveRoom = (): Promise<LiveRoom> => request("/api/live", liveRoomSchema);
+
+export const fetchLiveRun = (runId: number): Promise<LiveRun> => request(`/api/live/runs/${runId}`, liveRunSchema);
 
 export const fetchSettings = async (): Promise<SettingsView> =>
   (await request("/api/settings", settingsResponseSchema)).settings;

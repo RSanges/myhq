@@ -39,34 +39,45 @@ function disposition(kind: "inline" | "attachment", name: string): string {
 /**
  * Serves a stored file: its MIME type, `Accept-Ranges`, and a 206 with
  * `Content-Range` for a range request (what Safari on iOS asks for before it
- * plays or seeks in a video). The file is the copy made at submission, which
- * never changes: its sha256 is the ETag and the copy can be cached.
+ * plays or seeks in a video). `etag` is the quoted ETag. `immutable`: the file
+ * never changes (the copy of an item made at submission, its sha256 as ETag)
+ * and may be cached; otherwise it is revalidated each time (a file of the
+ * surveillance room, which the agent may write again). `fd`: a descriptor
+ * the caller opened and checked; the file is then read from it, never
+ * reopened by its path, and the descriptor is closed with the response.
  */
 export function fileResponse(
   request: Request,
-  file: { path: string; name: string; mime: string; sha256: string; download: boolean },
+  file: { path: string; fd?: number; name: string; mime: string; etag: string; immutable: boolean; download: boolean },
 ): Response {
-  const size = fs.statSync(file.path).size;
+  const fd = file.fd;
+  const size = fd === undefined ? fs.statSync(file.path).size : fs.fstatSync(fd).size;
+  // A response without a body leaves the descriptor unused.
+  const done = (response: Response) => {
+    if (fd !== undefined) fs.closeSync(fd);
+    return response;
+  };
   const headers: Record<string, string> = {
     "Content-Type": file.mime,
     "Accept-Ranges": "bytes",
-    "Cache-Control": "private, max-age=31536000, immutable",
+    "Cache-Control": file.immutable ? "private, max-age=31536000, immutable" : "private, no-cache",
     "Content-Disposition": disposition(file.download ? "attachment" : "inline", file.name),
     "X-Content-Type-Options": "nosniff",
-    ETag: `"${file.sha256}"`,
+    ETag: file.etag,
   };
   const head = request.method === "HEAD";
-  if (request.headers.get("if-none-match") === headers.ETag) return new Response(null, { status: 304, headers });
+  if (request.headers.get("if-none-match") === headers.ETag) return done(new Response(null, { status: 304, headers }));
   const range = parseRange(request.headers.get("range"), size);
   if (range === "unsatisfiable") {
-    return new Response(null, { status: 416, headers: { ...headers, "Content-Range": `bytes */${size}` } });
+    return done(new Response(null, { status: 416, headers: { ...headers, "Content-Range": `bytes */${size}` } }));
   }
   const { start, end } = range ?? { start: 0, end: size - 1 };
   const length = size === 0 ? 0 : end - start + 1;
   const out: Record<string, string> = { ...headers, "Content-Length": String(length) };
   if (range) out["Content-Range"] = `bytes ${start}-${end}/${size}`;
   const status = range ? 206 : 200;
-  if (head || length === 0) return new Response(null, { status, headers: out });
-  const stream = Readable.toWeb(fs.createReadStream(file.path, { start, end })) as ReadableStream<Uint8Array>;
+  if (head || length === 0) return done(new Response(null, { status, headers: out }));
+  const source = fd === undefined ? fs.createReadStream(file.path, { start, end }) : fs.createReadStream(file.path, { fd, start, end });
+  const stream = Readable.toWeb(source) as ReadableStream<Uint8Array>;
   return new Response(stream, { status, headers: out });
 }

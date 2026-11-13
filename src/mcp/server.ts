@@ -29,6 +29,7 @@ import {
   hqRunExtend,
   hqRunStatus,
   hqRunStop,
+  hqShow,
   hqStatus,
   hqSubmit,
   hqSuggestAgent,
@@ -94,10 +95,19 @@ async function main(): Promise<void> {
       "hq_status",
       {
         description:
-          "Tell the owner, in a few words, what you are doing right now: at the start of your run, then at each notable step (\"lit les avis du jour\", \"rend le clip B, 2 sur 3\", \"prépare le brouillon\"). 60 characters at most, in the home's language, no technical detail (no path, command or tool name). It shows over your head on the floor and in your sheet; it writes nothing else and changes nothing, so call it freely but do not repeat the same text.",
+          "Tell the owner, in a few words, what you are doing right now: at the start of your run, then at each notable step (\"lit les avis du jour\", \"rend le clip B, 2 sur 3\", \"prépare le brouillon\"). 60 characters at most, in the home's language, no technical detail (no path, command or tool name). It shows over your head on the floor and in your sheet; it writes nothing else and changes nothing, so call it freely but do not repeat the same text. When you have to wait (a shared resource, a long render, an answer), say it with `waiting: true` and the reason as the text (\"attend la carte graphique\"): you show as waiting until your next status.",
         inputSchema: inputs.hq_status,
       },
       async (args) => respond(() => hqStatus(db, ctx, args)),
+    );
+    server.registerTool(
+      "hq_show",
+      {
+        description:
+          "Show the owner a file you are working on, with why they should look at it: it becomes the piece shown large on your tile of the surveillance room, marked as chosen by you, with your caption. `path` is relative to your working directory: a video, an image, a sound or a text file (no 3D part, no PDF), at most the attachment cap. Use it for the file that matters now (the render to look at, the contact sheet that shows a problem), not for every file you write. It publishes nothing and asks for no decision: to get a render validated, use hq_submit.",
+        inputSchema: inputs.hq_show,
+      },
+      async (args) => respond(() => hqShow(db, ctx, args)),
     );
     server.registerTool(
       "hq_task_update",

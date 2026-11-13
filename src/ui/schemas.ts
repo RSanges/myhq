@@ -482,3 +482,47 @@ export type Scheduler = z.infer<typeof schedulerSchema>;
 export type Routine = z.infer<typeof routineSchema>;
 export type Schedule = z.infer<typeof scheduleSchema>;
 export type AgentRoutines = z.infer<typeof routinesResponseSchema>["agents"][number];
+
+// The surveillance room (GET /api/live and GET /api/live/runs/<id>, docs/api.md).
+
+const liveStatusSchema = z.object({ text: z.string(), at: z.string() });
+
+export const pieceVersionSchema = z.object({
+  path: z.string(),
+  kind: z.enum(["video", "image", "audio", "text"]),
+  at: z.string(),
+  size: z.number(),
+  url: z.string().nullable(),
+  excerpt: z.string().nullable(),
+  caption: z.string().nullable(),
+});
+
+export const liveTileSchema = z.object({
+  runId: z.number().int(),
+  room: z.string(),
+  roomColor: z.string().nullable(),
+  agentId: z.string(),
+  agentName: z.string(),
+  task: z.string(),
+  state: z.enum(["working", "waiting", "done"]),
+  runStatus: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  costUsd: z.number().nullable(),
+  status: liveStatusSchema.nullable(),
+  previous: z.array(liveStatusSchema),
+  waitingSince: z.string().nullable(),
+  piece: z.object({ source: z.enum(["pin", "auto"]), versions: z.array(pieceVersionSchema) }).nullable(),
+});
+
+export const liveRoomSchema = z.object({ now: z.string(), tiles: z.array(liveTileSchema) });
+
+export const liveRunSchema = z.object({
+  tile: liveTileSchema,
+  timeline: z.array(z.object({ text: z.string(), at: z.string(), waiting: z.boolean() })),
+});
+
+export type PieceVersion = z.infer<typeof pieceVersionSchema>;
+export type LiveTile = z.infer<typeof liveTileSchema>;
+export type LiveRoom = z.infer<typeof liveRoomSchema>;
+export type LiveRun = z.infer<typeof liveRunSchema>;

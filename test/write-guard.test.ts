@@ -14,11 +14,12 @@ import {
   installWriteGuard,
   WRITE_GUARD_ENV,
   WRITE_GUARD_HOOK,
+  WRITE_GUARD_LIB,
   writeGuardConfig,
   writeGuardEnv,
   writeGuardScript,
 } from "../src/server/write-guard";
-import { decide, patternRegExp, readConfig, relativeInside } from "../src/server/write-guard-hook.mjs";
+import { decide, patternRegExp, readConfig, relativeInside } from "../src/server/write-guard-lib.mjs";
 import { chatConfig, makeHome, makeRepo, waitForRun } from "./helpers";
 
 const HOOK = path.join(process.cwd(), "src", "server", WRITE_GUARD_HOOK);
@@ -226,6 +227,42 @@ test("the hook script refuses with exit code 2 and a reason on stderr, and says 
   delete bare[WRITE_GUARD_ENV];
   assert.equal(run(JSON.stringify(write(path.join(work, "a.txt"))), bare).status, 2);
   assert.equal(run("not json").status, 2);
+});
+
+/** Runs a hook script with an outside write: what Claude Code would get. */
+function runOutsideWrite(script: string) {
+  const { root, work } = dirs();
+  const env = { ...process.env, ...writeGuardEnv(config(work, ["Write"])) };
+  return spawnSync(process.execPath, [script], { input: JSON.stringify(write(path.join(root, "a.txt"))), env, encoding: "utf8", windowsHide: true });
+}
+
+test("the hook never fails open: launched through a directory link, it still refuses an outside write", (t) => {
+  const holder = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-guard-link-"));
+  const link = path.join(holder, "link");
+  try {
+    fs.symlinkSync(path.dirname(HOOK), link, "junction");
+  } catch {
+    t.skip("cannot create a directory link here");
+    return;
+  }
+  const result = runOutsideWrite(path.join(link, WRITE_GUARD_HOOK));
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /MyHQ write guard: Write to .* refused/);
+});
+
+test("the hook never fails open: a copy under another name or case still refuses an outside write", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-guard-copy-"));
+  // Without its library beside it, the hook refuses too: a crash would not block the write.
+  fs.copyFileSync(HOOK, path.join(dir, WRITE_GUARD_HOOK));
+  const alone = runOutsideWrite(path.join(dir, WRITE_GUARD_HOOK));
+  assert.equal(alone.status, 2, alone.stderr);
+  assert.match(alone.stderr, /MyHQ write guard: write refused/);
+  fs.copyFileSync(path.join(path.dirname(HOOK), WRITE_GUARD_LIB), path.join(dir, WRITE_GUARD_LIB));
+  for (const name of ["Write-Guard-Hook.mjs", "guard.mjs"]) {
+    fs.copyFileSync(HOOK, path.join(dir, name));
+    const result = runOutsideWrite(path.join(dir, name));
+    assert.equal(result.status, 2, `${name}: ${result.stderr}`);
+  }
 });
 
 // --- Installation ----------------------------------------------------------------

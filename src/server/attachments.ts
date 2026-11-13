@@ -72,6 +72,44 @@ export type ResolvedAttachment = {
   caption: string | null;
 };
 
+/** Refuses a path that is absolute in any convention (POSIX, drive letter, UNC) or climbs out with "..". */
+function assertRelative(raw: string, label: string): void {
+  if (path.isAbsolute(raw) || path.win32.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
+    throw new AttachmentError(`${label}: "${raw}" is absolute: give a path relative to your working directory.`);
+  }
+  if (raw.split(/[\\/]+/).includes("..")) {
+    throw new AttachmentError(`${label}: "${raw}" climbs out with "..": copy the file into your working directory first.`);
+  }
+}
+
+/**
+ * A path an agent gives relative to its working directory, checked: not
+ * absolute, no "..", existing, and still inside the directory once every link
+ * is followed (never the directory itself). Returns its real path and that
+ * path relative to the real directory, in POSIX form. Throws an
+ * AttachmentError whose message starts with `label`.
+ */
+export function resolveInside(workDir: string, raw: string, label: string): { real: string; relative: string } {
+  assertRelative(raw, label);
+  let root: string;
+  let real: string;
+  try {
+    root = fs.realpathSync(workDir);
+  } catch {
+    throw new AttachmentError(`${label}: your working directory does not exist.`);
+  }
+  try {
+    real = fs.realpathSync(path.resolve(root, raw));
+  } catch {
+    throw new AttachmentError(`${label}: "${raw}" does not exist in your working directory.`);
+  }
+  // A link that leads out of the working directory is refused like "..".
+  if (!isInside(root, real) || real === root) {
+    throw new AttachmentError(`${label}: "${raw}" leads out of your working directory: copy the file into it first.`);
+  }
+  return { real, relative: path.relative(root, real).split(path.sep).join("/") };
+}
+
 /**
  * Checks one attachment of an agent: a path relative to its working directory
  * (or worktree), that stays inside it once every link is followed, of an
@@ -80,35 +118,14 @@ export type ResolvedAttachment = {
  */
 export function resolveAttachment(workDir: string, input: AttachmentInput, maxBytes: number): ResolvedAttachment {
   const raw = input.path;
-  // Absolute in any convention (POSIX, drive letter, UNC), whatever the machine.
-  if (path.isAbsolute(raw) || path.win32.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
-    throw new AttachmentError(`attachments: "${raw}" is absolute: give a path relative to your working directory.`);
-  }
-  if (raw.split(/[\\/]+/).includes("..")) {
-    throw new AttachmentError(`attachments: "${raw}" climbs out with "..": copy the file into your working directory first.`);
-  }
+  assertRelative(raw, "attachments");
   const type = attachmentType(raw);
   if (!type) {
     throw new AttachmentError(
       `attachments: "${raw}" is not an accepted type (${Object.keys(ATTACHMENT_TYPES).join(", ")}).`,
     );
   }
-  let root: string;
-  let real: string;
-  try {
-    root = fs.realpathSync(workDir);
-  } catch {
-    throw new AttachmentError("attachments: your working directory does not exist.");
-  }
-  try {
-    real = fs.realpathSync(path.resolve(root, raw));
-  } catch {
-    throw new AttachmentError(`attachments: "${raw}" does not exist in your working directory.`);
-  }
-  // A link that leads out of the working directory is refused like "..".
-  if (!isInside(root, real) || real === root) {
-    throw new AttachmentError(`attachments: "${raw}" leads out of your working directory: copy the file into it first.`);
-  }
+  const { real } = resolveInside(workDir, raw, "attachments");
   const stat = fs.statSync(real);
   if (!stat.isFile()) throw new AttachmentError(`attachments: "${raw}" is not a file.`);
   if (stat.size === 0) throw new AttachmentError(`attachments: "${raw}" is empty.`);

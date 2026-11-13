@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,7 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
       "hq_run_extend",
       "hq_run_status",
       "hq_run_stop",
+      "hq_show",
       "hq_status",
       "hq_submit",
       "hq_suggest_agent",
@@ -112,6 +114,38 @@ test("a build that fails leaves the previous frozen copy in place", async () => 
     await assert.rejects(buildMcpBundle(root));
     assert.ok(fs.existsSync(mcpBundleEntry(root)));
     assert.ok(!fs.existsSync(`${path.dirname(mcpBundleEntry(root))}.tmp`));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the frozen server never runs the write guard's hook it bundles: it does not read stdin as a hook call", async () => {
+  const root = scratchRepo();
+  try {
+    await buildMcpBundle(root);
+    // stdin closed at once: the server ends quietly, never with the hook's refusal (exit code 2).
+    const result = spawnSync(process.execPath, [mcpBundleEntry(root)], {
+      input: "",
+      env: { ...process.env, HQ_DB_PATH: path.join(root, "data", "hq.db"), HQ_RUN_ID: "1", HQ_AGENT_ID: "scout", HQ_ROOM: "demo" },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    assert.doesNotMatch(result.stderr, /write guard/);
+    assert.notEqual(result.status, 2);
+
+    // The frozen copy of the hook, with its library beside it, refuses an outside write.
+    const outside = path.join(root, "outside.txt");
+    const work = path.join(root, "work");
+    fs.mkdirSync(work, { recursive: true });
+    const hook = spawnSync(process.execPath, [writeGuardScript(root)], {
+      input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: outside, content: "x" } }),
+      env: { ...process.env, MYHQ_WRITE_GUARD: JSON.stringify({ workDir: work, allow: ["**"], deny: [], writeDirs: [] }) },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    assert.equal(writeGuardScript(root), path.join(path.dirname(mcpBundleEntry(root)), WRITE_GUARD_HOOK));
+    assert.equal(hook.status, 2, hook.stderr);
+    assert.match(hook.stderr, /MyHQ write guard: Write to .* refused/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
