@@ -3941,10 +3941,21 @@ body {
   min-width: 0;
 }
 
+/* A task can be a whole message: the tile, the panel and the timeline keep its first lines. */
+.watch-task,
+.watch-stage-top h3,
+.watch-ev[data-k="start"] .watch-ev-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .watch-task {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
+  -webkit-line-clamp: 4;
 }
 
 .watch-task small {
