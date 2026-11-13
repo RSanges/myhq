@@ -154,3 +154,35 @@ export const settingsViewSchema = z.object({
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
 export const settingsResponseSchema = z.object({ settings: settingsViewSchema });
+
+/** GET /api/rooms/<room>/deletion: what deleting a room would do, and what blocks it now (room-manage.ts). */
+export const deletionCheckSchema = z.object({
+  room: z.string(),
+  label: z.string().nullable(),
+  archived: z.boolean(),
+  running: z.object({ agent: z.string(), since: z.string() }).nullable(),
+  pending: z.number(),
+  workDirs: z.array(
+    z.object({
+      agent: z.string(),
+      dir: z.string(),
+      problem: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("dirty"), files: z.number() }),
+          z.object({ kind: z.literal("unmerged"), commits: z.number(), branch: z.string() }),
+          z.object({ kind: z.literal("unchecked"), detail: z.string() }),
+        ])
+        .nullable(),
+    }),
+  ),
+  blocked: z.array(z.enum(["running", "pending", "workDirs"])),
+  configDir: z.string(),
+  destination: z.string(),
+  history: z.object({ runs: z.number(), costUsd: z.number(), items: z.number() }),
+  agents: z.number(),
+});
+
+export type DeletionCheckView = z.infer<typeof deletionCheckSchema>;
+
+export const deletionCheckResponseSchema = z.object({ check: deletionCheckSchema });
+export const roomDeletedResponseSchema = z.object({ destination: z.string(), settings: settingsViewSchema });

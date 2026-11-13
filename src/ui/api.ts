@@ -2,7 +2,13 @@ import type { z } from "zod";
 import type { Annotation } from "@/server/annotations";
 import type { Answer } from "@/server/questions";
 import { roadmapSchema, type Roadmap } from "@/server/roadmap-schema";
-import { settingsResponseSchema, type SettingsView } from "@/server/settings-schema";
+import {
+  deletionCheckResponseSchema,
+  roomDeletedResponseSchema,
+  settingsResponseSchema,
+  type DeletionCheckView,
+  type SettingsView,
+} from "@/server/settings-schema";
 import { strings } from "./strings";
 import {
   approvalResponseSchema,
@@ -108,6 +114,25 @@ export const fetchSettings = async (): Promise<SettingsView> =>
 export async function saveSettingsGroup(group: "layout" | "limits" | "notifications" | "rooms", body: unknown): Promise<SettingsView> {
   return (await request(`/api/settings/${group}`, settingsResponseSchema, jsonInit("PUT", body))).settings;
 }
+
+/** A gesture on a room of the settings page; returns every setting as it is now. */
+export async function roomGesture(room: string, gesture: "pause" | "resume" | "archive" | "restore"): Promise<SettingsView> {
+  return (await request(`/api/rooms/${encodeURIComponent(room)}/${gesture}`, settingsResponseSchema, { method: "POST" })).settings;
+}
+
+/** Removes an agent from its room (room.json only); returns every setting as it is now. */
+export async function removeRoomAgent(room: string, agent: string): Promise<SettingsView> {
+  return (
+    await request(`/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}`, settingsResponseSchema, { method: "DELETE" })
+  ).settings;
+}
+
+export const fetchDeletionCheck = async (room: string): Promise<DeletionCheckView> =>
+  (await request(`/api/rooms/${encodeURIComponent(room)}/deletion`, deletionCheckResponseSchema)).check;
+
+/** Deletes a room (its configuration moves to archives/rooms/); `confirm` is its name as typed. */
+export const deleteRoom = (room: string, confirm: string) =>
+  request(`/api/rooms/${encodeURIComponent(room)}`, roomDeletedResponseSchema, jsonInit("DELETE", { confirm }));
 
 export const fetchUsage = (): Promise<Usage> => request("/api/usage", usageSchema);
 
