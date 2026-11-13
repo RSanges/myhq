@@ -16,7 +16,7 @@ import {
   type ResolvedAttachment,
 } from "../server/attachments";
 import { pieceKind } from "../server/live-room";
-import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db";
+import { APPROVAL_STATUSES, liveItem, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
 import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStatus } from "../server/long-runs";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
@@ -784,7 +784,7 @@ export function hqReadDecisions(db: Db, ctx: HqContext) {
  */
 export function hqPending(db: Db) {
   const rows = db
-    .prepare("SELECT id, room, agent_id, type, title, for_room, created_at FROM approvals WHERE status = 'pending' ORDER BY id")
+    .prepare(`SELECT id, room, agent_id, type, title, for_room, created_at FROM approvals WHERE status = 'pending' AND ${liveItem()} ORDER BY id`)
     .all() as Pick<ApprovalRow, "id" | "room" | "agent_id" | "type" | "title" | "for_room" | "created_at">[];
   return {
     pending: rows.map((row) => ({

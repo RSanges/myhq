@@ -267,6 +267,83 @@ this minute match" and "when is the next one", not a scheduling library.
   of his plan), the meter and `/status` show the share of it spent by the
   runs of the week (Monday to today).
 
+### Managing rooms
+
+The settings page (`/reglages`, five tabs: Général, Salles, Limites et
+coûts, Notifications, Sécurité; see `home-layout.md`, "The settings page")
+manages the rooms of the home in its « Salles » tab
+(`src/server/room-manage.ts`). None of its gestures erases anything:
+
+- **Pause and resume.** Pausing a room disarms, in one click, every armed
+  routine of its agents through the usual armed state (the database over
+  `room.json`), and remembers which agents were armed (`room_pauses`,
+  migration 24). Resuming re-arms exactly those (the ones still in the room)
+  and forgets the pause. An agent can still be armed by hand while its room is
+  paused. A pause only disarms routines: a message of another agent, a
+  revision or an approval still wakes an agent of a paused room, and it still
+  answers when spoken to.
+- **Archive and restore.** An archived room is named in `archivedRooms` of
+  `myhq.json`, kept by MyHQ in the home rather than in the database, so that
+  the home stays a plain Git folder that says which rooms are live, and an
+  archive survives a fresh database. `loadHome` leaves an archived room out of
+  `rooms` (it is listed apart, in `archived`): everything that reads the rooms
+  of the home stops seeing it at once, without a filter of its own: the floor,
+  the desk's lists, the scheduler (its routines are dropped at the next tick),
+  manual runs and wake-ups (`ROOM_NOT_FOUND`), and `syncHome`, which no longer
+  refreshes its row, so the HQ tools stop offering it as a current room. Its
+  folder, its working directories and its rows in the database (runs, costs,
+  items, the agents' armed state) stay as they are. Its items waiting for a
+  decision or a look (`pending`, `unseen`, of the room or delivered to it) are
+  set aside: `syncHome` mirrors the archived names into `archived_rooms`
+  (migration 25) and every list of items leaves them out (the desk and its
+  counts, the state, `/pending`, `hq_pending`, the assistant's preamble); a
+  decision on one is refused (`ROOM_ARCHIVED`), since nothing would carry it
+  out. The history stays visible. Archiving pauses the room first and is
+  refused while a run of the room is in progress (`ROOM_BUSY`); restoring
+  removes the name from the list, the room comes back paused and its items
+  come back as they were. A task that waited in an agent's mailbox may then
+  wake it. `archivedRooms` is read entry by entry: an entry MyHQ cannot read
+  is reported on `/reglages` and kept as it is by every write.
+- **Remove an agent.** Its block leaves `room.json`, written by the same code
+  as the proposals (`writeRoomFile` of `agent-proposal.ts`) and loaded again
+  with `loadRoom` (the file is put back when the room would no longer load).
+  Its role file, its working directory and its history stay. Refused while it
+  runs (`AGENT_BUSY`), while one of its items waits for a decision
+  (`AGENT_HAS_PENDING`), and for the last agent of a room (`ROOM_LAST_AGENT`).
+- **Delete.** The rare gesture, and still nothing is erased: the room's
+  configuration folder `rooms/<name>/` (its `room.json`, roles, skills, logo)
+  moves to `archives/rooms/<name>-<YYYY-MM-DD>/` (`-2`, `-3`... when taken),
+  and the room leaves the floor (and `archivedRooms`). Its working
+  directories, its worktrees and all its history (runs, costs, items, messages)
+  stay exactly where they are; a later room of the same name would find that
+  history again, but not its pause nor the armed state MyHQ kept for its
+  agents (reset at the deletion: it starts from its own `room.json`). The move
+  is the gesture; what follows it (cleaning `archivedRooms`, the pause, the
+  armed state) only logs a failure, and the deletion stands. The owner types
+  the room's name (`confirm`, checked on the server), and the server refuses
+  (`ROOM_DELETE_REFUSED`, with the reasons) while a run of the room is in
+  progress, while an item of the room (or one addressed to it) waits for a
+  decision, while an agent's working directory lies under `rooms/<name>/` (it
+  would move with the configuration), or while an agent's working directory
+  holds work that is not safe: uncommitted changes in its files, or, when it
+  is a Git repository or worktree of its own, commits of its HEAD that are on
+  no default branch of its repository (`origin/HEAD`, else a local `main` or
+  `master`). The check is conservative: a Git folder it cannot check (Git
+  missing, no default branch, an error, 5 seconds without an answer) refuses
+  the deletion and says why; a folder that is not under Git passes. Git never
+  runs where the agent could have written its configuration: the Git
+  directory is found without Git (the nearest `.git` going up, a `.git` file
+  followed to its `gitdir:`), and when it lies inside the working directory
+  the folder is only noted, without blocking (a configuration such as
+  `core.fsmonitor` would make a mere `git status` run a program in the app's
+  process). Every other Git command of the check runs with
+  `core.fsmonitor=false` and `--no-optional-locks`. Only the name of a room loaded from the
+  home is accepted, every path is resolved inside the home once its links are
+  followed, and a room folder that is a link is never moved.
+
+A room's `label` (`room.json`) is the name the owner reads everywhere; `name`
+stays its identifier for the API, the database, the paths and the commands.
+
 ### Per-agent options
 
 - `worktree`: a Git worktree of the target repository inside the home

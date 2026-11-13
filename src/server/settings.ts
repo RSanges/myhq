@@ -4,12 +4,29 @@ import { z } from "zod";
 import { FLOOR_LAYOUTS } from "../ui/floor-mode";
 import { liveConfig, type Env, type HqConfig } from "./config";
 import type { Db } from "./db";
+import { describeCron, parseCron } from "./cron";
 import { HqError } from "./errors";
-import { approvalTypeSchema, DEFAULT_LANGUAGE, DEFAULT_PORTIER, languageTagSchema, readFloorLayout, readPortierSetting } from "./home-settings";
-import { recentVerdicts } from "./portier";
-import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, type Home, type Room } from "./rooms";
+import { readHomeFileForWrite, writeHomeKeys, writeJsonAtomic } from "./home-file";
+import { attachmentMaxBytes } from "./attachments";
 import {
+  approvalTypeSchema,
+  DEFAULT_LANGUAGE,
+  DEFAULT_PORTIER,
+  languageTagSchema,
+  readArchivedRooms,
+  readFloorLayout,
+  readPortierSetting,
+  readRunSummariesSetting,
+} from "./home-settings";
+import { roomPauses } from "./room-manage";
+import { runsToday } from "./runner";
+import { roomWeekTotals } from "./usage";
+import { recentVerdicts } from "./portier";
+import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, roomLabelSchema, type Home, type Room } from "./rooms";
+import {
+  budgetSettingSchema,
   maxRunsSettingSchema,
+  minutesSettingSchema,
   readRawHomeFile,
   readRuntimeOverrides,
   schedulerSettingSchema,
@@ -41,10 +58,20 @@ export const layoutInputSchema = z.strictObject({
   timeZone: timeZoneSettingSchema.nullable(),
 });
 
-/** « Planificateur et plafonds »: `scheduler` and `maxRunsPerDay` (null: back to the environment). */
+/**
+ * « Limites et coûts »: `scheduler`, `maxRunsPerDay`, the budgets and the run
+ * durations (null: back to the environment; left out: unchanged), and the
+ * small model calls outside runs (`portier.enabled`, `runSummaries.enabled`).
+ */
 export const limitsInputSchema = z.strictObject({
   scheduler: schedulerSettingSchema.nullable(),
   maxRunsPerDay: maxRunsSettingSchema.nullable(),
+  defaultMaxBudgetUsd: budgetSettingSchema.nullable().optional(),
+  weeklyBudgetUsd: budgetSettingSchema.nullable().optional(),
+  runTimeoutMinutes: minutesSettingSchema.nullable().optional(),
+  runHardLimitMinutes: minutesSettingSchema.nullable().optional(),
+  portier: z.boolean().optional(),
+  runSummaries: z.boolean().optional(),
 });
 
 /**
@@ -66,6 +93,8 @@ export const roomsInputSchema = z.strictObject({
     .array(
       z.strictObject({
         name: idSchema,
+        /** The name shown to the owner, null to show `name`; left out, unchanged. */
+        label: roomLabelSchema.nullable().optional(),
         /** A CSS hex colour, null for the neutral look. */
         color: roomColorSchema.nullable(),
         agents: z
@@ -100,49 +129,10 @@ export type SettingsGroup = keyof typeof SETTINGS_GROUPS;
 
 // --- Files -------------------------------------------------------------------
 
-function writeTextAtomic(file: string, text: string): void {
-  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    fs.writeFileSync(temp, text, "utf8");
-    fs.renameSync(temp, file);
-  } catch (error) {
-    fs.rmSync(temp, { force: true });
-    throw error;
-  }
-}
-
-/** Replaces `file` with `value` as 2-space JSON: written beside it, then renamed over it. */
-export function writeJsonAtomic(file: string, value: unknown): void {
-  writeTextAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
-}
+export { writeJsonAtomic, writeHomeKeys } from "./home-file";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** The keys of myhq.json, ready to be changed. Refuses a file that cannot be read back (it is never overwritten). */
-function readHomeFileForWrite(home: string): { file: string; data: Record<string, unknown>; text: string | null } {
-  const file = path.join(home, "myhq.json");
-  const { data, error } = readRawHomeFile(home);
-  if (error) throw new HqError("SETTINGS_FILE_INVALID", 409, `${error}: fix or remove it, nothing was written.`);
-  return { file, data: data ?? {}, text: data ? fs.readFileSync(file, "utf8") : null };
-}
-
-/**
- * Sets (or, with `undefined`, removes) top-level keys of myhq.json. The other
- * keys, their order and their values stay as they are; the file is not
- * touched when nothing changes.
- */
-export function writeHomeKeys(home: string, changes: Record<string, unknown>): void {
-  const { file, data, text } = readHomeFileForWrite(home);
-  const next: Record<string, unknown> = { ...data };
-  for (const [key, value] of Object.entries(changes)) {
-    if (value === undefined) delete next[key];
-    else next[key] = value;
-  }
-  if (text !== null && JSON.stringify(data) === JSON.stringify(next)) return;
-  fs.mkdirSync(home, { recursive: true });
-  writeJsonAtomic(file, next);
-}
 
 // --- Groups ------------------------------------------------------------------
 
@@ -154,16 +144,46 @@ export function saveLayout(config: HqConfig, input: LayoutInput): void {
 }
 
 export function saveLimits(config: HqConfig, input: LimitsInput): void {
-  writeHomeKeys(config.home, {
+  const { data } = readHomeFileForWrite(config.home);
+  const fromEnv = liveConfig(config).fromEnv;
+  // The soft deadline must come before the hard limit, as they will be in force. Only checked when the
+  // save changes one of them: a switch of the same tab never fails on durations the owner did not touch.
+  type Duration = "runTimeoutMinutes" | "runHardLimitMinutes";
+  const kept = (key: Duration): number | undefined => {
+    const parsed = minutesSettingSchema.safeParse(data[key]);
+    return parsed.success ? parsed.data : undefined;
+  };
+  /** The value the file will hold for `key` after the save, undefined when none. */
+  const after = (key: Duration): number | undefined => (input[key] !== undefined ? (input[key] ?? undefined) : kept(key));
+  const touched = (key: Duration) => after(key) !== kept(key);
+  if (touched("runTimeoutMinutes") || touched("runHardLimitMinutes")) {
+    const timeout = after("runTimeoutMinutes") ?? fromEnv.runTimeoutMs / 60_000;
+    const hard = after("runHardLimitMinutes") ?? fromEnv.runHardLimitMs / 60_000;
+    if (timeout >= hard) throw new HqError("INVALID_INPUT", 400, "runTimeoutMinutes must be shorter than runHardLimitMinutes.");
+  }
+  const changes: Record<string, unknown> = {
     scheduler: input.scheduler ?? undefined,
     maxRunsPerDay: input.maxRunsPerDay ?? undefined,
-  });
+  };
+  for (const key of ["defaultMaxBudgetUsd", "weeklyBudgetUsd", "runTimeoutMinutes", "runHardLimitMinutes"] as const) {
+    if (input[key] !== undefined) changes[key] = input[key] ?? undefined;
+  }
+  // The switches keep the other keys of their block (the portier's model).
+  const portier = readPortierSetting(config.home, config.portier ?? DEFAULT_PORTIER);
+  if (input.portier !== undefined && (portier.fromFile || input.portier !== portier.setting.enabled)) {
+    changes.portier = { ...(isRecord(data.portier) ? data.portier : {}), enabled: input.portier };
+  }
+  const summaries = readRunSummariesSetting(config.home);
+  if (input.runSummaries !== undefined && (summaries.fromFile || input.runSummaries !== summaries.enabled)) {
+    changes.runSummaries = { ...(isRecord(data.runSummaries) ? data.runSummaries : {}), enabled: input.runSummaries };
+  }
+  writeHomeKeys(config.home, changes);
   // The scheduler starts or stops now, without waiting for its next tick.
   reconcileScheduler();
 }
 
 type AgentEdit = { model?: (typeof MODELS)[number]; maxBudgetUsd?: number | null; notifySummary?: boolean };
-type RoomEdit = { color?: string | null; agents: Map<string, AgentEdit> };
+type RoomEdit = { color?: string | null; label?: string | null; agents: Map<string, AgentEdit> };
 
 /**
  * Applies edits to the room.json files. Everything is checked first (the
@@ -186,6 +206,10 @@ function editRooms(home: Home, edits: Map<string, RoomEdit>): void {
     if (edit.color !== undefined) {
       if (edit.color === null) delete raw.color;
       else raw.color = edit.color.toLowerCase();
+    }
+    if (edit.label !== undefined) {
+      if (edit.label === null) delete raw.label;
+      else raw.label = edit.label;
     }
     for (const [id, change] of edit.agents) {
       const agent = agents.find((each) => each.id === id);
@@ -235,6 +259,7 @@ export function saveRooms(config: HqConfig, db: Db, input: RoomsInput): void {
     // An unknown or invalid room is refused by editRooms with the right code.
     const edit: RoomEdit = { agents: new Map() };
     if (!room || room.color?.toLowerCase() !== sent.color?.toLowerCase()) edit.color = sent.color;
+    if (sent.label !== undefined && (!room || (room.label ?? null) !== sent.label)) edit.label = sent.label;
     for (const agent of sent.agents) {
       const current = room?.agents.find((each) => each.id === agent.id);
       const change: AgentEdit = {};
@@ -245,7 +270,7 @@ export function saveRooms(config: HqConfig, db: Db, input: RoomsInput): void {
         arming.push({ room: sent.name, agent: agent.id, armed: agent.armed });
       }
     }
-    if (edit.color !== undefined || edit.agents.size > 0) edits.set(sent.name, edit);
+    if (edit.color !== undefined || edit.label !== undefined || edit.agents.size > 0) edits.set(sent.name, edit);
   }
   editRooms(home, edits);
   // The existing arming mechanism: the database value wins over room.json.
@@ -269,6 +294,9 @@ export function saveSettings(config: HqConfig, db: Db, group: SettingsGroup, bod
 // --- The view ----------------------------------------------------------------
 
 const present = (value: string | undefined): boolean => value !== undefined && value.trim() !== "";
+
+/** The secrets of .env.local the page says are set or not (never their value). */
+const SECRET_VARIABLES = ["HQ_TELEGRAM_BOT_TOKEN", "HQ_TELEGRAM_CHAT_ID", "HQ_CLAUDE_OAUTH_TOKEN", "HQ_TRIGGER_TOKEN"] as const;
 
 /** Types an agent's role says it submits: the bullets « - `type`: ... » under a heading that names `hq_submit`. */
 function submittedTypes(room: Room): string[] {
@@ -330,6 +358,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
 
   const { overrides, errors: runtimeErrors } = readRuntimeOverrides(live.home);
   if (!raw.error) errors.push(...runtimeErrors);
+  if (live.durationsError) errors.push(`myhq.json runTimeoutMinutes, runHardLimitMinutes: ${live.durationsError}`);
 
   let selected: string[] = [];
   if (data.notifyTypes !== undefined) {
@@ -347,6 +376,37 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
   const portier = readPortierSetting(live.home, config.portier ?? DEFAULT_PORTIER);
   if (portier.error && !raw.error) errors.push(portier.error);
   const verdicts = recentVerdicts(db);
+  const summaries = readRunSummariesSetting(live.home);
+  if (summaries.error && !raw.error) errors.push(summaries.error);
+  const archivedList = readArchivedRooms(live.home);
+  if (archivedList.error && !raw.error) errors.push(archivedList.error);
+
+  const pauses = roomPauses(db);
+  const weeks = roomWeekTotals(db);
+  const lastRun = db.prepare("SELECT agent_id, status, started_at, ended_at FROM runs WHERE room = ? ORDER BY id DESC LIMIT 1");
+  const running = db.prepare("SELECT agent_id, started_at FROM runs WHERE room = ? AND status = 'running' ORDER BY id DESC LIMIT 1");
+  const pending = db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND (room = ? OR for_room = ?)");
+  const totals = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS costUsd FROM runs WHERE room = ?");
+  const runtime = (key: "defaultMaxBudgetUsd" | "weeklyBudgetUsd" | "runTimeoutMinutes" | "runHardLimitMinutes", variable: string) =>
+    overrides[key] !== undefined ? ("file" as const) : present(env[variable]) ? ("env" as const) : ("default" as const);
+  const minutes = (ms: number) => ms / 60_000;
+  const summaryWeek = db
+    .prepare("SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS costUsd FROM run_summaries WHERE created_at >= ?")
+    .get(new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString()) as { calls: number; costUsd: number };
+  const proposals = (
+    db
+      .prepare("SELECT id, title, payload, created_at FROM approvals WHERE type = 'room_proposal' AND status = 'pending' ORDER BY id")
+      .all() as { id: number; title: string; payload: string; created_at: string }[]
+  ).map((row) => {
+    let room: string | null = null;
+    try {
+      const parsed = idSchema.safeParse((JSON.parse(row.payload) as { room?: { name?: unknown } }).room?.name);
+      if (parsed.success) room = parsed.data;
+    } catch {
+      // The title says what it is.
+    }
+    return { id: row.id, room, title: row.title, at: row.created_at };
+  });
 
   return {
     layout: floor.layout,
@@ -372,22 +432,92 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
     },
     notifyTypes: { selected, known },
     quietHours: quiet.quietHours,
-    rooms: home.rooms.map((room) => ({
-      name: room.name,
-      color: room.color,
-      shared: room.shared,
-      agents: room.agents.map((agent) => ({
+    rooms: home.rooms.map((room) => {
+      const pause = pauses.get(room.name) ?? null;
+      const last = lastRun.get(room.name) as { agent_id: string; status: string; started_at: string; ended_at: string | null } | undefined;
+      const current = running.get(room.name) as { agent_id: string; started_at: string } | undefined;
+      return {
+        name: room.name,
+        label: room.label ?? null,
+        color: room.color,
+        shared: room.shared,
+        state: pause ? ("paused" as const) : ("active" as const),
+        pause,
+        week: weeks.get(room.name) ?? { runs: 0, costUsd: 0 },
+        lastRun: last ? { agent: last.agent_id, status: last.status, at: last.ended_at ?? last.started_at } : null,
+        running: current ? { agent: current.agent_id, since: current.started_at } : null,
+        pending: (pending.get(room.name, room.name) as { n: number }).n,
+        agents: room.agents.map((agent) => ({
         id: agent.id,
         name: agent.name,
         model: agent.model,
         armed: isArmed(db, room.name, agent),
         hasRoutines: agent.routines.length > 0,
+        routines: agent.routines.map((routine) => ({ cron: routine.cron, schedule: describeCron(parseCron(routine.cron)) })),
         maxBudgetUsd: agent.maxBudgetUsd,
         notifySummary: agent.notifyRuns === "summary",
-      })),
-    })),
+        })),
+      };
+    }),
     invalidRooms: home.invalid.map((invalid) => ({ name: path.basename(invalid.dir), error: invalid.error })),
+    archivedRooms: (home.archived ?? []).map(({ room, archivedAt }) => {
+      const total = totals.get(room.name) as { runs: number; costUsd: number };
+      return {
+        name: room.name,
+        label: room.label ?? null,
+        color: room.color,
+        archivedAt,
+        agents: room.agents.length,
+        totalRuns: total.runs,
+        totalCostUsd: total.costUsd,
+      };
+    }),
+    roomProposals: proposals,
     defaultMaxBudgetUsd: live.defaultMaxBudgetUsd,
+    budgets: {
+      defaultMaxBudgetUsd: {
+        file: overrides.defaultMaxBudgetUsd ?? null,
+        effective: live.defaultMaxBudgetUsd,
+        source: runtime("defaultMaxBudgetUsd", "HQ_DEFAULT_MAX_BUDGET_USD"),
+        fallback: fromEnv.defaultMaxBudgetUsd,
+      },
+      weeklyBudgetUsd: {
+        file: overrides.weeklyBudgetUsd ?? null,
+        effective: live.weeklyBudgetUsd,
+        source: runtime("weeklyBudgetUsd", "HQ_WEEKLY_BUDGET_USD"),
+        fallback: fromEnv.weeklyBudgetUsd,
+      },
+      runTimeoutMinutes: {
+        file: overrides.runTimeoutMinutes ?? null,
+        effective: minutes(live.runTimeoutMs),
+        source: runtime("runTimeoutMinutes", "HQ_RUN_TIMEOUT_MINUTES"),
+        fallback: minutes(fromEnv.runTimeoutMs),
+      },
+      runHardLimitMinutes: {
+        file: overrides.runHardLimitMinutes ?? null,
+        effective: minutes(live.runHardLimitMs),
+        source: runtime("runHardLimitMinutes", "HQ_RUN_HARD_LIMIT_MINUTES"),
+        fallback: minutes(fromEnv.runHardLimitMs),
+      },
+    },
+    runsToday: runsToday(db),
+    spend: {
+      totalUsd: [...weeks.values()].reduce((sum, week) => sum + week.costUsd, 0),
+      byRoom: [...weeks.entries()]
+        .filter(([, week]) => week.costUsd > 0)
+        .sort((a, b) => b[1].costUsd - a[1].costUsd)
+        .map(([name, week]) => {
+          const room = home.rooms.find((each) => each.name === name) ?? home.archived?.find((each) => each.room.name === name)?.room;
+          return { room: name, label: room?.label ?? null, color: room?.color ?? null, costUsd: week.costUsd };
+        }),
+    },
+    summaries: {
+      enabled: summaries.enabled,
+      source: summaries.fromFile ? "file" : "default",
+      week: { calls: summaryWeek.calls, costUsd: Math.round(summaryWeek.costUsd * 10_000) / 10_000 },
+    },
+    secrets: SECRET_VARIABLES.map((name) => ({ name, set: present(env[name]) })),
+    attachmentMaxMb: Math.round(attachmentMaxBytes(env) / (1024 * 1024)),
     portier: {
       enabled: portier.setting.enabled,
       model: portier.setting.model,

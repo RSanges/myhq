@@ -3,7 +3,7 @@ import path from "node:path";
 import { liveConfig, type Env, type HqConfig } from "../server/config";
 import { markApprovalSeen } from "../server/approvals";
 import { answerSchema, answerText, parseQuestionPayload, QUESTION_TYPE, type Answer, type Question } from "../server/questions";
-import type { Db, RunRow } from "../server/db";
+import { liveItem, type Db, type RunRow } from "../server/db";
 import { getState, type ApprovalDto } from "../server/feed";
 import { loadHome } from "../server/rooms";
 import { startOnboarding as defaultStartOnboarding } from "../server/onboarding";
@@ -384,7 +384,7 @@ export class Assistant {
       .prepare(
         `SELECT a.id, a.room, a.for_room, a.title, COALESCE(g.name, a.agent_id) AS agent
          FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
-         WHERE a.status = 'pending' ORDER BY a.id`,
+         WHERE a.status = 'pending' AND ${liveItem("a.")} ORDER BY a.id`,
       )
       .all() as { id: number; room: string; for_room: string | null; title: string; agent: string }[];
     if (rows.length === 0) return strings.assistant.pendingEmpty;

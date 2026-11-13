@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { SettingsView } from "@/server/settings-schema";
 import { saveSettingsGroup } from "./api";
-import { FieldError, GroupCard } from "./settings-parts";
+import { isDirty } from "./settings-model";
+import { Card, FieldError, TabForm, useSavedForm } from "./settings-parts";
 import { strings } from "./strings";
 import { buttonClass, fieldClass } from "./ui";
 
@@ -18,33 +19,55 @@ const CLOCK_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 /** The range offered when quiet hours are switched on for the first time. */
 const DEFAULT_QUIET = { start: "21:00", end: "08:00" };
 
-type Props = { settings: SettingsView; onSaved: (settings: SettingsView) => void };
+type Props = { settings: SettingsView; onSaved: (settings: SettingsView) => void; onDirtyChange: (dirty: boolean) => void };
+
+type NotificationsForm = {
+  selected: string[];
+  quietOn: boolean;
+  quietStart: string;
+  quietEnd: string;
+  summaries: Record<string, boolean>;
+};
+
+/** The form as saved: the types selected (sorted, so that the order never counts), quiet hours, run summaries. */
+function notificationsForm(settings: SettingsView): NotificationsForm {
+  return {
+    selected: [...settings.notifyTypes.selected].sort(),
+    quietOn: settings.quietHours !== null,
+    quietStart: settings.quietHours?.start ?? DEFAULT_QUIET.start,
+    quietEnd: settings.quietHours?.end ?? DEFAULT_QUIET.end,
+    summaries: Object.fromEntries(
+      settings.rooms.flatMap((room) => room.agents.map((agent) => [`${room.name}/${agent.id}`, agent.notifySummary])),
+    ),
+  };
+}
 
 /** « Notifications »: informational item types, quiet hours and run summaries sent to Telegram. */
-export function Notifications({ settings, onSaved }: Props) {
+export function Notifications({ settings, onSaved, onDirtyChange }: Props) {
+  const saved = useMemo(() => notificationsForm(settings), [settings]);
+  const [form, setForm, reset] = useSavedForm(saved);
   // The types on offer: those seen in the home, plus any the user adds (kept even when unticked).
   const [offered, setOffered] = useState<string[]>(() => [
     ...new Set([...settings.notifyTypes.selected, ...settings.notifyTypes.known]),
   ]);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(settings.notifyTypes.selected));
   const [extra, setExtra] = useState("");
-  const [summaries, setSummaries] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(
-      settings.rooms.flatMap((room) => room.agents.map((agent) => [`${room.name}/${agent.id}`, agent.notifySummary])),
-    ),
-  );
   const extraValid = extra === "" || TYPE_PATTERN.test(extra.trim());
-  const [quietOn, setQuietOn] = useState(settings.quietHours !== null);
-  const [quietStart, setQuietStart] = useState(settings.quietHours?.start ?? DEFAULT_QUIET.start);
-  const [quietEnd, setQuietEnd] = useState(settings.quietHours?.end ?? DEFAULT_QUIET.end);
+  const { quietOn, quietStart, quietEnd, summaries } = form;
+  const selected = new Set(form.selected);
   const quietValid = !quietOn || (CLOCK_PATTERN.test(quietStart) && CLOCK_PATTERN.test(quietEnd) && quietStart !== quietEnd);
+  const set = (patch: Partial<NotificationsForm>) => setForm((current) => ({ ...current, ...patch }));
+  const setQuietOn = (quietOn: boolean) => set({ quietOn });
+  const setQuietStart = (quietStart: string) => set({ quietStart });
+  const setQuietEnd = (quietEnd: string) => set({ quietEnd });
+  const setSummaries = (update: (current: Record<string, boolean>) => Record<string, boolean>) =>
+    setForm((current) => ({ ...current, summaries: update(current.summaries) }));
 
   const toggleType = (type: string, on: boolean) =>
-    setSelected((current) => {
-      const next = new Set(current);
+    setForm((current) => {
+      const next = new Set(current.selected);
       if (on) next.add(type);
       else next.delete(type);
-      return next;
+      return { ...current, selected: [...next].sort() };
     });
 
   const addType = () => {
@@ -56,11 +79,12 @@ export function Notifications({ settings, onSaved }: Props) {
   };
 
   return (
-    <GroupCard
+    <TabForm
       id="notifications"
-      title={t.title}
-      hint={t.hint}
-      blocked={!extraValid || !quietValid}
+      dirty={isDirty(form, saved)}
+      blocked={!quietValid}
+      onDirtyChange={onDirtyChange}
+      onReset={reset}
       onSave={async () => {
         onSaved(
           await saveSettingsGroup("notifications", {
@@ -77,9 +101,9 @@ export function Notifications({ settings, onSaved }: Props) {
         );
       }}
     >
+      <Card id="notify-types" title={t.typesTitle} hint={t.typesHint}>
       <fieldset className="min-w-0 space-y-2">
-        <legend className="text-sm font-medium">{t.typesTitle}</legend>
-        <p className="text-xs text-muted">{t.typesHint}</p>
+        <legend className="sr-only">{t.typesTitle}</legend>
         {offered.length === 0 ? (
           <p className="text-sm text-muted">{t.typesEmpty}</p>
         ) : (
@@ -131,10 +155,11 @@ export function Notifications({ settings, onSaved }: Props) {
         </div>
         {!extraValid && <FieldError id="extra-type-error">{t.typeInvalid}</FieldError>}
       </fieldset>
+      </Card>
 
+      <Card id="quiet" title={t.quietTitle} hint={t.quietHint}>
       <fieldset className="min-w-0 space-y-2">
-        <legend className="text-sm font-medium">{t.quietTitle}</legend>
-        <p className="text-xs text-muted">{t.quietHint}</p>
+        <legend className="sr-only">{t.quietTitle}</legend>
         <label className="flex min-h-10 cursor-pointer items-center gap-3 rounded-md border border-line px-3 py-2 text-sm hover:bg-soft">
           <input
             type="checkbox"
@@ -178,14 +203,15 @@ export function Notifications({ settings, onSaved }: Props) {
         )}
         {!quietValid && <FieldError id="quiet-error">{t.quietInvalid}</FieldError>}
       </fieldset>
+      </Card>
 
+      <Card id="run-summaries" title={t.runsTitle} hint={t.runsHint}>
       <fieldset className="min-w-0 space-y-3">
-        <legend className="text-sm font-medium">{t.runsTitle}</legend>
-        <p className="text-xs text-muted">{t.runsHint}</p>
+        <legend className="sr-only">{t.runsTitle}</legend>
         {settings.rooms.length === 0 && <p className="text-sm text-muted">{t.runsEmpty}</p>}
         {settings.rooms.map((room) => (
           <div key={room.name} className="min-w-0 space-y-1.5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted">{room.name}</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted">{room.label ?? room.name}</p>
             <ul className="grid gap-2 sm:grid-cols-2">
               {room.agents.map((agent) => {
                 const key = `${room.name}/${agent.id}`;
@@ -209,6 +235,7 @@ export function Notifications({ settings, onSaved }: Props) {
           </div>
         ))}
       </fieldset>
-    </GroupCard>
+      </Card>
+    </TabForm>
   );
 }

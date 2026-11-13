@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { liveConfig, type Env, type HqConfig } from "../server/config";
-import type { Db } from "../server/db";
+import { liveItem, type Db } from "../server/db";
 import { runsToday } from "../server/runner";
 import { strings } from "../ui/strings";
 import { runShell, type ShellResult } from "./shell";
@@ -102,7 +102,7 @@ export function corePreamble(
         .prepare(
           `SELECT a.id, a.type, a.title, COALESCE(g.name, a.agent_id) AS agent
            FROM approvals a LEFT JOIN agents g ON g.room = a.room AND g.id = a.agent_id
-           WHERE a.status = 'pending' ORDER BY a.id`,
+           WHERE a.status = 'pending' AND ${liveItem("a.")} ORDER BY a.id`,
         )
         .all() as { id: number; type: string; title: string; agent: string }[];
       if (rows.length === 0) {

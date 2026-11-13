@@ -5,7 +5,7 @@ import { strings } from "../ui/strings";
 import { app } from "./app";
 import { listBlocked, stuckAgents, type BlockedEntry } from "./blocked";
 import { isInside, type Env, type HqConfig } from "./config";
-import { now, type ApprovalRow, type Db, type RunRow } from "./db";
+import { liveItem, now, type ApprovalRow, type Db, type RunRow } from "./db";
 import {
   DeskCommands,
   type ActionSpec,
@@ -307,7 +307,7 @@ export function markDeskSeen(db: Db, objectId: string, at: string = now()): stri
 /** The count of a core source, without its items (the `desk` event). `seenAt`: when the object's page was last opened. */
 export function coreCount(db: Db, home: Home, source: CoreSource, config: HqConfig, at: Date, seenAt: string | null = null): number {
   if (source === "approvals") {
-    return (db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get() as { n: number }).n;
+    return (db.prepare(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND ${liveItem()}`).get() as { n: number }).n;
   }
   if (source === "summaries") {
     const where = summaryWhere(notifyRunAgents(home));
@@ -332,7 +332,7 @@ export function coreCount(db: Db, home: Home, source: CoreSource, config: HqConf
   const type = watchType(source);
   return (
     db
-      .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'unseen'${type ? " AND type = ?" : ""}`)
+      .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'unseen' AND ${liveItem()}${type ? " AND type = ?" : ""}`)
       .get(...(type ? [type] : [])) as { n: number }
   ).n;
 }
@@ -385,7 +385,7 @@ function readCore(db: Db, home: Home, source: CoreSource, objectId: string, conf
   }
   const count = coreCount(db, home, source, config, at, seenAt);
   if (source === "approvals") {
-    const rows = db.prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at, id").all() as ApprovalRow[];
+    const rows = db.prepare(`SELECT * FROM approvals WHERE status = 'pending' AND ${liveItem()} ORDER BY created_at, id`).all() as ApprovalRow[];
     return { count, items: rows.map((row) => approvalItem(row, objectId, colors, null)) };
   }
   if (source === "summaries") {
@@ -442,7 +442,9 @@ function readCore(db: Db, home: Home, source: CoreSource, objectId: string, conf
   const type = watchType(source);
   const filter = type ? " AND type = ?" : "";
   const params = type ? [type] : [];
-  const unseen = db.prepare(`SELECT * FROM approvals WHERE status = 'unseen'${filter} ORDER BY created_at, id`).all(...params) as ApprovalRow[];
+  const unseen = db
+    .prepare(`SELECT * FROM approvals WHERE status = 'unseen' AND ${liveItem()}${filter} ORDER BY created_at, id`)
+    .all(...params) as ApprovalRow[];
   const seen = db
     .prepare(`SELECT * FROM approvals WHERE ${SEEN_WHERE}${filter} ORDER BY COALESCE(decided_at, created_at) DESC, id DESC LIMIT ?`)
     .all(...params, WATCH_HISTORY) as ApprovalRow[];
@@ -462,7 +464,7 @@ function readCore(db: Db, home: Home, source: CoreSource, objectId: string, conf
 function spines(db: Db, home: Home): DeskObjectDto["spines"] {
   const colors = roomColors(home);
   const rows = db
-    .prepare("SELECT id, COALESCE(for_room, room) AS room FROM approvals WHERE status = 'pending' ORDER BY created_at, id")
+    .prepare(`SELECT id, COALESCE(for_room, room) AS room FROM approvals WHERE status = 'pending' AND ${liveItem()} ORDER BY created_at, id`)
     .all() as { id: number; room: string }[];
   return rows.map(
     (row) => ({ approvalId: row.id, room: row.room, color: colors.get(row.room) ?? null }),

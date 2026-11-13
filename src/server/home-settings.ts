@@ -272,3 +272,78 @@ export function readPortierSetting(
   }
   return { setting: { enabled: parsed.data.enabled, model: parsed.data.model ?? fallback.model }, fromFile: true, error: null };
 }
+
+/**
+ * `runSummaries` of myhq.json: the one-line summary of a run's task that a small model writes at the start of
+ * a run for the surveillance room (see run-summary.ts). Stored like the portier: `{ "enabled": false }` stops
+ * the calls.
+ */
+export const runSummariesSettingSchema = z.strictObject({ enabled: z.boolean() });
+
+/**
+ * Whether run summaries are on: the `runSummaries` block of myhq.json, on when absent. Read apart, like the
+ * portier: an invalid block keeps them on and gives the reason. Never throws.
+ */
+export function readRunSummariesSetting(home: string): { enabled: boolean; fromFile: boolean; error: string | null } {
+  const { block, error } = readBlock(home, "runSummaries");
+  if (error) return { enabled: true, fromFile: false, error };
+  if (block === undefined) return { enabled: true, fromFile: false, error: null };
+  const parsed = runSummariesSettingSchema.safeParse(block);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `runSummaries.${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return { enabled: true, fromFile: false, error: `myhq.json: ${details}` };
+  }
+  return { enabled: parsed.data.enabled, fromFile: true, error: null };
+}
+
+/**
+ * `archivedRooms` of myhq.json: the rooms the owner archived, each with the day it was archived (YYYY-MM-DD).
+ * An archived room keeps its folder; MyHQ leaves it out of the floor, the desk lists and the scheduler.
+ */
+export const archivedRoomEntrySchema = z.strictObject({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, "a room name"),
+  at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a day YYYY-MM-DD"),
+});
+
+export type ArchivedRoomEntry = z.infer<typeof archivedRoomEntrySchema>;
+
+/**
+ * The archived rooms of myhq.json, none when the file or the key is absent.
+ * Read entry by entry: a valid entry archives its room whatever the others
+ * hold, and an entry that cannot be read is reported and kept as it is in
+ * `raw` (every entry of the list, in order), so that no write drops it.
+ * `list` is false when the key is not a list at all: nothing is archived and
+ * nothing may rewrite it. Never throws.
+ */
+export function readArchivedRooms(home: string): {
+  rooms: ArchivedRoomEntry[];
+  raw: unknown[];
+  list: boolean;
+  error: string | null;
+} {
+  const { block, error } = readBlock(home, "archivedRooms");
+  if (error) return { rooms: [], raw: [], list: false, error };
+  if (block === undefined) return { rooms: [], raw: [], list: true, error: null };
+  if (!Array.isArray(block)) return { rooms: [], raw: [], list: false, error: "myhq.json: archivedRooms must be a list" };
+  const rooms: ArchivedRoomEntry[] = [];
+  const problems: string[] = [];
+  block.forEach((entry, index) => {
+    const parsed = archivedRoomEntrySchema.safeParse(entry);
+    if (parsed.success) rooms.push(parsed.data);
+    else problems.push(...parsed.error.issues.map((issue) => `archivedRooms.${[index, ...issue.path].join(".")}: ${issue.message}`));
+  });
+  return { rooms, raw: block, list: true, error: problems.length > 0 ? `myhq.json: ${problems.join("; ")}` : null };
+}
+
+/** One top-level key of myhq.json, undefined when the file or the key is absent. Never throws. */
+function readBlock(home: string, key: string): { block: unknown; error: string | null } {
+  const file = path.join(home, "myhq.json");
+  let raw: unknown;
+  try {
+    if (!fs.existsSync(file)) return { block: undefined, error: null };
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    return { block: undefined, error: `myhq.json is not valid JSON: ${(error as Error).message}` };
+  }
+  return { block: typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>)[key] : undefined, error: null };
+}

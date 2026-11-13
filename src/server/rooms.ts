@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ROOM_DECORS, type RoomDecor } from "../ui/floor-mode";
 import { isInside } from "./config";
 import { cronError } from "./cron";
+import { readArchivedRooms } from "./home-settings";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
 import { patternRegExp } from "./write-guard-lib.mjs";
@@ -179,8 +180,13 @@ export const agentSchema = z.strictObject({
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
 export const roomColorSchema = z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #ff3d7f");
 
+/** The name of a room as the owner reads it (room.json `label`); `name` stays its identifier. */
+export const roomLabelSchema = z.string().trim().min(1).max(60);
+
 export const roomFileSchema = z.strictObject({
   name: idSchema,
+  /** The name shown to the owner (floor, desk, surveillance room, settings); left out, the name itself. */
+  label: roomLabelSchema.optional(),
   /** Colour of the room in the interface (chat chips, floor strip, name plates). Without it the room stays neutral. */
   color: roomColorSchema.optional(),
   /** A shared studio: every room of the home may order from it (hq_message with `room`), and it delivers with hq_submit `forRoom`. */
@@ -269,6 +275,8 @@ export type Routine = { cron: string; task: string | null };
 
 export type Room = {
   name: string;
+  /** The name shown to the owner (room.json `label`), or null to show `name`. */
+  label?: string | null;
   dir: string;
   /** Absolute path of the target repository. */
   targetRepo: string;
@@ -285,7 +293,16 @@ export type Room = {
 
 export type InvalidRoom = { dir: string; error: string };
 
-export type Home = { root: string; rooms: Room[]; invalid: InvalidRoom[] };
+/** A valid room the owner archived (myhq.json `archivedRooms`): kept on disk, out of the floor and the scheduler. */
+export type ArchivedRoom = { room: Room; archivedAt: string };
+
+export type Home = {
+  root: string;
+  rooms: Room[];
+  invalid: InvalidRoom[];
+  /** The archived rooms, left out of `rooms` (and so of everything that reads them). */
+  archived?: ArchivedRoom[];
+};
 
 function formatZodError(error: z.ZodError): string {
   return error.issues
@@ -420,6 +437,7 @@ export function loadRoom(home: string, roomDir: string): Room {
 
   return {
     name: room.name,
+    label: room.label ?? null,
     dir: roomDir,
     targetRepo,
     color: room.color ?? null,
@@ -432,11 +450,14 @@ export function loadRoom(home: string, roomDir: string): Room {
 
 /**
  * Loads every room of the home. An invalid room does not stop the others: it
- * is reported in `invalid` with an explicit error, and cannot be run.
+ * is reported in `invalid` with an explicit error, and cannot be run. A valid
+ * room named in `archivedRooms` of myhq.json goes to `archived` instead of
+ * `rooms`: nothing of it starts, nothing of it is shown as a room.
  */
 export function loadHome(home: string): Home {
   const roomsDir = path.join(home, "rooms");
-  const result: Home = { root: home, rooms: [], invalid: [] };
+  const archivedAt = new Map(readArchivedRooms(home).rooms.map((entry) => [entry.name, entry.at]));
+  const result: Home = { root: home, rooms: [], invalid: [], archived: [] };
   if (!fs.existsSync(roomsDir)) return result;
   const dirs = fs
     .readdirSync(roomsDir, { withFileTypes: true })
@@ -445,7 +466,10 @@ export function loadHome(home: string): Home {
     .sort();
   for (const dir of dirs) {
     try {
-      result.rooms.push(loadRoom(home, dir));
+      const room = loadRoom(home, dir);
+      const at = archivedAt.get(room.name);
+      if (at === undefined) result.rooms.push(room);
+      else result.archived!.push({ room, archivedAt: at });
     } catch (error) {
       result.invalid.push({ dir, error: (error as Error).message });
     }
@@ -472,8 +496,14 @@ export function syncHome(db: Db, home: Home): void {
        role_path = excluded.role_path, synced_at = excluded.synced_at`,
   );
   const removeStaleAgents = db.prepare("DELETE FROM agents WHERE room = ? AND synced_at <> ?");
+  const archive = db.prepare("INSERT OR REPLACE INTO archived_rooms (name, archived_at) VALUES (?, ?)");
   const addSupervisor = db.prepare("INSERT INTO supervisors (room, agent_id, synced_at) VALUES (?, ?, ?)");
   db.transaction(() => {
+    // The archived rooms, as myhq.json says now: their items leave the lists (db.ts, liveItem).
+    if (home.archived !== undefined) {
+      db.prepare("DELETE FROM archived_rooms").run();
+      for (const entry of home.archived) archive.run(entry.room.name, entry.archivedAt);
+    }
     // The supervisors of the Standard, as room.json says now (see supervisor.ts).
     db.prepare("DELETE FROM supervisors").run();
     for (const room of home.rooms) for (const agent of room.agents) if (agent.supervisor) addSupervisor.run(room.name, agent.id, at);

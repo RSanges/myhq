@@ -2,7 +2,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { annotationsSchema, decisionText, parseAnnotations, type Annotation } from "./annotations";
 import { getConfig, type HqConfig } from "./config";
-import { now, type ApprovalRow, type ApprovalStatus, type Db } from "./db";
+import { liveItem, now, type ApprovalRow, type ApprovalStatus, type Db } from "./db";
 import { HqError } from "./errors";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
@@ -139,6 +139,13 @@ export function decideApproval(
   let relayFor: HqConfig | null = null;
   let command: { config: HqConfig; agent: Agent; row: ApprovalRow } | null = null;
   let wakeFor: HqConfig | null = decision.decision === "revise" ? (config ?? null) : null;
+  // An item of an archived room waits out of the desk: nothing would carry out the decision.
+  const archived = db
+    .prepare(`SELECT 1 FROM approvals WHERE id = ? AND NOT (${liveItem()})`)
+    .get(id);
+  if (archived) {
+    throw new HqError("ROOM_ARCHIVED", 409, `Approval #${id} belongs to an archived room: restore the room to decide it.`);
+  }
   if (decision.decision === "approved") {
     const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
     if (row?.status === "pending" && row.type === QUESTION_TYPE) {

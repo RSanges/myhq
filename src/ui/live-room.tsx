@@ -262,7 +262,7 @@ function Head({ tile, now, titleId }: { tile: LiveTile; now: number; titleId?: s
         <h2 id={titleId} className="wall-display">
           {tile.agentName}
         </h2>
-        <span className="watch-room">{t.room(tile.room)}</span>
+        <span className="watch-room">{t.room(tile.roomLabel ?? tile.room)}</span>
       </div>
       <div className="watch-meta">
         <span className="watch-chip" data-state={tile.state}>

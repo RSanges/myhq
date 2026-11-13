@@ -32,6 +32,20 @@ export function errorResponse(error: unknown): Response {
   return Response.json({ error: { code: "INTERNAL", message } } satisfies ApiErrorBody, { status: 500 });
 }
 
+/**
+ * Reads a JSON body that must come with `content-type: application/json`. A
+ * page of another site can post a plain form to the app without asking first,
+ * never a JSON request: requiring the type keeps such a form from triggering
+ * the gesture. UNSUPPORTED_MEDIA_TYPE (415) otherwise.
+ */
+export async function readJsonRequest(request: Request): Promise<unknown> {
+  const type = request.headers.get("content-type") ?? "";
+  if (!/^\s*application\/json\s*(;|$)/i.test(type)) {
+    throw new HqError("UNSUPPORTED_MEDIA_TYPE", 415, "Send a JSON body with content-type: application/json.");
+  }
+  return readJson(request);
+}
+
 /** Reads a JSON body, with an explicit error when it is not JSON. */
 export async function readJson(request: Request): Promise<unknown> {
   try {

@@ -6,6 +6,7 @@ import { isInside, type HqConfig } from "./config";
 import { replaceDashes } from "./dashes";
 import { now, type Db, type TaskSource } from "./db";
 import { HqError } from "./errors";
+import { writeJsonAtomic, writeTextAtomic } from "./home-file";
 import { agentSchema, idSchema, loadHome, loadRoom, roomFileSchema, syncHome, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
@@ -122,6 +123,24 @@ export function normalizeAgentProposal(payload: unknown, body: string): { payloa
 }
 
 /**
+ * Writes `rooms/<room>/room.json` (2-space JSON) and loads the room again with
+ * `loadRoom`, which checks everything the schema cannot (role files, paths
+ * inside the home). When the room no longer loads, the file gets `original`
+ * back and `code` (422) is thrown with the reason. Used by the proposals and
+ * by the room gestures of the settings page (room-manage.ts).
+ */
+export function writeRoomFile(config: HqConfig, dir: string, original: string, value: unknown, code: string): Room {
+  const file = path.join(dir, "room.json");
+  writeJsonAtomic(file, value);
+  try {
+    return loadRoom(config.home, dir);
+  } catch (error) {
+    writeTextAtomic(file, original);
+    throw new HqError(code, 422, (error as Error).message);
+  }
+}
+
+/**
  * Applies an approved agent proposal: writes `rooms/<room>/roles/<id>.md`,
  * appends the agent to `room.json` (its routines disarmed), creates its
  * worktree when it has one, then syncs the home (the agent is live without a
@@ -161,12 +180,7 @@ export function applyAgentProposal(config: HqConfig, db: Db, payload: unknown): 
   try {
     fs.mkdirSync(path.dirname(rolePath), { recursive: true });
     fs.writeFileSync(rolePath, rolePrompt, { encoding: "utf8", flag: "wx" });
-    fs.writeFileSync(file, `${JSON.stringify(next.data, null, 2)}\n`, "utf8");
-    try {
-      loaded = loadRoom(config.home, dir);
-    } catch (error) {
-      throw new HqError("AGENT_PROPOSAL_INVALID", 422, (error as Error).message);
-    }
+    loaded = writeRoomFile(config, dir, original, next.data, "AGENT_PROPOSAL_INVALID");
     const added = loaded.agents.find((a) => a.id === agent.id)!;
     if (added.worktree) {
       try {

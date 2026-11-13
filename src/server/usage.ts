@@ -190,3 +190,14 @@ export function lastChatTurnEnd(db: Db): string | null {
     | undefined;
   return row?.ended_at ?? null;
 }
+
+/** Runs and cost of each room since Monday (local time), as `week` counts them. */
+export function roomWeekTotals(db: Db): Map<string, { runs: number; costUsd: number }> {
+  const rows = db
+    .prepare(
+      `SELECT r.room AS room, COUNT(r.id) AS runs, COALESCE(SUM(r.cost_usd), 0) AS costUsd
+       FROM runs r WHERE date(r.started_at, 'localtime') >= ${WEEK_START} GROUP BY r.room`,
+    )
+    .all() as { room: string; runs: number; costUsd: number }[];
+  return new Map(rows.map((row) => [row.room, { runs: row.runs, costUsd: row.costUsd }]));
+}

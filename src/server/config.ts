@@ -9,6 +9,10 @@ import { isValidTimeZone, systemTimeZone } from "./time";
  * Every variable the app reads is prefixed with `MYHQ_` or `HQ_`, and none of
  * them is ever passed on to an agent process.
  */
+/** The run durations without myhq.json nor environment, in minutes. */
+export const DEFAULT_RUN_TIMEOUT_MINUTES = 30;
+export const DEFAULT_RUN_HARD_LIMIT_MINUTES = 180;
+
 /** A plain environment map (NodeJS.ProcessEnv requires NODE_ENV under Next.js types). */
 export type Env = Record<string, string | undefined>;
 
@@ -16,8 +20,8 @@ const envSchema = z.object({
   MYHQ_HOME: z.string().trim().min(1).default("home"),
   HQ_MAX_RUNS_PER_DAY: z.coerce.number().int().min(0).default(12),
   HQ_DEFAULT_MAX_BUDGET_USD: z.coerce.number().positive().default(1),
-  HQ_RUN_TIMEOUT_MINUTES: z.coerce.number().positive().default(30),
-  HQ_RUN_HARD_LIMIT_MINUTES: z.coerce.number().positive().default(180),
+  HQ_RUN_TIMEOUT_MINUTES: z.coerce.number().positive().default(DEFAULT_RUN_TIMEOUT_MINUTES),
+  HQ_RUN_HARD_LIMIT_MINUTES: z.coerce.number().positive().default(DEFAULT_RUN_HARD_LIMIT_MINUTES),
   HQ_SHUTDOWN_GRACE_SECONDS: z.coerce.number().min(0).default(90),
   HQ_MESSAGE_WAKE_MINUTES: z.coerce.number().min(0).default(10),
   HQ_CLAUDE_BIN: z.string().trim().min(1).default("claude"),
@@ -79,11 +83,17 @@ export type HqConfig = {
    */
   portier?: PortierSetting;
   /**
-   * The values of `scheduler`, `timeZone` and `maxRunsPerDay` before the
-   * overrides of `myhq.json` (environment, else default). Set by getConfig;
-   * liveConfig starts from them to read the file again.
+   * The values of the runtime settings before the overrides of `myhq.json`
+   * (environment, else default). Set by getConfig; liveConfig starts from
+   * them to read the file again.
    */
-  fromEnv?: Pick<HqConfig, "scheduler" | "timeZone" | "maxRunsPerDay">;
+  fromEnv?: Pick<HqConfig, RuntimeField>;
+  /**
+   * Why the run durations in force are not the ones of myhq.json and the
+   * environment (a timeout not shorter than the hard limit), null when they
+   * are. Set by getConfig and liveConfig.
+   */
+  durationsError?: string | null;
 };
 
 function emptyToUndefined(env: Env): Record<string, string | undefined> {
@@ -130,12 +140,47 @@ export function getConfig(env: Env = process.env): HqConfig {
   });
 }
 
+/** The fields of the configuration that `myhq.json` may override (runtime-settings.ts). */
+type RuntimeField =
+  | "scheduler"
+  | "timeZone"
+  | "maxRunsPerDay"
+  | "defaultMaxBudgetUsd"
+  | "weeklyBudgetUsd"
+  | "runTimeoutMs"
+  | "runHardLimitMs";
+
 const reportedErrors = new Set<string>();
 
 /**
+ * The run durations in force: myhq.json over the environment, as a pair. A
+ * soft deadline that is not strictly shorter than the hard limit makes the
+ * pair invalid: the environment's pair applies instead, or the defaults when
+ * it is no better, and `error` says why.
+ */
+export function runDurations(
+  file: { timeoutMinutes?: number; hardMinutes?: number },
+  env: { timeoutMs: number; hardMs: number },
+): { timeoutMs: number; hardMs: number; error: string | null } {
+  const timeoutMs = file.timeoutMinutes !== undefined ? file.timeoutMinutes * 60_000 : env.timeoutMs;
+  const hardMs = file.hardMinutes !== undefined ? file.hardMinutes * 60_000 : env.hardMs;
+  if (timeoutMs < hardMs) return { timeoutMs, hardMs, error: null };
+  const error = `run timeout (${timeoutMs / 60_000} min) must be shorter than the hard limit (${hardMs / 60_000} min)`;
+  if (env.timeoutMs < env.hardMs && (file.timeoutMinutes !== undefined || file.hardMinutes !== undefined)) {
+    return { timeoutMs: env.timeoutMs, hardMs: env.hardMs, error: `${error}: the environment applies` };
+  }
+  return {
+    timeoutMs: DEFAULT_RUN_TIMEOUT_MINUTES * 60_000,
+    hardMs: DEFAULT_RUN_HARD_LIMIT_MINUTES * 60_000,
+    error: `${error}: the defaults apply (${DEFAULT_RUN_TIMEOUT_MINUTES} and ${DEFAULT_RUN_HARD_LIMIT_MINUTES} min)`,
+  };
+}
+
+/**
  * Applies the runtime settings of `<home>/myhq.json` (`scheduler`,
- * `timeZone`, `maxRunsPerDay`) over the values taken from the environment.
- * A key that is invalid is logged once and ignored.
+ * `timeZone`, `maxRunsPerDay`, the budgets and the run durations) over the
+ * values taken from the environment. A key that is invalid is logged once and
+ * ignored.
  */
 function withHomeOverrides(base: HqConfig): HqConfig & { fromEnv: NonNullable<HqConfig["fromEnv"]> } {
   const { overrides, errors } = readRuntimeOverrides(base.home);
@@ -144,12 +189,33 @@ function withHomeOverrides(base: HqConfig): HqConfig & { fromEnv: NonNullable<Hq
     reportedErrors.add(message);
     console.error(`[config] ${message}: the environment applies`);
   }
+  const durations = runDurations(
+    { timeoutMinutes: overrides.runTimeoutMinutes, hardMinutes: overrides.runHardLimitMinutes },
+    { timeoutMs: base.runTimeoutMs, hardMs: base.runHardLimitMs },
+  );
+  if (durations.error && !reportedErrors.has(durations.error)) {
+    reportedErrors.add(durations.error);
+    console.error(`[config] ${durations.error}`);
+  }
   return {
     ...base,
     scheduler: overrides.scheduler ?? base.scheduler,
     timeZone: overrides.timeZone ?? base.timeZone,
     maxRunsPerDay: overrides.maxRunsPerDay ?? base.maxRunsPerDay,
-    fromEnv: { scheduler: base.scheduler, timeZone: base.timeZone, maxRunsPerDay: base.maxRunsPerDay },
+    defaultMaxBudgetUsd: overrides.defaultMaxBudgetUsd ?? base.defaultMaxBudgetUsd,
+    weeklyBudgetUsd: overrides.weeklyBudgetUsd ?? base.weeklyBudgetUsd,
+    runTimeoutMs: durations.timeoutMs,
+    runHardLimitMs: durations.hardMs,
+    durationsError: durations.error,
+    fromEnv: {
+      scheduler: base.scheduler,
+      timeZone: base.timeZone,
+      maxRunsPerDay: base.maxRunsPerDay,
+      defaultMaxBudgetUsd: base.defaultMaxBudgetUsd,
+      weeklyBudgetUsd: base.weeklyBudgetUsd,
+      runTimeoutMs: base.runTimeoutMs,
+      runHardLimitMs: base.runHardLimitMs,
+    },
   };
 }
 

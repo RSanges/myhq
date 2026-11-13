@@ -33,7 +33,8 @@ const decisionTone = {
 } as const;
 
 /** Who brought an item, as the folded line shows it: the agent's name and the colour of its room. */
-type Who = { name: string; color: string | null };
+/** The agent of an item, the colour of its room, and its room as the owner reads it (labels, a delivery's two rooms). */
+type Who = { name: string; color: string | null; room: string };
 
 /** How often the ages (« il y a 2 h ») are refreshed. */
 const AGE_REFRESH_MS = 60_000;
@@ -49,15 +50,10 @@ function useNow(): number {
 }
 
 /** Who submitted it and when: the title and the type are on the folded line above. */
-function ApprovalHeader({ approval }: { approval: Approval }) {
+function ApprovalHeader({ approval, who }: { approval: Approval; who: Who }) {
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-      <span>
-        {strings.desk.submittedBy(
-          approval.agentId,
-          approval.forRoom ? strings.studio.forRoom(approval.room, approval.forRoom) : approval.room,
-        )}
-      </span>
+      <span>{strings.desk.submittedBy(approval.agentId, who.room)}</span>
       <span>{strings.desk.submittedOn(formatDateTime(approval.createdAt))}</span>
     </p>
   );
@@ -125,7 +121,7 @@ function DeskItem({
         >
           <span
             aria-hidden
-            title={approval.forRoom ? strings.studio.forRoom(approval.room, approval.forRoom) : approval.room}
+            title={who.room}
             className={`size-2.5 shrink-0 rounded-full ${tint ? "bg-[var(--room-color)]" : "bg-line"}`}
           />
           <span className="max-w-[40%] shrink-0 truncate text-xs text-muted sm:max-w-40">{who.name}</span>
@@ -345,7 +341,7 @@ function PendingCard({
 
   return (
     <DeskItem approval={approval} {...item}>
-      <ApprovalHeader approval={approval} />
+      <ApprovalHeader approval={approval} who={item.who} />
       <ApprovalContent approval={approval} annotations={annotations} onAnnotations={onAnnotations} />
       {questions && (
         <QuestionForm
@@ -440,7 +436,7 @@ function QuestionCard({
 
   return (
     <DeskItem approval={approval} {...item}>
-      <ApprovalHeader approval={approval} />
+      <ApprovalHeader approval={approval} who={item.who} />
       {context && <Markdown source={context} />}
       <QuestionForm
         itemId={approval.id}
@@ -566,7 +562,7 @@ function HistoryCard({
   const [revising, setRevising] = useState(false);
   return (
     <DeskItem approval={approval} {...item}>
-      <ApprovalHeader approval={approval} />
+      <ApprovalHeader approval={approval} who={item.who} />
       <p className="flex flex-wrap items-center gap-2 text-sm">
         <Badge tone={decisionTone[approval.status]}>{strings.desk.decision[approval.status]}</Badge>
         {approval.decidedAt && <span className="text-muted">{strings.desk.decidedOn(formatDateTime(approval.decidedAt))}</span>}
@@ -672,7 +668,7 @@ function WatchCard({ approval, dispatch, item }: { approval: Approval; dispatch:
 
   return (
     <DeskItem approval={approval} {...item}>
-      <ApprovalHeader approval={approval} />
+      <ApprovalHeader approval={approval} who={item.who} />
       <ApprovalContent approval={approval} annotations={approval.annotations} />
       {asking ? (
         <div className="space-y-2">
@@ -748,11 +744,14 @@ function useFolds(
   const whoById = useMemo(() => {
     const byAgent = new Map(agents.map((agent) => [`${agent.room}/${agent.id}`, agent]));
     const roomColor = new Map(agents.map((agent) => [agent.room, agent.color]));
+    const roomLabel = new Map(agents.map((agent) => [agent.room, agent.roomLabel ?? agent.room]));
+    const label = (room: string) => roomLabel.get(room) ?? room;
     return (approval: Approval): Who => {
       const agent = byAgent.get(`${approval.room}/${approval.agentId}`);
       // A delivery of a shared room takes the colour of the room that ordered it, whose pile it is in.
       const color = approval.forRoom ? (roomColor.get(approval.forRoom) ?? null) : (agent?.color ?? null);
-      return { name: agent?.name ?? approval.agentId, color };
+      const room = approval.forRoom ? strings.studio.forRoom(label(approval.room), label(approval.forRoom)) : label(approval.room);
+      return { name: agent?.name ?? approval.agentId, color, room };
     };
   }, [agents]);
   const setOpen = (id: number, open: boolean) =>

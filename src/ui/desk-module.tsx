@@ -165,7 +165,10 @@ function ModuleBody({
   if (object.object === "pile" && sources.includes("approvals")) {
     if (!model.loaded) return <p className="text-sm text-muted">{t.loading}</p>;
     if (roomFilter) {
-      const label = roomFilter === RECEPTION_ROOM ? strings.room.reception.name : roomFilter;
+      const label =
+        roomFilter === RECEPTION_ROOM
+          ? strings.room.reception.name
+          : (model.rooms.find((room) => room.name === roomFilter)?.label ?? roomFilter);
       // An item a shared room delivered belongs to the pile of the room that ordered it.
       const mine = (approval: Approval) => (approval.forRoom ?? approval.room) === roomFilter;
       return (

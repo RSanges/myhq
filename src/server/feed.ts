@@ -2,6 +2,7 @@ import path from "node:path";
 import { parseAnnotations, type Annotation } from "./annotations";
 import { FILES_SELECT, parseFiles, type ApprovalFileDto } from "./attachments";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
+import { liveItem } from "./db";
 import type {
   ApprovalRow,
   ApprovalStatus,
@@ -371,6 +372,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
     cursor,
     rooms: home.rooms.map((room) => ({
       name: room.name,
+      label: room.label ?? null,
       targetRepo: toPosix(path.relative(home.root, room.targetRepo)),
       color: room.color,
       logo: logoUrl(room),
@@ -418,10 +420,10 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
     firings: listFirings(db, 50),
     approvals: {
       pending: (
-        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'pending' ORDER BY a.id`).all() as ApprovalRowWithAction[]
+        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'pending' AND ${liveItem("a.")} ORDER BY a.id`).all() as ApprovalRowWithAction[]
       ).map(toApproval),
       unseen: (
-        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'unseen' ORDER BY a.id`).all() as ApprovalRowWithAction[]
+        db.prepare(`${APPROVAL_SELECT} WHERE a.status = 'unseen' AND ${liveItem("a.")} ORDER BY a.id`).all() as ApprovalRowWithAction[]
       ).map(toApproval),
       history: (
         db
