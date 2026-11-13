@@ -170,7 +170,7 @@ test("hq_run_stop interrupts the run: failed as a timeout, its tasks given back,
 });
 
 test("the hard limit interrupts the run whatever the extensions", async () => {
-  const { config, db } = office({ runTimeoutMs: 60, runHardLimitMs: 400 });
+  const { config, db } = office({ runTimeoutMs: 60, runHardLimitMs: 2_000 });
   let extended: ReturnType<typeof extendRun> | null = null;
   const { engine: fake } = engine((_input, runId) => {
     extended = extendRun(db, SUPERVISOR, runId, 60);
@@ -182,7 +182,7 @@ test("the hard limit interrupts the run whatever the extensions", async () => {
   assert.match(row.summary ?? "", /hard limit .*HQ_RUN_HARD_LIMIT_MINUTES.*after 1 extension/);
   assert.equal(extended!.cappedByHardLimit, true);
   assert.equal(extended!.deadlineAt, readDeadlines(db, run.id)!.hard_deadline_at);
-  assert.ok(Date.parse(row.ended_at!) - Date.parse(row.started_at) >= 400);
+  assert.ok(Date.parse(row.ended_at!) - Date.parse(row.started_at) >= 2_000);
 
   const entry = listBlocked(db, loadHome(config.home), config).find((each) => each.entry === "run" && each.id === run.id);
   assert.match(entry?.reason ?? "", new RegExp(`^Le tour #${run.id} a été interrompu au plafond`));
@@ -191,7 +191,7 @@ test("the hard limit interrupts the run whatever the extensions", async () => {
 });
 
 test("no answer from the supervisor: the run goes on by slices up to the hard limit, with a note on the Standard", async () => {
-  const { config, db } = office({ runTimeoutMs: 60, runHardLimitMs: 700 });
+  const { config, db } = office({ runTimeoutMs: 60, runHardLimitMs: 2_000 });
   // The supervisor reads and decides nothing.
   const { engine: fake } = engine(() => []);
   const run = startRun({ room: "demo", agent: "builder", task: "Model the bracket." }, { config, engine: fake, send: async () => true, runCheckWaitMs: 60 });
@@ -201,7 +201,7 @@ test("no answer from the supervisor: the run goes on by slices up to the hard li
   const row = await waitForRun(db, run.id);
   assert.equal(row.status, "failed");
   assert.match(row.summary ?? "", /hard limit/);
-  assert.ok(Date.parse(row.ended_at!) - Date.parse(row.started_at) >= 700);
+  assert.ok(Date.parse(row.ended_at!) - Date.parse(row.started_at) >= 2_000);
 
   const deadlines = readDeadlines(db, run.id)!;
   assert.ok(deadlines.checks >= 2, "asked again after a slice");
