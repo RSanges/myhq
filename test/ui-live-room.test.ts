@@ -34,6 +34,7 @@ function tile(overrides: Partial<LiveTile> = {}): LiveTile {
     agentId: "a",
     agentName: "A",
     task: "Le film",
+    taskSummary: null,
     state: "working",
     runStatus: "running",
     startedAt: iso(NOW - 38 * MINUTE),

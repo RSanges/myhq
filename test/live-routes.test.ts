@@ -31,14 +31,21 @@ test("the live routes: the tiles, one run, and its media file with a weak ETag t
     fs.writeFileSync(path.join(work, "renders", "a.png"), "png bytes");
     fs.writeFileSync(path.join(work, "secret.png"), "not a piece");
 
-    const live = (await liveRoomResponse().json()) as { now: string; tiles: { runId: number; piece: { versions: { url: string }[] } }[] };
+    const live = (await liveRoomResponse().json()) as {
+      now: string;
+      tiles: { runId: number; task: string; taskSummary: string | null; piece: { versions: { url: string }[] } }[];
+    };
     assert.ok(Date.parse(live.now) > 0);
     assert.equal(live.tiles.length, 1);
+    assert.equal(live.tiles[0]!.task, "t");
+    assert.equal(live.tiles[0]!.taskSummary, null, "a one-line task has no summary");
     const url = live.tiles[0]!.piece.versions[0]!.url;
     assert.match(url, new RegExp(`^/api/live/runs/${runId}/file\\?path=renders%2Fa\\.png&v=\\d+$`));
 
-    const one = (await liveRunResponse(String(runId)).json()) as { tile: { runId: number }; timeline: unknown[] };
+    db.prepare("INSERT INTO run_summaries (run_id, text, model, created_at) VALUES (?, 'Résumé du tour', 'haiku', ?)").run(runId, new Date().toISOString());
+    const one = (await liveRunResponse(String(runId)).json()) as { tile: { runId: number; taskSummary: string | null }; timeline: unknown[] };
     assert.equal(one.tile.runId, runId);
+    assert.equal(one.tile.taskSummary, "Résumé du tour");
     assert.deepEqual(one.timeline, []);
     assert.equal((await liveRunResponse("999")).status, 404);
     assert.equal((await liveRunResponse("abc")).status, 400);

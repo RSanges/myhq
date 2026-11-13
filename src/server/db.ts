@@ -756,6 +756,30 @@ CREATE TABLE IF NOT EXISTS run_waits (
 );
 `,
   },
+  {
+    version: 23,
+    sql: `
+-- The one-line summary of a run's task, written by a small model at the run's
+-- start for the surveillance room (docs/architecture.md, "The surveillance
+-- room"), with what the call cost. text is null when the answer was unusable.
+-- A usable summary is a change of its run, so that the room reads it at once.
+-- Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS run_summaries (
+  run_id INTEGER PRIMARY KEY,
+  text TEXT,
+  model TEXT NOT NULL,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS run_summaries_changed_insert AFTER INSERT ON run_summaries WHEN NEW.text IS NOT NULL
+BEGIN INSERT INTO changes (entity, entity_id) VALUES ('run', NEW.run_id); END;
+`,
+  },
 ];
 
 function migrate(db: Db): void {

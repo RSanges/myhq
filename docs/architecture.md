@@ -726,6 +726,9 @@ by the agent's next run, whatever starts it, and the Standard does not list it
 as stuck (`waitsForNextRun`). `/reglages` shows the setting, the count and cost
 of the last 7 days and the 20 latest verdicts (`recentVerdicts`).
 
+The call itself (`src/server/small-model.ts`) is shared with the summary of a
+run's task (see "The surveillance room").
+
 A verdict costs a fraction of a cent: one call measured on Haiku 5.5 (an
 acknowledgement, judged skip) read about 1300 tokens, wrote 133 and cost
 0.00033 $ in 3.7 s, against about 0.45 $ for a wake of an agent on Opus. The
@@ -1398,8 +1401,10 @@ through the approval queue.
   `rooms`, `agents` (with the armed state of their routines), `runs`,
   `events`, `messages`, `tasks`, `approvals`, `memories`, `routine_firings`,
   `chat_turns` (the assistant's chat turns, metered), `agent_questions` (the
-  owner's questions to the agents, metered, see "Questions to an agent").
-  Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
+  owner's questions to the agents, metered, see "Questions to an agent"),
+  `portier_verdicts` (the portier's calls, metered, see "The portier"),
+  `run_summaries` (the one-line summary of a run's task, metered, see "The
+  surveillance room"). Each run stores `input_tokens`, `output_tokens`, `cost_usd`,
   `started_at`, `ended_at`, `status` (`running`, `done`, `failed`,
   `cancelled`), a `summary` and a `reason`. A task comes from a run's own
   instruction (`manual`), a message, a revision or an approved item
@@ -2449,8 +2454,32 @@ tile shows the piece the agent works on, large.
   run in progress are reused for 3 seconds. The file may change:
   a weak ETag from its size and time, revalidated each time, and the URL
   carries the modification time (`&v=`).
+- **The summary of the task.** A task is often a whole message (a relayed
+  instruction, or the wake-up's « handle your mailbox » followed by its
+  tasks), and its first lines say little. At the start of a run, `launchRun`
+  asks `summarizeRun` (`src/server/run-summary.ts`) for one line saying what
+  the agent is asked to do, and never waits for it: the run starts at once.
+  A task of one line of at most 120 characters, with no mailbox task, is its
+  own summary and costs no call. Otherwise one `claude -p` call on Haiku, the
+  portier's call (`src/server/small-model.ts`: no tool, no MCP server, a
+  minimal system prompt, low effort, `--max-budget-usd 0.05`, 60 s at most,
+  in a scratch folder), reads the task and the mailbox tasks the run took
+  (4000 and 1000 characters at most, 10 tasks) and answers in the language of
+  the home; for a mailbox run it names what the tasks are about. The answer is
+  data: its first line, without a label, quotes, markdown or final period, cut
+  at 90 characters. It is stored once per run in `run_summaries` (migration
+  23) with the model, the cost and tokens the CLI reports and the duration; an
+  answer left empty by the cleaning is stored with its cost and no text. A
+  usable summary is a change of its run (a trigger writes it to `changes`), so
+  the page reads the room again at once (below). Any failure (the CLI missing,
+  a timeout, an unusable answer) is silent and never retried: no summary, and
+  the room shows the task. The tile, the heading of the panel and the start of
+  its thread show the summary when there is one, the task otherwise; the
+  panel keeps the full task under « Tâche complète ». The summaries are
+  metered like the portier's verdicts: in their own table, outside the cost of
+  the runs and of the day.
 - **Live updates.** The page reads `GET /api/live`, then again 700 ms after
-  a run starts or ends and after a call to `hq_status` or `hq_show` or its
+  a run starts or ends or gets its summary, and after a call to `hq_status` or `hq_show` or its
   result on `GET /api/events` (the HQ server stores it a moment after the
   call reaches the page), every 10 seconds while the tab is visible (an agent
   writing a file sends no event), and when the tab comes back. A local clock

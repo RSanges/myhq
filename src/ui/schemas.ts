@@ -504,6 +504,7 @@ export const liveTileSchema = z.object({
   agentId: z.string(),
   agentName: z.string(),
   task: z.string(),
+  taskSummary: z.string().nullable(),
   state: z.enum(["working", "waiting", "done"]),
   runStatus: z.string(),
   startedAt: z.string(),

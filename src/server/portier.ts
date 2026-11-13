@@ -1,13 +1,11 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { z } from "zod";
 import { strings } from "../ui/strings";
 import type { Env, HqConfig } from "./config";
 import { now, type Db, type TaskRow } from "./db";
 import { DEFAULT_LANGUAGE, DEFAULT_PORTIER, readHomeSettings, readPortierSetting, type PortierSetting } from "./home-settings";
 import type { Agent } from "./rooms";
+import { claudeSmallModelCall, smallModelArgs, type SmallModelAnswer, type SmallModelCall, type SmallModelCallInput } from "./small-model";
 
 // The portier: before MyHQ wakes an agent for a message of another agent
 // (reason `message`), a small model reads the message and says whether it is
@@ -37,131 +35,22 @@ const ROLE_MAX = 600;
 /** The most messages given in one call; the others are judged by the next one. */
 const BATCH_MAX = 10;
 
-/** The input of one call of the portier model. */
-export type PortierCallInput = {
-  claudeBin: string;
-  model: string;
-  system: string;
-  prompt: string;
-  env: Env;
-  timeoutMs: number;
-};
+/** The input of one call of the portier model (small-model.ts). */
+export type PortierCallInput = SmallModelCallInput;
 
 /** What a call gives back: the model's text, and what it cost. */
-export type PortierAnswer = {
-  text: string;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheReadInputTokens: number;
-  durationMs: number;
-};
+export type PortierAnswer = SmallModelAnswer;
 
 /** The model call itself, replaced in the tests. Rejects on any failure. */
-export type PortierCall = (input: PortierCallInput) => Promise<PortierAnswer>;
-
-/** The single result object of `claude -p --output-format json`. */
-const resultSchema = z.looseObject({
-  type: z.literal("result"),
-  subtype: z.string(),
-  is_error: z.boolean().optional(),
-  result: z.string().optional(),
-  total_cost_usd: z.number().optional(),
-  duration_ms: z.number().optional(),
-  usage: z
-    .looseObject({
-      input_tokens: z.number().optional(),
-      output_tokens: z.number().optional(),
-      cache_creation_input_tokens: z.number().optional(),
-      cache_read_input_tokens: z.number().optional(),
-    })
-    .optional(),
-});
+export type PortierCall = SmallModelCall;
 
 /** The arguments of the portier's `claude -p`: no tool, no MCP server, no user settings, low effort. */
 export function portierArgs(input: Pick<PortierCallInput, "model" | "system" | "prompt">): string[] {
-  return [
-    "-p",
-    input.prompt,
-    "--output-format",
-    "json",
-    "--model",
-    input.model,
-    "--system-prompt",
-    input.system,
-    "--tools",
-    "",
-    "--strict-mcp-config",
-    "--setting-sources",
-    "project,local",
-    "--effort",
-    "low",
-    "--max-budget-usd",
-    String(PORTIER_MAX_BUDGET_USD),
-  ];
+  return smallModelArgs({ ...input, maxBudgetUsd: PORTIER_MAX_BUDGET_USD });
 }
 
-/**
- * The real call: `claude -p` in a scratch folder of the system's temporary
- * directory (no CLAUDE.md of the home is read), its JSON result parsed.
- */
-export const claudePortierCall: PortierCall = (input) =>
-  new Promise((resolve, reject) => {
-    const cwd = path.join(os.tmpdir(), "myhq-portier");
-    try {
-      fs.mkdirSync(cwd, { recursive: true });
-    } catch (error) {
-      reject(error as Error);
-      return;
-    }
-    const started = Date.now();
-    const child = spawn(input.claudeBin, portierArgs(input), {
-      cwd,
-      env: input.env as unknown as NodeJS.ProcessEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr = (stderr + chunk).slice(-2_000)));
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`no answer after ${Math.round(input.timeoutMs / 1000)} s`));
-    }, input.timeoutMs);
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(new Error(`could not start "${input.claudeBin}": ${error.message}`));
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      let raw: unknown;
-      try {
-        raw = JSON.parse(stdout.trim());
-      } catch {
-        reject(new Error(`claude exited with code ${code} without a JSON result${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
-        return;
-      }
-      const parsed = resultSchema.safeParse(raw);
-      if (!parsed.success || parsed.data.is_error || parsed.data.subtype !== "success") {
-        reject(new Error(`claude gave no answer (${parsed.success ? parsed.data.subtype : "unreadable result"})`));
-        return;
-      }
-      const usage = parsed.data.usage ?? {};
-      resolve({
-        text: parsed.data.result ?? "",
-        costUsd: parsed.data.total_cost_usd ?? 0,
-        inputTokens: usage.input_tokens ?? 0,
-        outputTokens: usage.output_tokens ?? 0,
-        cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
-        cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
-        durationMs: parsed.data.duration_ms ?? Date.now() - started,
-      });
-    });
-  });
+/** The real call: `claude -p` in a scratch folder of the system's temporary directory (small-model.ts). */
+export const claudePortierCall: PortierCall = claudeSmallModelCall;
 
 /** The portier in force: the `portier` block of myhq.json, else the configuration's (on, on Haiku). */
 export function portierSetting(config: HqConfig): PortierSetting {
@@ -379,6 +268,7 @@ async function judge(p: GateParams, setting: PortierSetting, tasks: readonly Mes
       prompt,
       env: p.env,
       timeoutMs: PORTIER_TIMEOUT_MS,
+      maxBudgetUsd: PORTIER_MAX_BUDGET_USD,
     });
     const parsed = parseVerdict(answer.text);
     if (parsed) ({ verdict, reason } = parsed);

@@ -24,6 +24,8 @@ import {
 } from "./long-runs";
 import { languageName, wakeOnboarding } from "./onboarding";
 import { messageGate, type PortierCall } from "./portier";
+import { summarizeRun } from "./run-summary";
+import type { SmallModelCall } from "./small-model";
 import { appendLine, deskLinkLine, runLinkLine, withLine } from "./public-url";
 import { startRelaunchRequests } from "./relaunch-requests";
 import { runPrepare, type PrepareInput, type PrepareOutcome } from "./prepare";
@@ -68,6 +70,8 @@ export type RunnerDeps = {
   motive?: string;
   /** The portier's model call (portier.ts). Default: the real `claude -p`. */
   portier?: PortierCall;
+  /** The run summary's model call (run-summary.ts). Default: the real `claude -p`. */
+  summarize?: SmallModelCall;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -680,7 +684,10 @@ export function launchRun(params: {
     })
     .immediate();
 
-  const today = todayLine(new Date(), liveConfig(config).timeZone, promptLanguage(config.home));
+  const language = promptLanguage(config.home);
+  const today = todayLine(new Date(), liveConfig(config).timeZone, language);
+  // The summary of the task for the surveillance room, asked now and never awaited: the run starts at once.
+  void summarizeRun({ config, db, run, mailbox, language, env: agentEnv(process.env, {}), call: deps.summarize });
   const prompt = params.prompt(run.id, mailbox);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
   const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
