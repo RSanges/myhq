@@ -404,15 +404,15 @@ export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget,
 
 /**
  * « Clore »: the tasks of the target are done, with the note « close par le
- * propriétaire ». Nothing wakes.
+ * propriétaire » (or the one given: the supervisor's, closures.ts). Nothing wakes.
  */
-export function closeBlocked(db: Db, target: BlockedTarget): { tasks: number[] } {
+export function closeBlocked(db: Db, target: BlockedTarget, note: string = strings.deskModules.standard.closedNote): { tasks: number[] } {
   return db
     .transaction(() => {
       const { ids } = targetTasks(db, target);
       db.prepare(
         `UPDATE tasks SET status = 'done', note = ?, updated_at = ? WHERE id IN (${placeholders(ids)}) AND status IN ('blocked', 'pending')`,
-      ).run(strings.deskModules.standard.closedNote, now(), ...ids);
+      ).run(note, now(), ...ids);
       return { tasks: ids };
     })
     .immediate();

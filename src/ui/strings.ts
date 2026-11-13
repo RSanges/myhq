@@ -1247,6 +1247,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       TASK_NOT_FOUND: "Tâche introuvable.",
       RUN_NOT_FOUND: "Tour introuvable.",
       NOT_BLOCKED: "Ce n'est plus coincé : la tâche a été reprise ou close entre-temps.",
+      CLOSURE_NOT_FOUND: "Clôture introuvable.",
+      ALREADY_REOPENED: "Cette entrée a déjà été rouverte.",
+      STATE_CHANGED: "Une de ses tâches a changé depuis la clôture (reprise par un tour, par exemple) : l'entrée n'est pas rouverte.",
       DESK_OBJECT_NOT_FOUND: "Ce module n'existe pas sur ce bureau.",
       DESK_ACTION_NOT_FOUND: "Ce module n'offre pas cette action.",
       ACTION_FAILED: "La commande du home a refusé l'action.",
@@ -1451,6 +1454,23 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       waitingOther: "La tâche est repartie, mais l'agent n'a pas pu être réveillé.",
       /** The note of a task the owner closed from the Standard (stored on the task). */
       closedNote: "Close par le propriétaire.",
+      /** The note of a task the supervisor closed (hq_blocked_close), with its reason (stored on the task). */
+      closedBySupervisor: (name: string, reason: string) => `Close par ${name} : ${reason}`,
+      /** Written by MyHQ on an entry the owner reopened: it is handed to the owner. */
+      reopenedNote: (name: string, reason: string) => `Rouverte par le propriétaire. ${name} l'avait close : « ${reason} »`,
+      /** The closures by the supervisor of the last 7 days, folded under the entries. */
+      closures: {
+        title: (name: string) => `Clos par ${name}`,
+        hint: "Ce qu'il a réglé et clos lui-même ces 7 derniers jours. Rouvrir remet l'entrée au Standard telle qu'elle était, remise au propriétaire.",
+        count: (open: number) => (open === 1 ? "1 entrée" : `${open} entrées`),
+        closedAt: (date: string) => `Close le ${date}`,
+        reopenedAt: (date: string) => `Rouverte le ${date}`,
+        reason: (name: string) => `Raison de ${name} :`,
+        was: "Elle était coincée parce que :",
+        reopen: "Rouvrir",
+        reopenFor: (agent: string) => `Rouvrir l'entrée de ${agent}`,
+        reopened: "rouverte, elle revient au Standard, remise au propriétaire.",
+      },
       /** A supervisor's note on an entry (hq_blocked_note), and the mark of an entry it handed to the owner. */
       noteBy: (name: string) => `Note de ${name} :`,
       handedOff: "Remis au propriétaire",

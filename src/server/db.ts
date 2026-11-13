@@ -806,6 +806,35 @@ CREATE TABLE IF NOT EXISTS archived_rooms (
 );
 `,
   },
+  {
+    version: 26,
+    sql: `
+-- A closure of an entry of the Standard by the supervisor (hq_blocked_close,
+-- closures.ts), with what undoes it: the entry (target, agent, why it was
+-- stuck, its text), the state of each of its tasks before (tasks, a JSON array
+-- of { id, status, note, run_id, updated_at }), the supervisor's reason, who,
+-- its run, when (closed_at, the updated_at the closure wrote on the tasks),
+-- and when the owner reopened it. Rows are never deleted: the Standard shows
+-- the last 7 days. Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS supervisor_closes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  entry_reason TEXT NOT NULL,
+  entry_text TEXT NOT NULL,
+  tasks TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  by_room TEXT NOT NULL,
+  by_agent TEXT NOT NULL,
+  by_run INTEGER,
+  closed_at TEXT NOT NULL,
+  reopened_at TEXT
+);
+CREATE INDEX IF NOT EXISTS supervisor_closes_closed ON supervisor_closes (closed_at);
+`,
+  },
 ];
 
 function migrate(db: Db): void {
