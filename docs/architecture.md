@@ -1041,7 +1041,9 @@ room, so that nothing waits in silence:
   the mailbox tasks it gave back, still pending (recognized as the pending
   tasks of the agent without a run that were given back at the instant the run
   ended). A later run of the agent with the same instruction that ended done
-  (or runs) means the work was taken again: the run is not listed.
+  (or runs) means the work was taken again: the run is not listed. A run
+  whose closure by the supervisor the owner reopened is listed at any age,
+  whatever later run, while its tasks are open (see "The supervisor").
 
 Each entry gives its room (and colour), its agent, since when (the block, the
 creation of the pending task, the end of the run), the reason in one sentence
@@ -1063,16 +1065,18 @@ stuck, not of entries. Two actions, with a light confirmation on the page:
 The count and the entries are only what is open: an entry closed, by the
 owner or by the supervisor, is off the Standard since its tasks are done.
 Under the entries, a list folded by default, « Clos par <its name> » (the name
-of the supervisor, from the home), shows what the supervisor closed itself in
-the last 7 days (`closures` of `GET /api/desk`): the agent, why it was stuck,
-the supervisor's reason and the date, with **Rouvrir** on each one still
-closed (`POST /api/blocked/reopen`, see "The supervisor"). A reopened one stays
-listed, marked « Rouverte le ... ».
+of the supervisor, from the home; « Clos par les superviseurs » when the
+closures listed come from more than one), shows what the supervisor closed
+itself in the last 7 days (`closures` of `GET /api/desk`): the agent, why it
+was stuck, the supervisor's reason, the date and, folded, the text of the
+task, with **Rouvrir** on each one still closed (`POST /api/blocked/reopen`,
+see "The supervisor"). A reopened one stays listed, marked « Rouverte le ... ».
 
 An entry also shows the latest note of the supervisor on its tasks (« Note de
-<its name> : ... », see below). An entry the supervisor handed to the owner is
-marked « Remis au propriétaire », drawn apart and listed first, whatever its
-age.
+<its name> : ... », see below). An entry handed to the owner (by the
+supervisor, by MyHQ, or by a reopening) is marked « Remis au propriétaire »,
+drawn apart and listed first, whatever its age. A hand-off is for good: a
+later note, whatever it says, takes nothing back.
 
 ### The supervisor
 
@@ -1119,11 +1123,17 @@ into the `supervisors` table, which the HQ MCP server reads.
   failed, the agent blocked it again, or the run could not start), MyHQ hands
   it to the owner with a note in the supervisor's name (« <its name> l'a déjà
   relancée une fois et elle est encore coincée... »). The owner's own
-  « Relancer » is not counted.
+  « Relancer » is not counted. An entry handed to the owner is never
+  relaunched by a supervisor (`HANDED_OFF`); the owner's « Relancer » still
+  works on it.
 - **Notes.** `hq_blocked_note` stores one row of `blocked_notes` per task of
   the entry (text, supervisor, run, `handed_off`). The Standard shows the
-  latest one of an entry; `handOff: true` hands it to the owner. A note never
-  changes a task.
+  latest one of an entry; `handOff: true` hands it to the owner, for good: an
+  entry is handed off as soon as one note with `handed_off` exists on one of
+  its tasks (`handedOff` in `blocked.ts`), whoever wrote it, and a later note
+  without `handOff` adds its sentence and takes nothing back. Every reader
+  (the Standard, `hq_blocked`, the rules, the wake-ups, `hq_relaunch`,
+  `hq_blocked_close`) uses that. A note never changes a task.
 - **Closing.** `hq_blocked_close(kind, id, reason)` closes an entry the
   supervisor settled, or that has no more reason to be, so that the Standard
   keeps only what the owner must look at. `reason` is one sentence for the
@@ -1131,7 +1141,10 @@ into the `supervisors` table, which the HQ MCP server reads.
   (`closeBlocked`): the tasks are `done` and nothing wakes; only their note
   differs, « Close par <its name> : <reason> ». It is refused on an entry
   handed to the owner (`HANDED_OFF`: it is the owner's, whoever handed it), on
-  the supervisor's own entries (`OWN_ENTRY`, the ones `hq_blocked` leaves
+  an entry holding a request of the owner (`OWNER_REQUEST`: a task of source
+  `chat`, given from the conversation, or `revise`, a send-back or the answers
+  to questions; only the owner cancels those, the supervisor hands them over),
+  on the supervisor's own entries (`OWN_ENTRY`, the ones `hq_blocked` leaves
   out), and on a target that is not, or no longer, an entry of the Standard
   (`NOT_ON_STANDARD`, or `NOT_BLOCKED` and `TASK_NOT_FOUND` as for the
   buttons; a task of a run's entry names the run's target). Each closure is a
@@ -1148,9 +1161,10 @@ into the `supervisors` table, which the HQ MCP server reads.
   by a run, relaunched, closed by the owner: its status or `updated_at`
   differ) refuses the reopening (`STATE_CHANGED`) and nothing is restored.
   Since the entry is handed to the owner, neither MyHQ's rules nor the
-  wake-ups act on it, and `hq_blocked_close` refuses it. A failed run's entry
-  shows only within its 24 hours: reopened later, its tasks are back but, as
-  for any older run, only the tasks it gave back show, as pending entries.
+  wake-ups act on it, and `hq_blocked_close` and `hq_relaunch` refuse it. A
+  failed run's entry, reopened after its 24 hours (or after a later run of the
+  same instruction), is still listed: a run whose closure was reopened stays
+  on the Standard, at any age, while its tasks are open.
 - **Rules first.** Much of the supervisor's method is a written rule, and MyHQ
   applies it itself before it wakes the supervisor (`settleByRule`, from
   `entryRule`). Each entry carries the code of why it is stuck (`cause`) and

@@ -651,7 +651,9 @@ when it is stuck, `reason` one sentence in
 the language of the interface. `note` is the latest note of the supervisor of
 the Standard on the entry (`{ text, by, at }`, `by` its name; null when there is
 none), and `handedOff` says that it handed the entry to the owner: those
-entries come first (see "The supervisor" in `architecture.md`).
+entries come first (see "The supervisor" in `architecture.md`). A hand-off is
+for good: `handedOff` is true as soon as one note handed the entry over, by the
+supervisor, by MyHQ or by a reopening, whatever note came after.
 
 A closure by the supervisor (`closures[]` of the `blocked` object):
 
@@ -659,7 +661,8 @@ A closure by the supervisor (`closures[]` of the `blocked` object):
 { "id": 3, "room": "demo", "agentId": "scout", "agentName": "Scout", "by": "Supervisor", "reason": "Le rendu a été refait, la tâche n'a plus lieu d'être.", "entryReason": "Bloquée par l'agent : Which version?", "text": "Render the trailer.", "color": "#ff3d7f", "closedAt": "2026-11-04T08:30:00.000Z", "reopenedAt": null }
 ```
 
-`by` is the supervisor's name, `reason` its sentence, `entryReason` why the
+`by` is the supervisor's name (the page titles the list with it when every
+closure listed is from the same supervisor), `reason` its sentence, `entryReason` why the
 entry was stuck when it closed it, `text` the text of the task (for a run, its
 instruction and the tasks it gave back). `reopenedAt` is set once the owner
 reopened it. A closed entry is neither among the `items` nor in the `count`.
