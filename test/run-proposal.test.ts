@@ -317,3 +317,55 @@ test("migration 20 is additive and safe at a restart: an older database gets the
   // A restart on a migrated database changes nothing.
   openDb(config.dbPath).close();
 });
+
+// --- A run in progress -------------------------------------------------------------
+
+test("a question asked while a run is active gives the agent that run as the truth, and proposes nothing to launch", async () => {
+  const config = makeHome();
+  const db = getDbAt(config.dbPath);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const busyEngine: Engine = {
+    name: "claude",
+    async *run() {
+      await held;
+      yield { type: "end", status: "done", reason: "success", summary: "ok", usage, costUsd: 0 };
+    },
+  };
+  const run = startRun({ room: "demo", agent: "scout", task: "Render the GPU batch of clips." }, { config, engine: busyEngine });
+  db.prepare("INSERT INTO run_statuses (run_id, room, agent_id, text, created_at) VALUES (?, 'demo', 'scout', ?, ?)").run(
+    run.id,
+    "Waiting for the game to end before the GPU batch.",
+    "2026-11-13T00:30:00.000Z",
+  );
+  const prompts: string[] = [];
+  const asked = askAgent({ room: "demo", agent: "scout", question: "Refais le clip B" }, { config, engine: answering(WORK_ANSWER, prompts) });
+  await questionsIdle();
+  try {
+    const prompt = prompts[0] ?? "";
+    assert.match(prompt, new RegExp(`run #${run.id} in progress`));
+    assert.match(prompt, /Render the GPU batch of clips\./);
+    assert.match(prompt, new RegExp(run.started_at.replace(/[.]/g, "\.")));
+    assert.match(prompt, /Waiting for the game to end before the GPU batch\./);
+    assert.match(prompt, /source of truth/);
+    assert.match(prompt, /above your memory/);
+    assert.match(prompt, /do not propose a run/i);
+
+    const question = toQuestion(readDiscussion(db, "demo", "scout").find((row) => row.id === asked.id)!);
+    assert.equal(question.status, "done");
+    assert.equal(question.proposal, null, "no proposal that the agent lock would refuse");
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM question_proposals").get() as { n: number }).n, 0);
+  } finally {
+    release();
+    await waitForRun(db, run.id);
+  }
+});
+
+test("a question asked while no run is active says so, from the database", async () => {
+  const config = makeHome();
+  const prompts: string[] = [];
+  askAgent({ room: "demo", agent: "scout", question: "Où en es-tu ?" }, { config, engine: answering("Rien en cours.", prompts) });
+  await questionsIdle();
+  assert.match(prompts[0] ?? "", /no run in progress/);
+  assert.match(prompts[0] ?? "", /source of truth/);
+});
