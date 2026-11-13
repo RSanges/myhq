@@ -121,14 +121,15 @@ consumed by runs over the week.
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
 It reads its context from the environment (database path, run id, agent id,
-room) and writes directly to SQLite. Eighteen tools, all validated with zod:
+room) and writes directly to SQLite. Nineteen tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
 | `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). `questions`: multiple-choice questions attached to the deliverable (see "Questions attached to a deliverable"). |
 | `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
-| `hq_status(text)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). |
+| `hq_status(text, waiting?)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). With `waiting: true` the text is the reason the agent waits, and the status is also marked in `run_waits` (migration 22) in the same transaction: the agent waits until its next status (see "The surveillance room"). |
+| `hq_show(path, caption)` | Show the owner a file of the working directory, with why (1 to 200 characters): the piece of the agent's tile in the surveillance room, marked « Montré par l'agent », over its `pieces` patterns. Checked at the call (inside the working directory once links are followed, a regular file of a video, image, sound or text kind, at most the attachment cap) and stored in `run_pins` (migration 22) as the real path, relative and in POSIX form. Publishes nothing. Not given in read-only mode. |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
 | `hq_memory_read(key)` | Read a value of the agent's role memory. |
@@ -1959,7 +1960,9 @@ strip of agents. The desk, the page that works everywhere (the items to
 decide, the team, the feed), is `/bureau`: a click on the user's own office
 opens it (below). When the home has several rooms, buttons choose the floor
 shown. Every page has the same navigation in its header (`site-nav.tsx`):
-« L'étage » (`/`), « Le bureau » (`/bureau`), « Feuille de route », « Réglages ».
+« L'étage » (`/`), « Le bureau » (`/bureau`), « Salle de surveillance »
+(`/surveillance`), « Réglages ». The roadmap stays at `/roadmap`, out of the
+navigation.
 
 **Pixel art, zoom and pan.** The art (`public/iso/`, built by
 `scripts/iso/`, formats in `scripts/iso/README.md`) is only ever drawn at a
@@ -2389,6 +2392,52 @@ the room (README, "Trying the room without a real run").
 - The tray counts the items of the shown room; on the single floor, each
   room's counter counts the items of its room (`pendingByRoom` of the view), an
   item delivered by a shared room counting for the room that ordered it.
+
+### The surveillance room
+
+`/surveillance` (`src/ui/live-room.tsx`, its pure helpers in
+`live-room-model.ts`, the server side in `src/server/live-room.ts`) shows only
+the agents working now: one tile per agent with a run in progress, plus the
+runs ended under 5 minutes ago, greyed, with a link to the run on the desk
+(`/bureau#run-<id>`). An agent merely queued behind a shared resource has no
+run and no tile. The point is to follow the work as it is produced, so each
+tile shows the piece the agent works on, large.
+
+- **Relevance over completeness.** MyHQ never shows everything in a working
+  directory. The role declares its piece with glob patterns
+  (`agents[].pieces`, home-layout.md, "The piece"); MyHQ walks each pattern
+  from its static prefix, never into a directory link, `.git`, `node_modules`
+  or `.claude`, visits 5,000 entries at most, matches the real paths relative
+  to the real directory, and keeps the files modified during the run, the 12
+  newest. The latest is the piece, the earlier ones the strip of versions
+  (« Suivi auto »). An agent may pin a file itself with `hq_show` and a
+  caption (« Montré par l'agent »), which wins over the patterns. With
+  neither, the tile is text only.
+- **States.** Working; waiting, when the latest status was given with
+  `hq_status(waiting: true)` (`run_waits`), its text being the reason; just
+  finished. The time and the cost of the run are on the tile (the cost of a
+  run in progress is estimated from its journal, as `hq_run_status` does).
+- **Kinds.** A video plays muted in a loop (4 tiles at most at once, the
+  thumbnails never play, none with `prefers-reduced-motion`, which also stops
+  the animations); an image opens large on a click; a sound gets a plain
+  player; a text file shows its path and its first 40 lines or 4 KB, carried
+  inside the JSON, never served raw.
+- **The detail panel** (`?run=<id>` opens it at load) shows the piece large,
+  the strip, and the thread of the run: its statuses and the versions of its
+  piece mixed in time order. Two versions of the same media kind can be
+  compared side by side.
+- **Serving the files.** A media file is read where the agent wrote it, by
+  `GET /api/live/runs/<id>/file?path=` (api.md), only when the run showed it
+  or it matches the patterns and was written during the run; anything else
+  is a 404 that does not tell whether the file exists. The file may change:
+  a weak ETag from its size and time, revalidated each time, and the URL
+  carries the modification time (`&v=`).
+- **Live updates.** The page reads `GET /api/live`, then again 700 ms after
+  a run starts or ends and after a call to `hq_status` or `hq_show` or its
+  result on `GET /api/events` (the HQ server stores it a moment after the
+  call reaches the page), every 10 seconds while the tab is visible (an agent
+  writing a file sends no event), and when the tab comes back. A local clock
+  ticks every second for the times.
 
 ## 8. The desk objects
 
