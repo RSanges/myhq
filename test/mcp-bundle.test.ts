@@ -85,6 +85,7 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
       "hq_run_extend",
       "hq_run_status",
       "hq_run_stop",
+      "hq_show",
       "hq_status",
       "hq_submit",
       "hq_suggest_agent",

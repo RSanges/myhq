@@ -11,9 +11,11 @@ import {
   attachmentPath,
   MAX_ATTACHMENTS,
   resolveAttachment,
+  resolveInside,
   storeAttachments,
   type ResolvedAttachment,
 } from "../server/attachments";
+import { pieceKind } from "../server/live-room";
 import { APPROVAL_STATUSES, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
 import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStatus } from "../server/long-runs";
@@ -115,7 +117,10 @@ const targetShape = {
 /** The run a supervisor checks: the run number of its « long run to check » task. */
 const runIdShape = z.number().int().positive().describe("The number of the run (#12 gives 12), as your task « Long run to check » names it.");
 
-/** Input shapes of the eighteen tools (zod raw shapes, as the MCP SDK expects). */
+/** The longest caption hq_show takes. */
+export const SHOW_CAPTION_MAX = 200;
+
+/** Input shapes of the nineteen tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -220,6 +225,20 @@ export const inputs = {
       .boolean()
       .optional()
       .describe("true: you are waiting (for a resource, a render, an answer), and `text` says for what. You count as waiting until your next status."),
+  },
+  hq_show: {
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("The file to show, relative to your working directory: a video, an image, a sound or a text file."),
+    caption: z
+      .string()
+      .trim()
+      .min(1)
+      .max(SHOW_CAPTION_MAX)
+      .describe(`Why the owner should look at it, in one sentence of the home's language (${SHOW_CAPTION_MAX} characters at most).`),
   },
   hq_pending: {},
   hq_items: {
@@ -1014,6 +1033,38 @@ export function hqStatus(db: Db, ctx: HqContext, args: Args<"hq_status">) {
     if (waiting) db.prepare("INSERT INTO run_waits (status_id) VALUES (?)").run(id);
   }).immediate();
   return { saved: true as const, text, at, waiting };
+}
+
+/**
+ * hq_show: the agent shows the owner a file of its working directory, with
+ * why, in the surveillance room (`run_pins`, migration 22). Checked now: inside
+ * the working directory once links are followed, a regular file of a piece
+ * kind, at most the attachment cap. The path is stored as the real one,
+ * relative and in POSIX form. It writes nothing else.
+ */
+export function hqShow(db: Db, ctx: HqContext, args: Args<"hq_show">) {
+  const parsed = z.object(inputs.hq_show).parse(args);
+  if (!ctx.workDir) throw new ToolError("hq_show: this run has no working directory, so it cannot show a file.");
+  const { real, relative } = resolveInside(ctx.workDir, parsed.path, "hq_show");
+  const stat = fs.statSync(real);
+  if (!stat.isFile()) throw new ToolError(`hq_show: "${parsed.path}" is not a file.`);
+  if (!pieceKind(relative)) {
+    throw new ToolError(`hq_show: "${parsed.path}" is not of a kind the owner can see (a video, an image, a sound or a text file).`);
+  }
+  const maxBytes = ctx.attachmentMaxBytes ?? attachmentMaxBytes({});
+  if (stat.size > maxBytes) {
+    throw new ToolError(`hq_show: "${parsed.path}" is above the cap of ${(maxBytes / 1024 / 1024).toFixed(0)} MB: show a lighter file.`);
+  }
+  const at = now();
+  db.prepare("INSERT INTO run_pins (run_id, room, agent_id, path, caption, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    ctx.runId,
+    ctx.room,
+    ctx.agentId,
+    relative,
+    parsed.caption,
+    at,
+  );
+  return { shown: true as const, path: relative, at };
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {

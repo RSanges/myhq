@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
+import { resolveInside } from "../src/server/attachments";
 import { getDbAt, openDb } from "../src/server/db";
+import { pieceKind } from "../src/server/live-room";
 import { loadHome, syncHome } from "../src/server/rooms";
-import { hqStatus } from "../src/mcp/tools";
+import { buildPrompt } from "../src/server/runner";
+import { hqShow, hqStatus, type HqContext } from "../src/mcp/tools";
 import { makeHome } from "./helpers";
 
 /** A home with one running run of the scout, its database and the context of its HQ server. */
@@ -46,4 +52,83 @@ test("migration 22 is idempotent: applied again, it keeps the tables and their r
   } finally {
     reopened.close();
   }
+});
+
+// --- hq_show: the agent shows a file ------------------------------------------------
+
+/** The running run of the scout, with files in its working directory and the context hq_show needs. */
+function showSetup() {
+  const setup = runningRun();
+  const work = path.join(setup.config.home, "data", "work", "demo", "scout");
+  fs.mkdirSync(path.join(work, "renders"), { recursive: true });
+  fs.writeFileSync(path.join(work, "renders", "plan-01.mp4"), "fake mp4");
+  fs.writeFileSync(path.join(work, "notes.md"), "# Notes\n");
+  fs.writeFileSync(path.join(work, "model.stl"), "solid x");
+  fs.writeFileSync(path.join(work, "big.png"), Buffer.alloc(64));
+  const ctx: HqContext = { ...setup.ctx, workDir: work, attachmentMaxBytes: 32 };
+  return { ...setup, work, ctx };
+}
+
+test("pieceKind: video, image and audio from the attachment types, text from a short list, nothing else", () => {
+  assert.equal(pieceKind("a/clip.MP4"), "video");
+  assert.equal(pieceKind("sheet.webp"), "image");
+  assert.equal(pieceKind("take.wav"), "audio");
+  assert.equal(pieceKind("notes.md"), "text");
+  assert.equal(pieceKind("src/app.ts"), "text");
+  assert.equal(pieceKind("part.stl"), null);
+  assert.equal(pieceKind("doc.pdf"), null);
+  assert.equal(pieceKind("archive.zip"), null);
+});
+
+test("resolveInside: the real path and its POSIX path relative to the working directory, never outside", (t) => {
+  const { work } = showSetup();
+  const inside = resolveInside(work, "renders\\plan-01.mp4", "hq_show");
+  assert.equal(inside.relative, "renders/plan-01.mp4");
+  assert.equal(inside.real, fs.realpathSync(path.join(work, "renders", "plan-01.mp4")));
+  for (const bad of ["/etc/x.png", "C:/x.png", "../x.png", "renders/../../x.png", "missing.mp4", "."]) {
+    assert.throws(() => resolveInside(work, bad, "hq_show"), /Error: hq_show: /, bad);
+  }
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.png"), "outside");
+  try {
+    fs.symlinkSync(outside, path.join(work, "escape"), "junction");
+  } catch {
+    t.skip("cannot create a directory link here");
+    return;
+  }
+  assert.throws(() => resolveInside(work, "escape/secret.png", "hq_show"), /leads out of your working directory/);
+});
+
+test("hq_show pins a file of a known kind with its caption, in POSIX form, and writes no change", () => {
+  const { db, ctx, runId } = showSetup();
+  const before = changeCount(db);
+  const shown = hqShow(db, ctx, { path: "renders\\plan-01.mp4", caption: "  Regarde la fin du plan  " });
+  assert.equal(shown.path, "renders/plan-01.mp4");
+  const rows = db.prepare("SELECT run_id, room, agent_id, path, caption FROM run_pins").all();
+  assert.deepEqual(rows, [{ run_id: runId, room: "demo", agent_id: "scout", path: "renders/plan-01.mp4", caption: "Regarde la fin du plan" }]);
+  hqShow(db, ctx, { path: "notes.md", caption: "Le plan du film" });
+  assert.equal(changeCount(db), before);
+});
+
+test("hq_show refuses a file out of reach, of an unknown kind, above the cap, a bad caption, or without a working directory", () => {
+  const { db, ctx } = showSetup();
+  assert.throws(() => hqShow(db, ctx, { path: "../x.mp4", caption: "c" }), /climbs out/);
+  assert.throws(() => hqShow(db, ctx, { path: "missing.mp4", caption: "c" }), /does not exist/);
+  assert.throws(() => hqShow(db, ctx, { path: "model.stl", caption: "c" }), /kind/);
+  assert.throws(() => hqShow(db, ctx, { path: "renders", caption: "c" }), /not a file/);
+  assert.throws(() => hqShow(db, ctx, { path: "big.png", caption: "c" }), /cap/);
+  assert.throws(() => hqShow(db, ctx, { path: "notes.md", caption: "   " }));
+  assert.throws(() => hqShow(db, ctx, { path: "notes.md", caption: "x".repeat(201) }));
+  const { workDir: _workDir, ...noWorkDir } = ctx;
+  void _workDir;
+  assert.throws(() => hqShow(db, noWorkDir, { path: "notes.md", caption: "c" }), /working directory/);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM run_pins").get() as { n: number }).n, 0);
+});
+
+test("the prompt of a run tells about hq_show next to hq_status", () => {
+  const { config } = runningRun();
+  const home = loadHome(config.home);
+  const room = home.rooms[0]!;
+  const prompt = buildPrompt({ room, agent: room.agents[0]!, runId: 1, task: "t", mailbox: [] });
+  assert.match(prompt, /hq_show \(if you have it\)/);
 });
