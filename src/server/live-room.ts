@@ -5,7 +5,7 @@ import type { Db, RunRow, RunStatus } from "./db";
 import { HqError } from "./errors";
 import { estimateCostUsd, journalUsage } from "./long-runs";
 import type { Agent, Home, Room } from "./rooms";
-import { patternRegExp, relativeInside } from "./write-guard-hook.mjs";
+import { patternRegExp, relativeInside } from "./write-guard-lib.mjs";
 
 /**
  * The surveillance room (docs/architecture.md, "The surveillance room"): the

@@ -30,9 +30,12 @@ export const WRITE_TOOL_NAMES = ["Write", "Edit", "MultiEdit", "NotebookEdit"] a
 /** File name of the hook script, which also identifies MyHQ's entry in a settings file. */
 export const WRITE_GUARD_HOOK = "write-guard-hook.mjs";
 
+/** File name of the guard's decisions, which the hook imports: it always sits beside the hook. */
+export const WRITE_GUARD_LIB = "write-guard-lib.mjs";
+
 const GITIGNORE_MARKER = "# Written by MyHQ: its per-run settings stay out of Git.";
 
-/** The hook's configuration (the GuardConfig of write-guard-hook.mjs). */
+/** The hook's configuration (the GuardConfig of write-guard-lib.mjs). */
 export type WriteGuardConfig = {
   /** Absolute working directory. */
   workDir: string;

@@ -132,6 +132,20 @@ test("the frozen server never runs the write guard's hook it bundles: it does no
     });
     assert.doesNotMatch(result.stderr, /write guard/);
     assert.notEqual(result.status, 2);
+
+    // The frozen copy of the hook, with its library beside it, refuses an outside write.
+    const outside = path.join(root, "outside.txt");
+    const work = path.join(root, "work");
+    fs.mkdirSync(work, { recursive: true });
+    const hook = spawnSync(process.execPath, [writeGuardScript(root)], {
+      input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: outside, content: "x" } }),
+      env: { ...process.env, MYHQ_WRITE_GUARD: JSON.stringify({ workDir: work, allow: ["**"], deny: [], writeDirs: [] }) },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    assert.equal(writeGuardScript(root), path.join(path.dirname(mcpBundleEntry(root)), WRITE_GUARD_HOOK));
+    assert.equal(hook.status, 2, hook.stderr);
+    assert.match(hook.stderr, /MyHQ write guard: Write to .* refused/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -1304,7 +1304,8 @@ middle of a run where an earlier write passed); a bare `Write` lets a write
 land outside the working directory (`../outside.txt`); and
 `--permission-mode acceptEdits` lets one land in any `--add-dir`, which MyHQ
 gives for reading. So MyHQ enforces the paths itself
-(`src/server/write-guard.ts`, `src/server/write-guard-hook.mjs`):
+(`src/server/write-guard.ts`, `src/server/write-guard-hook.mjs` and the
+library of its decisions beside it, `write-guard-lib.mjs`):
 
 - Before a run whose rules allow a write, the runner installs a Claude Code
   `PreToolUse` hook in `<working directory>/.claude/settings.local.json`
@@ -1327,7 +1328,7 @@ gives for reading. So MyHQ enforces the paths itself
   ignore the settings file there, otherwise the run fails with an explicit
   error rather than leave a file an agent could commit.
 - The script is plain JavaScript started with `node` (no `tsx`, no
-  dependency), the frozen copy of `build/mcp` made by `npm run build` (the
+  dependency, its library beside it), the frozen copy of `build/mcp` made by `npm run build` (the
   sources without one), so that an agent editing this repository never
   changes the guard of the runs in service. The run's configuration reaches it
   in the `MYHQ_WRITE_GUARD` environment variable (the agent cannot change the

@@ -6,7 +6,7 @@ import { isInside } from "./config";
 import { cronError } from "./cron";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
-import { patternRegExp } from "./write-guard-hook.mjs";
+import { patternRegExp } from "./write-guard-lib.mjs";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
 export const idSchema = z

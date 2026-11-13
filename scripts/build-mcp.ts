@@ -10,7 +10,8 @@
  * are resolved from `node_modules`, and `better-sqlite3` is a native module
  * that cannot be bundled anyway.
  *
- * The write guard's hook script (src/server/write-guard-hook.mjs) is frozen
+ * The write guard's hook script (src/server/write-guard-hook.mjs) is frozen,
+ * with the library of its decisions beside it (write-guard-lib.mjs),
  * there too, for the same reason: the runs in service use that copy.
  *
  * The new copy is built beside the old one and swapped in, so a run starting
@@ -20,7 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 import { mcpBundleDir } from "../src/mcp/bundle";
-import { WRITE_GUARD_HOOK } from "../src/server/write-guard";
+import { WRITE_GUARD_HOOK, WRITE_GUARD_LIB } from "../src/server/write-guard";
 
 /** Builds the frozen server of the repository at `repoRoot` into `<repoRoot>/build/mcp`. Returns its folder. */
 export async function buildMcpBundle(repoRoot: string): Promise<string> {
@@ -42,7 +43,9 @@ export async function buildMcpBundle(repoRoot: string): Promise<string> {
     fs.cpSync(path.join(repoRoot, "templates", "roles"), path.join(stagingDir, "templates", "roles"), {
       recursive: true,
     });
-    fs.copyFileSync(path.join(repoRoot, "src", "server", WRITE_GUARD_HOOK), path.join(stagingDir, WRITE_GUARD_HOOK));
+    for (const file of [WRITE_GUARD_HOOK, WRITE_GUARD_LIB]) {
+      fs.copyFileSync(path.join(repoRoot, "src", "server", file), path.join(stagingDir, file));
+    }
     fs.rmSync(outDir, { recursive: true, force: true });
     fs.renameSync(stagingDir, outDir);
   } catch (error) {
