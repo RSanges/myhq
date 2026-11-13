@@ -731,6 +731,31 @@ CREATE TABLE IF NOT EXISTS run_statuses (
 CREATE INDEX IF NOT EXISTS run_statuses_run ON run_statuses (run_id, id);
 `,
   },
+  {
+    version: 22,
+    sql: `
+-- The surveillance room (docs/architecture.md, "The surveillance room").
+-- run_pins: a file an agent shows the owner during a run (the HQ tool
+-- hq_show), its path relative to the working directory in POSIX form, and why.
+-- run_waits: the statuses (run_statuses) an agent gave with waiting: an agent
+-- waits while its latest status is marked, and the text is its reason.
+-- Written by the HQ MCP server of the run; nothing else reads or acts on them.
+-- Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS run_pins (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  caption TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_pins_run ON run_pins (run_id, id);
+CREATE TABLE IF NOT EXISTS run_waits (
+  status_id INTEGER PRIMARY KEY
+);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

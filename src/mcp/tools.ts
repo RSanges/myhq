@@ -216,6 +216,10 @@ export const inputs = {
       .describe(
         `What you are doing right now, in a few words of the home's language, for the owner: ${STATUS_MAX_CHARS} characters at most, no technical detail (no file path, command or tool name). For example "rend le clip B, 2 sur 3".`,
       ),
+    waiting: z
+      .boolean()
+      .optional()
+      .describe("true: you are waiting (for a resource, a render, an answer), and `text` says for what. You count as waiting until your next status."),
   },
   hq_pending: {},
   hq_items: {
@@ -994,20 +998,22 @@ export function hqRunStop(db: Db, ctx: HqContext, args: Args<"hq_run_stop">) {
  * hq_status: what the agent says it is doing, stored with the time and its run
  * (`run_statuses`, migration 21). It writes nothing else: the floor reads it
  * from the tool call itself, which reaches the interface through the event
- * stream of the run, and the sheet lists the steps of the run.
+ * stream of the run, and the sheet lists the steps of the run. With `waiting`,
+ * the status is also marked in `run_waits` (migration 22), in the same
+ * transaction: the surveillance room shows the agent waiting, for that reason.
  */
 export function hqStatus(db: Db, ctx: HqContext, args: Args<"hq_status">) {
   const parsed = z.object(inputs.hq_status).parse(args);
   const text = normalizeStatus(parsed.text)!;
+  const waiting = parsed.waiting === true;
   const at = now();
-  db.prepare("INSERT INTO run_statuses (run_id, room, agent_id, text, created_at) VALUES (?, ?, ?, ?, ?)").run(
-    ctx.runId,
-    ctx.room,
-    ctx.agentId,
-    text,
-    at,
-  );
-  return { saved: true as const, text, at };
+  db.transaction(() => {
+    const id = db
+      .prepare("INSERT INTO run_statuses (run_id, room, agent_id, text, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(ctx.runId, ctx.room, ctx.agentId, text, at).lastInsertRowid;
+    if (waiting) db.prepare("INSERT INTO run_waits (status_id) VALUES (?)").run(id);
+  }).immediate();
+  return { saved: true as const, text, at, waiting };
 }
 
 export function hqMemoryRead(db: Db, ctx: HqContext, args: Args<"hq_memory_read">) {
