@@ -39,21 +39,23 @@ function disposition(kind: "inline" | "attachment", name: string): string {
 /**
  * Serves a stored file: its MIME type, `Accept-Ranges`, and a 206 with
  * `Content-Range` for a range request (what Safari on iOS asks for before it
- * plays or seeks in a video). The file is the copy made at submission, which
- * never changes: its sha256 is the ETag and the copy can be cached.
+ * plays or seeks in a video). `etag` is the quoted ETag. `immutable`: the file
+ * never changes (the copy of an item made at submission, its sha256 as ETag)
+ * and may be cached; otherwise it is revalidated each time (a file of the
+ * surveillance room, which the agent may write again).
  */
 export function fileResponse(
   request: Request,
-  file: { path: string; name: string; mime: string; sha256: string; download: boolean },
+  file: { path: string; name: string; mime: string; etag: string; immutable: boolean; download: boolean },
 ): Response {
   const size = fs.statSync(file.path).size;
   const headers: Record<string, string> = {
     "Content-Type": file.mime,
     "Accept-Ranges": "bytes",
-    "Cache-Control": "private, max-age=31536000, immutable",
+    "Cache-Control": file.immutable ? "private, max-age=31536000, immutable" : "private, no-cache",
     "Content-Disposition": disposition(file.download ? "attachment" : "inline", file.name),
     "X-Content-Type-Options": "nosniff",
-    ETag: `"${file.sha256}"`,
+    ETag: file.etag,
   };
   const head = request.method === "HEAD";
   if (request.headers.get("if-none-match") === headers.ETag) return new Response(null, { status: 304, headers });

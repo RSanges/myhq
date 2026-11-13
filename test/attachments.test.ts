@@ -146,7 +146,7 @@ test("file response: the whole file, then 206 with ranges, 416 past the end, 304
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-range-"));
   const file = path.join(dir, "1.mp4");
   fs.writeFileSync(file, "0123456789");
-  const info = { path: file, name: "clip-01.mp4", mime: "video/mp4", sha256: "abc", download: false };
+  const info = { path: file, name: "clip-01.mp4", mime: "video/mp4", etag: '"abc"', immutable: true, download: false };
   const get = (headers: Record<string, string> = {}, method = "GET") => fileResponse(new Request("http://x/f", { method, headers }), info);
 
   const full = get();
@@ -183,6 +183,13 @@ test("file response: the whole file, then 206 with ranges, 416 past the end, 304
   assert.equal(await head.text(), "");
 
   assert.equal(get({ "if-none-match": '"abc"' }).status, 304);
+  assert.equal(get().headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal(get().headers.get("x-content-type-options"), "nosniff");
+  // A file that may still change (the surveillance room): revalidated each time, against its weak ETag.
+  const live = fileResponse(new Request("http://x/f"), { ...info, etag: 'W/"10-123"', immutable: false });
+  assert.equal(live.headers.get("cache-control"), "private, no-cache");
+  assert.equal(live.headers.get("etag"), 'W/"10-123"');
+  assert.equal(fileResponse(new Request("http://x/f", { headers: { "if-none-match": 'W/"10-123"' } }), { ...info, etag: 'W/"10-123"', immutable: false }).status, 304);
   assert.match(get().headers.get("content-disposition")!, /^inline; filename="clip-01.mp4"/);
   const download = fileResponse(new Request("http://x/f"), { ...info, name: "pièce.3mf", mime: "model/3mf", download: true });
   assert.match(download.headers.get("content-disposition")!, /^attachment; filename="pi_ce.3mf"; filename\*=UTF-8''pi%C3%A8ce.3mf$/);
