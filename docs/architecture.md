@@ -267,6 +267,61 @@ this minute match" and "when is the next one", not a scheduling library.
   of his plan), the meter and `/status` show the share of it spent by the
   runs of the week (Monday to today).
 
+### Managing rooms
+
+The settings page (`/reglages`, five tabs: Général, Salles, Limites et
+coûts, Notifications, Sécurité; see `home-layout.md`, "The settings page")
+manages the rooms of the home in its « Salles » tab
+(`src/server/room-manage.ts`). None of its gestures erases anything:
+
+- **Pause and resume.** Pausing a room disarms, in one click, every armed
+  routine of its agents through the usual armed state (the database over
+  `room.json`), and remembers which agents were armed (`room_pauses`,
+  migration 24). Resuming re-arms exactly those (the ones still in the room)
+  and forgets the pause. An agent can still be armed by hand while its room is
+  paused; its agents still answer when they are spoken to.
+- **Archive and restore.** An archived room is named in `archivedRooms` of
+  `myhq.json`, kept by MyHQ in the home rather than in the database, so that
+  the home stays a plain Git folder that says which rooms are live, and an
+  archive survives a fresh database. `loadHome` leaves an archived room out of
+  `rooms` (it is listed apart, in `archived`): everything that reads the rooms
+  of the home stops seeing it at once, without a filter of its own: the floor,
+  the desk's lists, the scheduler (its routines are dropped at the next tick),
+  manual runs and wake-ups (`ROOM_NOT_FOUND`), and `syncHome`, which no longer
+  refreshes its row, so the HQ tools stop offering it as a current room. Its
+  folder, its working directories and its rows in the database (runs, costs,
+  items, the agents' armed state) stay as they are; its items still pending
+  stay on the desk. Archiving pauses the room first and is refused while a run
+  of the room is in progress (`ROOM_BUSY`); restoring removes the name from the
+  list and the room comes back paused.
+- **Remove an agent.** Its block leaves `room.json`, written by the same code
+  as the proposals (`writeRoomFile` of `agent-proposal.ts`) and loaded again
+  with `loadRoom` (the file is put back when the room would no longer load).
+  Its role file, its working directory and its history stay. Refused while it
+  runs (`AGENT_BUSY`), while one of its items waits for a decision
+  (`AGENT_HAS_PENDING`), and for the last agent of a room (`ROOM_LAST_AGENT`).
+- **Delete.** The rare gesture, and still nothing is erased: the room's
+  configuration folder `rooms/<name>/` (its `room.json`, roles, skills, logo)
+  moves to `archives/rooms/<name>-<YYYY-MM-DD>/` (`-2`, `-3`... when taken),
+  and the room leaves the floor (and `archivedRooms`). Its working
+  directories, its worktrees and all its history (runs, costs, items, messages)
+  stay exactly where they are; a later room of the same name would find that
+  history again. The owner types the room's name (`confirm`, checked on the
+  server), and the server refuses (`ROOM_DELETE_REFUSED`, with the reasons)
+  while a run of the room is in progress, while an item of the room (or one
+  addressed to it) waits for a decision, or while an agent's working directory
+  holds work that is not safe: uncommitted changes in its files, or, when it
+  is a Git repository or worktree of its own, commits of its HEAD that are on
+  no default branch of its repository (`origin/HEAD`, else a local `main` or
+  `master`). The check is conservative: a Git folder it cannot check (Git
+  missing, no default branch, an error) refuses the deletion and says why; a
+  folder that is not under Git passes. Only the name of a room loaded from the
+  home is accepted, every path is resolved inside the home once its links are
+  followed, and a room folder that is a link is never moved.
+
+A room's `label` (`room.json`) is the name the owner reads everywhere; `name`
+stays its identifier for the API, the database, the paths and the commands.
+
 ### Per-agent options
 
 - `worktree`: a Git worktree of the target repository inside the home

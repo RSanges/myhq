@@ -28,6 +28,14 @@ Every error has the same shape and an HTTP status:
 | `QUESTION_NOT_FOUND` | 404 | A decision on a proposed run for a question that is not one of this agent's. |
 | `PROPOSAL_NOT_FOUND` | 404 | A decision on a proposed run for a question whose answer proposes none. |
 | `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
+| `ROOM_BUSY` | 409 | Archiving a room while a run of it is in progress. |
+| `ROOM_ARCHIVED` | 409 | A gesture on an archived room other than restoring or deleting it. |
+| `ROOM_NOT_ARCHIVED` | 404 | Restoring a room that is not archived. |
+| `ROOM_LAST_AGENT` | 409 | Removing the last agent of a room. |
+| `AGENT_HAS_PENDING` | 409 | Removing an agent while one of its items waits for a decision. |
+| `ROOM_DELETE_REFUSED` | 409 | Deleting a room while a run of it is in progress, an item of it (or for it) waits, or a working directory holds work that is not safe. The message lists the reasons. |
+| `DELETE_CONFIRM_MISMATCH` | 400 | The `confirm` of a deletion is not the room's name. |
+| `ROOM_PATH_REFUSED` | 409 | The folder of a room to delete, or `archives/rooms`, is a link or leads out of the home. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) or a deliverable that carries questions (`hq_submit` `questions`) without `answers`. |
@@ -270,6 +278,7 @@ restart.
   "rooms": [
     {
       "name": "demo",
+      "label": null,
       "targetRepo": "../demo-project",
       "color": null,
       "logo": null,
@@ -316,6 +325,7 @@ restart.
 
 - `role` and `targetRepo` are relative to the home.
 - `logo`: the URL of the logo of the room's project (`GET /api/rooms/[room]/logo`), or `null`.
+- `label`: the name shown for the room (`label` of `room.json`), or `null` to show `name`.
 - `color`: the room's hex colour from `room.json`, or `null` (a neutral room).
 - `isoSprite`: `/api/sprites/<room>/<agent>?sheet=iso` when the agent declares
   an isometric character sheet (`isoSprite` in `room.json`) and the file
@@ -964,7 +974,7 @@ behind a shared resource have no run and no tile.
   "now": "2026-11-13T20:05:00.000Z",
   "tiles": [
     {
-      "runId": 12, "room": "studio", "roomColor": "#f5a524", "agentId": "editor", "agentName": "Editor",
+      "runId": 12, "room": "studio", "roomLabel": null, "roomColor": "#f5a524", "agentId": "editor", "agentName": "Editor",
       "task": "Cut the trailer", "taskSummary": null, "state": "working", "runStatus": "running",
       "startedAt": "2026-11-13T19:27:00.000Z", "endedAt": null, "costUsd": 0.42,
       "status": { "text": "rend l'essai 3", "at": "2026-11-13T20:03:00.000Z" },
@@ -1218,6 +1228,62 @@ Errors: `INVALID_INPUT` for a bad `limit`.
 conversation, and held actions are dropped. It waits for the turn in progress, if
 any. Response `200`: `{ "cleared": true }`; the streams get a `chat` message
 `{ "type": "cleared" }`.
+
+### Room gestures
+
+The gestures of the « Salles » tab (`architecture.md`, "Managing rooms"). Each
+takes the room's name in the path (a room id, checked with zod), acts at once and
+returns every setting, `{ "settings": ... }` in the shape of `GET /api/settings`.
+None of them erases a file or a row of the database.
+
+| Route | Does | Errors |
+|---|---|---|
+| `POST /api/rooms/[room]/pause` | Disarms every armed routine of the room and remembers which agents were armed. Nothing changes for a room already paused. | `ROOM_NOT_FOUND`, `ROOM_INVALID`, `ROOM_ARCHIVED` |
+| `POST /api/rooms/[room]/resume` | Re-arms exactly the agents armed when the room was paused, and forgets the pause. | same |
+| `POST /api/rooms/[room]/archive` | Pauses the room and names it in `archivedRooms` of `myhq.json`: it leaves the floor, the desk's lists and the scheduler. | same, `ROOM_BUSY`, `SETTINGS_FILE_INVALID` |
+| `POST /api/rooms/[room]/restore` | Removes the room from `archivedRooms`; it comes back paused. | `ROOM_NOT_ARCHIVED`, `SETTINGS_FILE_INVALID` |
+| `DELETE /api/rooms/[room]/agents/[agent]` | Removes the agent's block from `room.json` (its role file, working directory and history stay). | `ROOM_NOT_FOUND`, `AGENT_NOT_FOUND`, `ROOM_LAST_AGENT`, `AGENT_BUSY`, `AGENT_HAS_PENDING`, `ROOM_INVALID` |
+
+#### `GET /api/rooms/[room]/deletion`
+
+What deleting a room (on the floor or archived) would do and what blocks it now.
+Read only.
+
+```json
+{
+  "check": {
+    "room": "demo", "label": null, "archived": false,
+    "running": null,
+    "pending": 0,
+    "workDirs": [
+      { "agent": "dev", "dir": "data/worktrees/demo/dev", "problem": { "kind": "unmerged", "commits": 2, "branch": "origin/main" } },
+      { "agent": "scout", "dir": "data/work/demo/scout", "problem": null }
+    ],
+    "blocked": ["workDirs"],
+    "configDir": "rooms/demo",
+    "destination": "archives/rooms/demo-2026-11-13",
+    "history": { "runs": 120, "costUsd": 14.2, "items": 31 },
+    "agents": 2
+  }
+}
+```
+
+`problem` is null for a folder that may stay as it is, else `dirty` (`files`:
+uncommitted changes), `unmerged` (`commits` of its HEAD on no default branch,
+`branch` the first one compared) or `unchecked` (`detail`: why Git could not
+check it). `blocked` lists `running`, `pending` and `workDirs` when they block.
+
+#### `DELETE /api/rooms/[room]`
+
+Body: `{ "confirm": "demo" }`, the room's name as the owner typed it. Moves the
+room's configuration folder to `archives/rooms/<room>-<YYYY-MM-DD>/` (with `-2`,
+`-3`... when taken) and removes it from `archivedRooms`; its working
+directories, worktrees and history stay where they are. Response `200`:
+`{ "destination": "archives/rooms/demo-2026-11-13", "settings": ... }`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND` (only a room loaded
+from the home is accepted), `DELETE_CONFIRM_MISMATCH`, `ROOM_DELETE_REFUSED`
+(the checks of `GET /api/rooms/[room]/deletion`, made again), `ROOM_PATH_REFUSED`.
 
 ### `PATCH /api/rooms/[room]/agents/[agent]`
 
@@ -1479,15 +1545,39 @@ Secrets are never part of it.
     "rooms": [
       {
         "name": "demo",
+        "label": "Demo client",
         "color": "#ff3d7f",
         "shared": false,
+        "state": "paused",
+        "pause": { "armed": ["scout"], "pausedAt": "2026-11-13T09:00:00.000Z" },
+        "week": { "runs": 4, "costUsd": 1.2 },
+        "lastRun": { "agent": "scout", "status": "done", "at": "2026-11-13T08:00:00.000Z" },
+        "running": null,
+        "pending": 1,
         "agents": [
-          { "id": "scout", "name": "Scout", "model": "sonnet", "armed": true, "hasRoutines": true, "maxBudgetUsd": 2, "notifySummary": false }
+          {
+            "id": "scout", "name": "Scout", "model": "sonnet", "armed": false, "hasRoutines": true,
+            "routines": [{ "cron": "0 7 * * *", "schedule": { "times": ["07:00"], "weekdays": null, "monthDays": null, "months": null, "dayRule": "and" } }],
+            "maxBudgetUsd": 2, "notifySummary": false
+          }
         ]
       }
     ],
     "invalidRooms": [],
+    "archivedRooms": [{ "name": "old", "label": null, "color": null, "archivedAt": "2026-10-28", "agents": 3, "totalRuns": 34, "totalCostUsd": 6.8 }],
+    "roomProposals": [{ "id": 42, "room": "shop", "title": "Proposition de salle : shop", "at": "2026-11-13T08:30:00.000Z" }],
     "defaultMaxBudgetUsd": 1,
+    "budgets": {
+      "defaultMaxBudgetUsd": { "file": null, "effective": 1, "source": "env", "fallback": 1 },
+      "weeklyBudgetUsd": { "file": 40, "effective": 40, "source": "file", "fallback": null },
+      "runTimeoutMinutes": { "file": null, "effective": 30, "source": "default", "fallback": 30 },
+      "runHardLimitMinutes": { "file": null, "effective": 180, "source": "default", "fallback": 180 }
+    },
+    "runsToday": 3,
+    "spend": { "totalUsd": 1.2, "byRoom": [{ "room": "demo", "label": "Demo client", "color": "#ff3d7f", "costUsd": 1.2 }] },
+    "summaries": { "enabled": true, "source": "default", "week": { "calls": 12, "costUsd": 0.0036 } },
+    "secrets": [{ "name": "HQ_TELEGRAM_BOT_TOKEN", "set": true }],
+    "attachmentMaxMb": 200,
     "errors": []
   }
 }
@@ -1498,7 +1588,14 @@ Secrets are never part of it.
   where the effective one comes from (`source`: `file`, `env`, `default`, and
   `system` for the time zone of the machine) and what applies without the key
   (`fallback`). `running` tells that this process holds the scheduler lock.
-- `armed` is the state in force (the database wins over `room.json`).
+- `budgets` carries the budgets and run durations in the same form.
+- `armed` is the state in force (the database wins over `room.json`). A room is
+  `paused` while it has a pause (`pause.armed`: the agents resuming re-arms).
+- `archivedRooms` are the rooms of `archivedRooms` of `myhq.json`, out of
+  `rooms`. `roomProposals` are the room proposals waiting on the desk.
+- `spend` is the cost of the runs since Monday, by room; `summaries.week` and
+  `portier.week` count the small model calls of the last 7 days.
+- `secrets` says whether each secret is set, never its value.
 - `errors` lists the keys of `myhq.json` that are invalid, one line each; those
   keys are ignored (the environment or the default applies).
 
@@ -1513,9 +1610,9 @@ written atomically (temporary file, then rename), keep their unknown keys and us
 | Group | Body | Writes |
 |---|---|---|
 | `layout` | `{ "layout": "room-per-project", "language": "fr", "timeZone": "Europe/Paris" }` (`timeZone` null removes the key) | `floor.layout`, `language`, `timeZone` of `myhq.json` |
-| `limits` | `{ "scheduler": true, "maxRunsPerDay": 12 }` (each may be null: the key is removed and the environment applies) | `scheduler`, `maxRunsPerDay` of `myhq.json`; the scheduler starts or stops at once |
+| `limits` | `{ "scheduler": true, "maxRunsPerDay": 12, "defaultMaxBudgetUsd": 1, "weeklyBudgetUsd": null, "runTimeoutMinutes": 30, "runHardLimitMinutes": 180, "portier": true, "runSummaries": false }` (each value may be null: the key is removed and the environment applies; the last six may be left out: unchanged) | `scheduler`, `maxRunsPerDay`, `defaultMaxBudgetUsd`, `weeklyBudgetUsd`, `runTimeoutMinutes`, `runHardLimitMinutes`, `portier.enabled` (its `model` kept) and `runSummaries.enabled` of `myhq.json`; the scheduler starts or stops at once. The run timeout must stay shorter than the hard limit in force (`INVALID_INPUT`). |
 | `notifications` | `{ "notifyTypes": ["brief"], "summaries": [{ "room": "demo", "agent": "scout", "summary": true }] }` | `notifyTypes` of `myhq.json` (removed when empty); `notifyRuns: "summary"` of the agents named (removed with `false`) |
-| `rooms` | `{ "rooms": [{ "name": "demo", "color": "#ff3d7f", "agents": [{ "id": "scout", "model": "opus", "armed": true, "maxBudgetUsd": 2 }] }] }` (`color` and `maxBudgetUsd` may be null) | `color` of the room, `model` and `maxBudgetUsd` of the agents in `room.json`; the armed state of an agent whose value changed, through the same mechanism as `PATCH /api/rooms/[room]/agents/[agent]` |
+| `rooms` | `{ "rooms": [{ "name": "demo", "label": "Demo client", "color": "#ff3d7f", "agents": [{ "id": "scout", "model": "opus", "armed": true, "maxBudgetUsd": 2 }] }] }` (`label`, `color` and `maxBudgetUsd` may be null; `label` may be left out). Only the rooms sent are touched: the room panel sends its room alone | `label` (1 to 60 characters) and `color` of the room, `model` and `maxBudgetUsd` of the agents in `room.json`; the armed state of an agent whose value changed, through the same mechanism as `PATCH /api/rooms/[room]/agents/[agent]` |
 
 `model` is `opus`, `sonnet` or `haiku`; `color` a hex colour (`#rgb` or `#rrggbb`);
 `maxBudgetUsd` a number above 0; `maxRunsPerDay` an integer from 0; `timeZone` an

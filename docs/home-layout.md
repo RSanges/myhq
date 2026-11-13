@@ -14,6 +14,8 @@ repository of its own.
         <agent>.md       one system prompt per agent
   assistant.json         the Telegram assistant (optional, schema below)
   myhq.json              settings of the home, such as the daily export (optional)
+  archives/
+    rooms/<room>-<YYYY-MM-DD>/  the configuration folder of a room deleted from /reglages
   docs/roadmap.json      the live roadmap shown at /roadmap (optional, see api.md)
   assistant/
     commands/            extensions for the Telegram assistant
@@ -85,7 +87,8 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 
 | Field | Required | Meaning |
 |---|---|---|
-| `name` | yes | Room name, unique in the home. |
+| `name` | yes | Room name, unique in the home, equal to its folder name. It is the room's identifier everywhere (API, database, paths, commands). |
+| `label` | no | The name shown to the owner, 1 to 60 characters (« Atelier client »): on the floor (signboards, room buttons, sheets), on the desk, in the surveillance room and on `/reglages`, where its panel edits it. Left out, the `name` is shown. |
 | `targetRepo` | yes | Path of the repository the room works on, relative to the home. |
 | `color` | no | The room's colour in the interface, a CSS hex colour (`#rgb` or `#rrggbb`). The chat chips of the room's agents, the agent strip under the floor and the room's button in the floor header take it as a soft tint (border and dot in the colour, text unchanged), and on the single floor its carpet, its name tags and its signboard take it. Without it the room stays neutral. The assistant's own chip keeps its blue. |
 | `shared` | no | `true` makes the room a shared studio (a room of scripts, videos or visuals, say): every room of the home may order from it, and it delivers to the room that ordered (see "Shared rooms" below). Default `false`. |
@@ -950,6 +953,10 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
   "scheduler": true,
   "timeZone": "Europe/Paris",
   "maxRunsPerDay": 12,
+  "defaultMaxBudgetUsd": 1,
+  "runTimeoutMinutes": 30,
+  "runSummaries": { "enabled": true },
+  "archivedRooms": [{ "name": "old-project", "at": "2026-10-28" }],
   "catalog": { "dirs": ["../notes/projects"] },
   "projectsRoot": "..",
   "onboarding": { "sprite": "sprites/reception.png" },
@@ -977,6 +984,12 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `scheduler` | no | `true` or `false`: whether the routines of `room.json` start runs on their own. When the key is set it wins over `HQ_SCHEDULER`; without it the variable applies (default off). See "Settings that also exist as environment variables" below. |
 | `timeZone` | no | IANA time zone of the routines and of the daily export (`Europe/Paris`). Wins over `HQ_TIMEZONE`; without it the variable applies, then the time zone of the machine. |
 | `maxRunsPerDay` | no | Daily cap of runs, all agents together (an integer, 0 or more; 0 stops every run). Wins over `HQ_MAX_RUNS_PER_DAY`; without it the variable applies (default 12). |
+| `defaultMaxBudgetUsd` | no | `--max-budget-usd` of an agent whose `room.json` sets no `maxBudgetUsd`, in dollars (more than 0). Wins over `HQ_DEFAULT_MAX_BUDGET_USD` (default 1). |
+| `weeklyBudgetUsd` | no | The weekly budget, in dollars, against which the meter and `/status` show the share spent; nothing stops when it is reached. Wins over `HQ_WEEKLY_BUDGET_USD` (default: none). |
+| `runTimeoutMinutes` | no | The soft deadline of a run, in minutes (see "Long runs" in `architecture.md`). Wins over `HQ_RUN_TIMEOUT_MINUTES` (default 30). The settings page refuses a value that is not shorter than the hard limit in force. |
+| `runHardLimitMinutes` | no | The hard limit of a run, in minutes. Wins over `HQ_RUN_HARD_LIMIT_MINUTES` (default 180). |
+| `runSummaries` | no | `{ "enabled": false }` stops the run summaries: the one-line headline of a run's task that a small model writes once at the start of a run whose task is long or that takes mailbox tasks, shown in the surveillance room (`architecture.md`, "The surveillance room"). Default: on. Read apart, like `portier`: an invalid block keeps them on, with the reason on `/reglages`. |
+| `archivedRooms` | no | The rooms archived from `/reglages`, each `{ "name", "at" }` (`at` the day it was archived, `YYYY-MM-DD`). An archived room keeps its folder `rooms/<name>/` and its whole history, but MyHQ leaves it out of the rooms it loads: it is not on the floor, nor in the desk's lists, nor in the scheduler, nothing of it starts and no agent can write to it. Restoring it (`/reglages`) removes it from the list, and it comes back paused. An invalid list archives nothing, with the reason on `/reglages`. |
 | `onboarding.sprite` | no | Old top-down sheet of the receptionist, a path relative to the home (same contract as `agents[].sprite`). Still accepted and served, but **no longer drawn**: the isometric floor always draws the receptionist shipped with MyHQ, `public/sprites/iso-receptionist.png` (headset). |
 | `notifyTypes` | no | Informational approval types (snake_case). An item of one of them is stored `unseen` the moment the agent submits it: it is sent to Telegram as one message (an alert line, then its body as is; past 1500 characters the body is cut cleanly, ends with « … » and « Lire la suite : <url> », or « (suite dans MyHQ, item #<id>) » without `HQ_PUBLIC_URL`) with a single « Vu » button, and it stays on the desk in the « À regarder » section until the user marks it seen (« Vu », or « Demander à Rom2 » which sends it to the assistant first); it is then `seen` and stays in the history. It is not in the pending list nor in the `À valider` count of the tab title (counted apart), not in `/pending` nor in `hq_pending`, and it never triggers `onApproval` nor wakes an agent. `hq_submit` answers `"status": "unseen"`. Every other type (`mail_reply`, `room_proposal`...) keeps the pending flow with buttons. Default: none. |
 | `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item with its link, cut like a single one is, without « Vu » buttons (the whole is one message when it can be, several only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
@@ -1015,22 +1028,26 @@ desk in the lobby stays empty.
 
 ### Settings that also exist as environment variables
 
-Three settings that are not secrets can live in `myhq.json` as well as in
-`.env.local`: `scheduler` (`HQ_SCHEDULER`), `timeZone` (`HQ_TIMEZONE`) and
-`maxRunsPerDay` (`HQ_MAX_RUNS_PER_DAY`). The order is always the same:
+Seven settings that are not secrets can live in `myhq.json` as well as in
+`.env.local`: `scheduler` (`HQ_SCHEDULER`), `timeZone` (`HQ_TIMEZONE`),
+`maxRunsPerDay` (`HQ_MAX_RUNS_PER_DAY`), `defaultMaxBudgetUsd`
+(`HQ_DEFAULT_MAX_BUDGET_USD`), `weeklyBudgetUsd` (`HQ_WEEKLY_BUDGET_USD`),
+`runTimeoutMinutes` (`HQ_RUN_TIMEOUT_MINUTES`) and `runHardLimitMinutes`
+(`HQ_RUN_HARD_LIMIT_MINUTES`). The order is always the same:
 
 1. the key of `myhq.json`, when it is set and valid;
 2. the environment variable, when it is set;
-3. the default (scheduler off, time zone of the machine, 12 runs a day).
+3. the default (scheduler off, time zone of the machine, 12 runs a day, 1 $ a
+   run, no weekly budget, 30 and 180 minutes).
 
 Each of these keys is parsed apart from the others and from the rest of the
 file: an invalid value (a time zone that does not exist, `"scheduler": "yes"`, a
 negative cap) is logged once and ignored, so the variable applies for that key
 only, and every other key of the file keeps working. A `myhq.json` that is not a
-JSON object is ignored as a whole for these three keys.
+JSON object is ignored as a whole for these keys.
 
 They are read again when they are needed, so a change needs **no restart**: a
-run checks the cap when it starts, the scheduler is started or stopped at its
+run checks the cap and takes its budget and its deadlines when it starts, the scheduler is started or stopped at its
 next tick (every 15 seconds, or at once when the change comes from the settings
 page), the daily export and the Telegram assistant use the new time zone and cap
 the next time they look. Secrets and tokens (`HQ_TELEGRAM_BOT_TOKEN`,
@@ -1039,35 +1056,35 @@ in `.env.local`, and changing those needs a restart.
 
 ### The settings page (`/reglages`)
 
-`/reglages`, linked from the header of the desk, edits the home in four groups,
-each with its own « Enregistrer » button and its own confirmation or error:
+`/reglages` edits the home in five tabs, each addressed by the query
+(`?onglet=general`, `salles`, `limites`, `notifications`, `securite`; a room's
+panel is `?onglet=salles&salle=<room>`, its deletion `&supprimer=<room>`). Each
+tab saves on its own: its « Enregistrer » button is active only once a value
+differs from what is saved, and « Annuler les changements » puts the saved
+values back.
 
-| Group | What it writes |
+| Tab | What it writes |
 |---|---|
-| Disposition et langue | `floor.layout`, `language` (French or English, plus the current tag when it is another one) and `timeZone` of `myhq.json`. An empty time zone removes the key (the variable applies again). |
-| Planificateur et plafonds | `scheduler` and `maxRunsPerDay` of `myhq.json`. « Selon l'environnement » or an empty cap removes the key. The scheduler starts or stops at once. |
+| Général | `floor.layout`, `language` (French or English, plus the current tag when it is another one) and `timeZone` of `myhq.json`. An empty time zone removes the key (the variable applies again). |
+| Salles | One card per room, and the panel of a room: its `label` and `color` in its `room.json`, then `model` and `maxBudgetUsd` of each agent, and the armed state of the routines through the existing mechanism (the database wins over `armed` of `room.json`, see `api.md`). The gestures on a room (pause, archive, remove an agent, delete) act at once, see `architecture.md`, "Managing rooms". |
+| Limites et coûts | `scheduler`, `maxRunsPerDay`, `defaultMaxBudgetUsd`, `weeklyBudgetUsd`, `runTimeoutMinutes` and `runHardLimitMinutes` of `myhq.json` (« Selon l'environnement » or an empty field removes the key), and the switches `portier.enabled` and `runSummaries.enabled` (the portier's `model` is kept). The scheduler starts or stops at once. |
 | Notifications | `notifyTypes` and `quietHours` of `myhq.json` (the types seen in the database and in the « What you submit » lists of the roles, plus any type typed in; the quiet hours as a switch and two times, off removes the key) and `notifyRuns: "summary"` of each agent in its `room.json`. |
-| Salles et agents | `color` of each `room.json`, then `model` and `maxBudgetUsd` of each agent. The armed state of the routines goes through the existing mechanism (the database wins over `armed` of `room.json`, see `api.md`). |
+| Sécurité | Nothing: it says which secrets of `.env.local` are set (never their value) and the guard rails always in force. |
 
 The files stay the source of truth, so editing them by hand keeps working. Every
-write is checked with zod first (the whole group, then each file of the group,
-before anything is written), goes through a temporary file in the same folder
-and a rename, keeps the keys it does not know (and their order) and writes
-2-space JSON with a final newline. A `myhq.json` that cannot be read back is
-never overwritten: the save fails with `SETTINGS_FILE_INVALID` and the file is
-left for you to fix. A file that already holds the values sent is not rewritten.
-Comments cannot exist in JSON, so none is lost; the one cosmetic change is that
-short arrays are written one item per line.
+write is checked with zod first (the whole tab, then each file, before anything
+is written), goes through a temporary file in the same folder and a rename,
+keeps the keys it does not know (and their order) and writes 2-space JSON with
+a final newline. A `myhq.json` that cannot be read back is never overwritten:
+the save fails with `SETTINGS_FILE_INVALID` and the file is left for you to fix.
+A file that already holds the values sent is not rewritten. Comments cannot
+exist in JSON, so none is lost; the one cosmetic change is that short arrays are
+written one item per line.
 
-Secrets are neither shown nor editable on the page, which only says that they
-live in `.env.local`.
-
-Below the groups, a read-only « Portier » section says whether the portier is
-on and on which model (`portier` of `myhq.json`, edited by hand), what it did
-over the last 7 days (verdicts, wakes avoided, total cost), and its latest 20
-verdicts: wake or wait, for which agent, from whom, the first words of the
-message, the reason, the cost, and a mark on a call that failed (the agent was
-woken by prudence).
+« Limites et coûts » also shows what the runs cost since Monday, room by room
+against the weekly budget, and the two small model calls outside runs: the
+portier (its verdicts over 7 days, wakes avoided, total cost, and its latest 20
+verdicts) and the run summaries (their calls and cost over 7 days).
 
 ### The desk objects (`desk`)
 
