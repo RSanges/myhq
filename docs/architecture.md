@@ -242,8 +242,8 @@ this minute match" and "when is the next one", not a scheduling library.
 
 - **Switch.** Nothing starts by itself until `HQ_SCHEDULER=on` (default
   `off`). The scheduler starts with the app and is held by one process per
-  home (`data/scheduler.lock`), so a second MyHQ on the same home does not
-  fire twice.
+  home (`data/scheduler.lock`, refreshed by its holder and taken over when
+  stale), so a second MyHQ on the same home does not fire twice.
 - **Time zone.** Expressions are read on the wall clock of `HQ_TIMEZONE`
   (an IANA name, the machine's zone by default). A minute skipped by a
   daylight saving change does not fire; a repeated one fires once.
@@ -1083,9 +1083,10 @@ follows (`README.md`, "Running as a service").
 
 A process killed outright leaves its runs `running` and their tasks
 `in_progress`. At startup, `app()` first takes the home for its process
-(`data/app.lock`, the pid of the owner; a lock of a dead process is taken
-over), then closes those runs as `cancelled` and gives back every task still
-`in_progress` whose run is not in progress (interrupted, failed, or none):
+(`data/app.lock`, the pid of the owner, refreshed every 15 s; a lock of a
+dead process, or not refreshed for a minute, is taken over), then closes
+those runs as `cancelled` and gives back every task still `in_progress`
+whose run is not in progress (interrupted, failed, or none):
 `recoverInterruptedRuns` and `releaseOrphanTasks`. The first tick of the
 scheduler then wakes them by the rules above. A second MyHQ started on the same
 home while the first one still runs (pm2 starting an instance while an earlier
@@ -1906,7 +1907,9 @@ The code lives in `src/assistant/`. It has two modes, chosen by
   (`instrumentation.ts`) and reads updates by long polling (`getUpdates`, no
   inbound port). A lock file holding the process id
   (`<home>/data/assistant/bridge.lock`) keeps a second MyHQ process from
-  polling the same home; a lock left by a dead process is taken over. The
+  polling the same home; the holder refreshes the file every 15 s, and a lock
+  left by a dead process, or not refreshed for a minute (its pid reused after
+  an unclean shutdown), is taken over. The
   position in the update queue is kept in `<home>/data/assistant/offset.txt`
   and moves before an update is handled, so an update that crashes is never
   replayed. At startup, `setMyCommands` publishes the core commands and the

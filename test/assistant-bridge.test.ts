@@ -589,6 +589,51 @@ test("the single-instance lock refuses a second reader and takes over a dead one
   taken.release();
 });
 
+function backdate(file: string, ms: number): void {
+  const old = new Date(Date.now() - ms);
+  fs.utimesSync(file, old, old);
+}
+
+test("the lock is taken over when its pid is alive but the heartbeat is stale", () => {
+  const config = makeHome();
+  const file = path.join(config.dataDir, "assistant", "bridge.lock");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(process.ppid));
+  backdate(file, 120_000);
+  const taken = acquireLock(file);
+  assert.ok(taken);
+  assert.equal(fs.readFileSync(file, "utf8"), String(process.pid));
+  taken.release();
+});
+
+test("the lock is refused when its pid is alive and the heartbeat is fresh", () => {
+  const config = makeHome();
+  const file = path.join(config.dataDir, "assistant", "bridge.lock");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(process.ppid));
+  backdate(file, 5_000);
+  assert.equal(acquireLock(file), null);
+  assert.equal(fs.readFileSync(file, "utf8"), String(process.ppid));
+});
+
+test("the holder's heartbeat refreshes the lock file, and release stops it", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const config = makeHome();
+  const file = path.join(config.dataDir, "assistant", "bridge.lock");
+  const lock = acquireLock(file);
+  assert.ok(lock);
+  backdate(file, 50_000);
+  const before = fs.statSync(file).mtimeMs;
+  t.mock.timers.tick(15_000);
+  const after = fs.statSync(file).mtimeMs;
+  assert.ok(after > before + 40_000, "the heartbeat moved the modification time forward");
+  lock.release();
+  assert.equal(fs.existsSync(file), false);
+  // A tick after release must not recreate or touch anything.
+  t.mock.timers.tick(30_000);
+  assert.equal(fs.existsSync(file), false);
+});
+
 // --- End to end ------------------------------------------------------------------------
 
 test("end to end: a core command, an extension command and a button press, through a fake Telegram", async () => {
