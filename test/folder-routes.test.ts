@@ -113,6 +113,7 @@ test("file: a known kind inline with its type, anything else download only, neve
     fs.writeFileSync(path.join(dir, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
     fs.writeFileSync(path.join(dir, "page.html"), "<html><script>alert(1)</script></html>");
     fs.writeFileSync(path.join(dir, "shot.png"), "png bytes");
+    fs.writeFileSync(path.join(dir, "report.json"), '{"ok":true}');
 
     const png = await serve("demo", "documents/shot.png");
     assert.equal(png.status, 200);
@@ -126,7 +127,7 @@ test("file: a known kind inline with its type, anything else download only, neve
     const asked = await serve("demo", "documents/shot.png?x", {});
     assert.equal(asked.status, 404, "the query is the path, nothing else");
 
-    for (const name of ["logo.svg", "page.html"]) {
+    for (const name of ["logo.svg", "page.html", "report.json"]) {
       const response = await serve("demo", `documents/${name}`);
       assert.equal(response.status, 200, name);
       assert.equal(response.headers.get("content-type"), "application/octet-stream", name);

@@ -21,8 +21,9 @@ export type MediaPlan = { fileId: number; method: TelegramMediaMethod; thumbnail
  * Picks the first file of an item that an alert can carry, in the order the
  * agent gave: a video up to 50 MB (sendVideo), an image up to 10 MB
  * (sendPhoto), a sound up to 50 MB (sendAudio). A heavier video gets a
- * thumbnail (sendPhoto) when ffmpeg is available. Null: the alert stays text,
- * with its link to the item.
+ * thumbnail (sendPhoto) when ffmpeg is available. A 3D part, a PDF or a file
+ * of kind "file" is never carried, only listed by name. Null: the alert stays
+ * text, with its link to the item.
  */
 export function planTelegramMedia(
   files: readonly { id: number; kind: AttachmentKind; size: number }[],

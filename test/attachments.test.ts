@@ -13,9 +13,11 @@ import {
   attachmentMaxBytes,
   attachmentPath,
   AttachmentError,
+  attachmentType,
   findApprovalFile,
   resolveAttachment,
 } from "../src/server/attachments";
+import { approvalFileResponse } from "../src/server/approval-files";
 import { getDbAt, type Db } from "../src/server/db";
 import { APPROVAL_SELECT, toApproval, type ApprovalRowWithAction } from "../src/server/feed";
 import { fileResponse, parseRange } from "../src/server/file-response";
@@ -30,7 +32,7 @@ import { makeHome } from "./helpers";
 const MB = 1024 * 1024;
 
 /** A home, its database, and an agent working directory with a few files. */
-function setup(): { db: Db; ctx: HqContext; work: string; dataDir: string } {
+function setup(): { db: Db; ctx: HqContext; work: string; dataDir: string; home: string } {
   const config = makeHome();
   const db = getDbAt(config.dbPath);
   db.prepare(
@@ -42,7 +44,7 @@ function setup(): { db: Db; ctx: HqContext; work: string; dataDir: string } {
   fs.writeFileSync(path.join(work, "cover.png"), Buffer.from("fake png"));
   fs.writeFileSync(path.join(work, "notes.txt"), "not a render");
   const ctx: HqContext = { dbPath: config.dbPath, runId: 1, agentId: "scout", room: "demo", home: config.home, workDir: work };
-  return { db, ctx, work, dataDir: config.dataDir };
+  return { db, ctx, work, dataDir: config.dataDir, home: config.home };
 }
 
 const sha256 = (data: Buffer | string) => crypto.createHash("sha256").update(data).digest("hex");
@@ -75,7 +77,7 @@ test("attachments: a link that leads out of the working directory is refused", (
 test("attachments: a missing file, a type outside the list, an empty file or one above the cap is refused", () => {
   const { work } = setup();
   assert.throws(() => resolveAttachment(work, { path: "missing.mp4" }, MB), /does not exist/);
-  assert.throws(() => resolveAttachment(work, { path: "notes.txt" }, MB), /not an accepted type/);
+  assert.throws(() => resolveAttachment(work, { path: "notes.exe" }, MB), /not an accepted type/);
   assert.throws(() => resolveAttachment(work, { path: "livraisons" }, MB), /not an accepted type/);
   fs.writeFileSync(path.join(work, "empty.wav"), "");
   assert.throws(() => resolveAttachment(work, { path: "empty.wav" }, MB), /empty/);
@@ -84,6 +86,90 @@ test("attachments: a missing file, a type outside the list, an empty file or one
   assert.equal(ok.name, "clip-01.mp4");
   assert.equal(ok.mime, "video/mp4");
   assert.equal(ok.caption, "Plan 1");
+});
+
+const FILE_EXTENSIONS = [".svg", ".ai", ".eps", ".psd", ".tif", ".tiff", ".heic", ".dxf", ".step", ".stp", ".obj", ".docx", ".xlsx", ".txt", ".csv", ".md", ".json", ".zip"];
+
+test("attachments: a client's piece or a data file is of kind file, as application/octet-stream", () => {
+  for (const ext of FILE_EXTENSIONS) {
+    assert.deepEqual(attachmentType(`piece${ext.toUpperCase()}`), { ext, mime: "application/octet-stream", kind: "file" }, ext);
+  }
+  assert.equal(attachmentType("part.3mf")?.kind, "model", "the other kinds keep theirs");
+  assert.equal(attachmentType("quote.pdf")?.kind, "pdf");
+});
+
+test("attachments: programs and scripts stay refused, by the last extension", () => {
+  const { work } = setup();
+  for (const name of ["logo.svg.exe", "a.exe", "a.bat", "a.cmd", "a.ps1", "a.sh", "a.js", "a.html", "a.htm", "a.msi", "a.scr", "a.lnk"]) {
+    fs.writeFileSync(path.join(work, name), "x");
+    assert.throws(() => resolveAttachment(work, { path: name }, MB), /not an accepted type/, name);
+  }
+});
+
+test("attachments: a file of kind file that starts like a program is refused, whatever its extension", () => {
+  const { work } = setup();
+  const programs: [string, Buffer][] = [
+    ["logo.svg", Buffer.concat([Buffer.from("MZ"), Buffer.alloc(62, 0x90)])],
+    ["run.txt", Buffer.from("#!/bin/sh\necho hello\n")],
+    ["lib.json", Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0])],
+    ["tool.dxf", Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 7, 0, 0, 1])],
+    ["fat.zip", Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2])],
+  ];
+  for (const [name, bytes] of programs) {
+    fs.writeFileSync(path.join(work, name), bytes);
+    assert.throws(() => resolveAttachment(work, { path: name }, MB), /is a program/, name);
+  }
+  fs.writeFileSync(path.join(work, "logo-ok.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>');
+  fs.writeFileSync(path.join(work, "report.json"), '{"layers":12,"ok":true}');
+  assert.equal(resolveAttachment(work, { path: "logo-ok.svg" }, MB).mime, "application/octet-stream");
+  assert.equal(resolveAttachment(work, { path: "report.json" }, MB).name, "report.json");
+  // Only the kind file is looked at: a media file is never read before its copy.
+  fs.writeFileSync(path.join(work, "odd.png"), "MZ but a png name");
+  assert.equal(resolveAttachment(work, { path: "odd.png" }, MB).mime, "image/png");
+});
+
+test("approval file route: a file of kind file is a download only, nosniff and sandboxed; the other kinds unchanged", async () => {
+  const { db, ctx, work, home } = setup();
+  fs.writeFileSync(path.join(work, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  fs.writeFileSync(path.join(work, "report.json"), '{"ok":true}');
+  const { approvalId } = hqSubmit(db, ctx, {
+    type: "client_piece",
+    title: "Pieces",
+    body: "Les pieces du client.",
+    attachments: [{ path: "logo.svg" }, { path: "report.json" }, { path: "cover.png" }],
+  });
+  const files = approvalDto(db, approvalId).files;
+  assert.deepEqual(files.map((file) => [file.name, file.kind, file.mime]), [
+    ["logo.svg", "file", "application/octet-stream"],
+    ["report.json", "file", "application/octet-stream"],
+    ["cover.png", "image", "image/png"],
+  ]);
+  const saved = process.env.MYHQ_HOME;
+  process.env.MYHQ_HOME = home;
+  try {
+    const get = (fileId: number, query = "") =>
+      approvalFileResponse(new Request(`http://localhost/api/approvals/${approvalId}/files/${fileId}${query}`), String(approvalId), String(fileId));
+    for (const file of files.slice(0, 2)) {
+      const response = get(file.id);
+      assert.equal(response.status, 200, file.name);
+      assert.equal(response.headers.get("content-type"), "application/octet-stream", file.name);
+      assert.equal(response.headers.get("content-disposition"), `attachment; filename="${file.name}"; filename*=UTF-8''${file.name}`, file.name);
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff", file.name);
+      assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; sandbox", file.name);
+      await response.arrayBuffer();
+    }
+    const image = get(files[2]!.id);
+    assert.equal(image.headers.get("content-type"), "image/png");
+    assert.match(image.headers.get("content-disposition")!, /^inline; /);
+    assert.equal(image.headers.get("content-security-policy"), null);
+    assert.equal(await image.text(), "fake png");
+    assert.match(get(files[2]!.id, "?download=1").headers.get("content-disposition")!, /^attachment; /);
+    assert.equal(get(files[2]!.id + 100).status, 404);
+    assert.equal(approvalFileResponse(new Request("http://localhost/x"), "nope", "1").status, 400);
+  } finally {
+    if (saved === undefined) delete process.env.MYHQ_HOME;
+    else process.env.MYHQ_HOME = saved;
+  }
 });
 
 test("attachments: the cap is HQ_ATTACHMENT_MAX_MB, 200 MB by default", () => {
@@ -232,10 +318,19 @@ test("previews: an image named like a 3D part or a PDF is its preview, shown onc
     entries.map((entry) => [entry.file.name, entry.preview?.name ?? null]),
     [["piece.3mf", "Piece.png"], ["clip.mp4", null], ["other.png", null]],
   );
+  const pieces = fileEntries([file(1, "logo.svg", "file"), file(2, "logo.png", "image")]);
+  assert.deepEqual(
+    pieces.map((entry) => [entry.file.name, entry.preview?.name ?? null]),
+    [["logo.svg", null], ["logo.png", null]],
+    "a client's piece takes no preview: the image of its name stays on its own",
+  );
 });
 
 test("Telegram: the method follows the type and the size of the first file it can carry", () => {
-  const f = (id: number, kind: "video" | "image" | "audio" | "model" | "pdf", size: number) => ({ id, kind, size });
+  const f = (id: number, kind: "video" | "image" | "audio" | "model" | "pdf" | "file", size: number) => ({ id, kind, size });
+  // A client's piece is never sent as a photo or a video, even an image format such as svg or tif.
+  assert.equal(planTelegramMedia([f(1, "file", MB)], { ffmpeg: true }), null);
+  assert.deepEqual(planTelegramMedia([f(1, "file", MB), f(2, "image", MB)], { ffmpeg: false }), { fileId: 2, method: "sendPhoto", thumbnail: false });
   assert.deepEqual(planTelegramMedia([f(1, "video", 5 * MB)], { ffmpeg: false }), { fileId: 1, method: "sendVideo", thumbnail: false });
   assert.deepEqual(planTelegramMedia([f(1, "image", 2 * MB)], { ffmpeg: false }), { fileId: 1, method: "sendPhoto", thumbnail: false });
   assert.deepEqual(planTelegramMedia([f(1, "audio", 2 * MB)], { ffmpeg: false }), { fileId: 1, method: "sendAudio", thumbnail: false });

@@ -5,7 +5,7 @@ import { app } from "./app";
 import { attachmentMaxBytes, attachmentType } from "./attachments";
 import { liveConfig, type HqConfig } from "./config";
 import { errorResponse, HqError, readJsonRequest } from "./errors";
-import { fileResponse } from "./file-response";
+import { fileResponse, SANDBOX_POLICY } from "./file-response";
 import {
   listRoomFolder,
   orderNameSchema,
@@ -120,7 +120,8 @@ export function folderListingResponse(request: Request, rawRoom: string): Respon
  * GET and HEAD /api/rooms/<room>/folder/file?path=<relative>: one file of the
  * room folder, with range requests. A file of a known attachment kind
  * (video, image, sound, PDF, 3D model) is served with its MIME type, inline
- * unless `download=1`; any other file only as a download
+ * unless `download=1`; any other file, and a file of kind "file" (a client's
+ * piece, an svg among them), only as a download
  * (application/octet-stream, attachment, a sandbox policy), so that the
  * browser never renders an SVG or an HTML page from the folder. Weak ETag:
  * the file may change.
@@ -142,15 +143,16 @@ export function folderFileResponse(request: Request, rawRoom: string): Response 
     const stat = fs.statSync(real);
     const name = path.basename(real);
     const known = attachmentType(name);
+    const downloadOnly = known === null || known.kind === "file";
     const response = fileResponse(request, {
       path: real,
       name,
       mime: known?.mime ?? "application/octet-stream",
       etag: `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`,
       immutable: false,
-      download: known === null || params.get("download") === "1",
+      download: downloadOnly || params.get("download") === "1",
     });
-    if (known === null) response.headers.set("Content-Security-Policy", "default-src 'none'; sandbox");
+    if (downloadOnly) response.headers.set("Content-Security-Policy", SANDBOX_POLICY);
     return response;
   } catch (error) {
     return errorResponse(error);

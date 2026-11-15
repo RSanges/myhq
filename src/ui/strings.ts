@@ -1922,7 +1922,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     previewOf: (name: string) => `Aperçu de ${name}`,
     size: (bytes: number) =>
       bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} Mo`,
-    kind: { video: "Vidéo", image: "Image", audio: "Son", model: "Pièce 3D", pdf: "PDF" },
+    kind: { video: "Vidéo", image: "Image", audio: "Son", model: "Pièce 3D", pdf: "PDF", file: "Fichier" },
     /** The line of a Telegram alert that lists the files of the item. */
     telegramLine: (names: readonly string[]) => `Fichiers joints : ${names.join(", ")}`,
   },

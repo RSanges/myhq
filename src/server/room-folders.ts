@@ -34,19 +34,20 @@ export const orderNameSchema = z.string().regex(/^[0-9]{4}-[0-9]{2}-[a-z0-9]+(-[
 
 export class RoomFolderError extends Error {}
 
-/** The drawer of a kind of file, when the item names none: by priority, model first, images last. */
+/** The drawer of a kind of file, when the item names none: by priority, model first, images then a client's piece last. */
 const KIND_PRIORITY: readonly [AttachmentKind, Drawer][] = [
   ["model", "modeles-3d"],
   ["video", "videos"],
   ["audio", "sons"],
   ["pdf", "documents"],
   ["image", "visuels"],
+  ["file", "documents"],
 ];
 
 /**
  * The drawer of an item that names none, by what its files are: a 3D model,
- * else a video, else a sound, else a PDF, else images. A preview image put
- * first never decides. Null without a file of a known kind.
+ * else a video, else a sound, else a PDF, else images, else a client's piece
+ * or a data file (documents). A preview image put first never decides. Null without a file of a known kind.
  */
 export function defaultDrawer(fileNames: readonly string[]): Drawer | null {
   const kinds = new Set(fileNames.map((name) => attachmentType(name)?.kind));

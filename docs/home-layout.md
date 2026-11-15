@@ -661,10 +661,13 @@ lives in `.env.local` and never in `room.json`:
   every other field are passed as written.
 - The run's own variables are available too, and win over the app's
   environment: `${HQ_DB_PATH}` (absolute path of `data/hq.db`),
-  `${HQ_RUN_ID}`, `${HQ_AGENT_ID}` and `${HQ_ROOM}`, the values MyHQ gives the
-  `hq` server. A private server can then read the database (for example to
-  check that an item is approved before acting on it) or tag its own journal
-  with the run: `"env": { "HQ_DB_PATH": "${HQ_DB_PATH}", "HQ_RUN_ID": "${HQ_RUN_ID}" }`.
+  `${HQ_RUN_ID}`, `${HQ_AGENT_ID}`, `${HQ_ROOM}` and `${HQ_WORK_DIR}`, the
+  values MyHQ gives the `hq` server. A private server can then read the
+  database (for example to check that an item is approved before acting on it)
+  or tag its own journal with the run: `"env": { "HQ_DB_PATH": "${HQ_DB_PATH}", "HQ_RUN_ID": "${HQ_RUN_ID}" }`.
+  `${HQ_WORK_DIR}` is the absolute working directory of the agent for the run
+  (its worktree when it has one), the directory `hq_submit` attachments are
+  relative to: a server can write a file there for the agent to attach.
 - A variable that is not set, or is empty, fails the run before it launches,
   with an error naming the variable (`HQ_EXT_REDDIT_CLIENT_ID` here). It is
   never replaced by an empty string.
@@ -751,7 +754,11 @@ one) and may not leave it: a render written elsewhere (the output folder of
 ComfyUI, an `addDirs` folder) is copied into the working directory first,
 which needs a copy tool in the agent's whitelist (`Bash(cp *)`, or `Write`).
 Accepted: mp4, webm, mov, png, jpg, jpeg, webp, gif, wav, mp3, ogg, flac, m4a,
-3mf, stl, glb, pdf, each up to `HQ_ATTACHMENT_MAX_MB` (200 MB by default). An
+3mf, stl, glb, pdf, and, for a client's piece or a data file (a logo, a
+drawing, a build report), svg, ai, eps, psd, tif, tiff, heic, dxf, step, stp,
+obj, docx, xlsx, txt, csv, md, json, zip, which MyHQ never opens and shows the
+owner as downloads only (a file of these that starts like a program is
+refused), each up to `HQ_ATTACHMENT_MAX_MB` (200 MB by default). An
 image with the same name as a 3D part or a PDF is shown as its preview. MyHQ
 keeps its own copy (`data/attachments/`), so the agent may go on working on
 its file. See `architecture.md`, "Files joined to an item". The owner can pin

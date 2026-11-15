@@ -137,6 +137,7 @@ test("sizes, file addresses and how a file is shown", () => {
   assert.equal(folderFileUrl("shop", "recu/x.svg", true), "/api/rooms/shop/folder/file?path=recu%2Fx.svg&download=1");
   assert.equal(previewKind({ kind: "image" }), "image");
   assert.equal(previewKind({ kind: null }), "download");
+  assert.equal(previewKind({ kind: "file" }), "download", "a client's piece is never previewed");
 });
 
 test("deposit checks: the count, an empty file, a file over the cap", () => {

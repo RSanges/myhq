@@ -856,14 +856,34 @@ and the two `hq_submit` fields `drawer` and `order` (below).
   MyHQ moves a file out of it, on an act of the owner.
 - **Routes** (`src/server/folder-routes.ts`, thin files under
   `src/app/api/rooms/[room]/folder/`): listing, file, order opening, deposit.
-  A file of a known attachment kind is served inline with its MIME type, any
-  other only as a download (`application/octet-stream`, attachment, a sandbox
+  A file of a known attachment kind is served inline with its MIME type, a
+  file of kind `file` and any other only as a download
+  (`application/octet-stream`, attachment, a sandbox
   Content-Security-Policy), so the browser never renders an SVG or an HTML
   page from the folder. A deposit is multipart, and a plain form of another
   site can post one without a preflight, so it checks the request comes from
   the same site (`Sec-Fetch-Site`, `Origin`). It must declare its
   `Content-Length` (411 `LENGTH_REQUIRED` otherwise, browsers always send it),
   so that the size cap applies before the body is buffered.
+- **A client's pieces travel with an item** as attachments of kind `file`
+  (`ATTACHMENT_TYPES` in `attachments.ts`): svg, ai, eps, psd, tif, tiff,
+  heic, dxf, step, stp, obj, docx, xlsx, txt, csv, md, json, zip, frozen at
+  submission like any attachment. That is how the logo, the drawing or the
+  build report a client sent reaches the owner with an item named
+  `drawer: "recu"`, then is filed there at approval (without a named drawer,
+  this kind decides last, into `documents`). MyHQ never opens, parses,
+  unpacks or executes them: the desk and the folders page give a plain
+  download, never a preview, an alert lists them by name and never sends
+  them as media, the surveillance room never follows them as media pieces
+  (txt, csv, md and json stay text pieces there, path and excerpt). Both
+  file routes serve them as a download only, whatever the query:
+  `Content-Type: application/octet-stream`, `Content-Disposition: attachment`,
+  `X-Content-Type-Options: nosniff`, and `Content-Security-Policy:
+  default-src 'none'; sandbox` (`SANDBOX_POLICY` in `file-response.ts`). The
+  whitelist goes by the last extension (`logo.svg.exe` is refused), and
+  `resolveAttachment` reads the first bytes of such a file and refuses one
+  that starts like a program (`MZ`, ELF, Mach-O, a `#!` shebang) whatever
+  its extension. Such a file is data from outside, never instructions.
 
 ### Messages between agents
 

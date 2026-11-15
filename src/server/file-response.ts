@@ -30,6 +30,9 @@ export function parseRange(header: string | null, size: number): ByteRange | "un
   return { start, end: Math.min(end, size - 1) };
 }
 
+/** The policy of a file served as a download only: the browser renders nothing of it, runs no script of it. */
+export const SANDBOX_POLICY = "default-src 'none'; sandbox";
+
 /** Quotes a file name for Content-Disposition, ASCII fallback plus the UTF-8 form. */
 function disposition(kind: "inline" | "attachment", name: string): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");

@@ -7,14 +7,18 @@ import type { Db } from "./db";
 
 /**
  * Files an agent joins to an item (hq_submit `attachments`): a render to
- * validate (video, image, sound, 3D part, PDF). At submission MyHQ copies each
+ * validate (video, image, sound, 3D part, PDF), or a client's piece or a data
+ * file (kind "file": a logo, a drawing, a report), which MyHQ never opens and
+ * serves as a download only. At submission MyHQ copies each
  * one into `<home>/data/attachments/<approvalId>/`, so what the owner validates
  * no longer changes when the agent touches its file again. The copy on disk is
  * named from integers and a whitelisted extension only; the original name is
  * metadata in `approval_files`.
  */
 
-export type AttachmentKind = "video" | "image" | "audio" | "model" | "pdf";
+export type AttachmentKind = "video" | "image" | "audio" | "model" | "pdf" | "file";
+
+const FILE = { mime: "application/octet-stream", kind: "file" } as const;
 
 /** The accepted extensions, with their MIME type and kind. Anything else is refused. */
 export const ATTACHMENT_TYPES: Readonly<Record<string, { mime: string; kind: AttachmentKind }>> = {
@@ -35,7 +39,51 @@ export const ATTACHMENT_TYPES: Readonly<Record<string, { mime: string; kind: Att
   ".stl": { mime: "model/stl", kind: "model" },
   ".glb": { mime: "model/gltf-binary", kind: "model" },
   ".pdf": { mime: "application/pdf", kind: "pdf" },
+  // A client's piece or a data file: never opened by MyHQ, served as a download only.
+  ".svg": FILE,
+  ".ai": FILE,
+  ".eps": FILE,
+  ".psd": FILE,
+  ".tif": FILE,
+  ".tiff": FILE,
+  ".heic": FILE,
+  ".dxf": FILE,
+  ".step": FILE,
+  ".stp": FILE,
+  ".obj": FILE,
+  ".docx": FILE,
+  ".xlsx": FILE,
+  ".txt": FILE,
+  ".csv": FILE,
+  ".md": FILE,
+  ".json": FILE,
+  ".zip": FILE,
 };
+
+/** How a program starts (PE, ELF, Mach-O, a fat Mach-O, a script's shebang): refused in a file of kind "file". */
+const PROGRAM_SIGNATURES: readonly Buffer[] = [
+  Buffer.from("MZ"),
+  Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+  Buffer.from([0xfe, 0xed, 0xfa, 0xce]),
+  Buffer.from([0xfe, 0xed, 0xfa, 0xcf]),
+  Buffer.from([0xcf, 0xfa, 0xed, 0xfe]),
+  Buffer.from([0xce, 0xfa, 0xed, 0xfe]),
+  Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+  Buffer.from("#!"),
+];
+
+/** Whether a file starts like a program: its first bytes only, nothing else is read. */
+function startsLikeProgram(file: string): boolean {
+  const head = Buffer.alloc(4);
+  const fd = fs.openSync(file, "r");
+  let read: number;
+  try {
+    read = fs.readSync(fd, head, 0, head.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return PROGRAM_SIGNATURES.some((signature) => read >= signature.length && head.subarray(0, signature.length).equals(signature));
+}
 
 export const MAX_ATTACHMENTS = 10;
 /** Default cap on one file, in MB (HQ_ATTACHMENT_MAX_MB overrides it). */
@@ -113,8 +161,9 @@ export function resolveInside(workDir: string, raw: string, label: string): { re
 /**
  * Checks one attachment of an agent: a path relative to its working directory
  * (or worktree), that stays inside it once every link is followed, of an
- * accepted extension, an existing regular file, and at most `maxBytes`.
- * Throws an AttachmentError the agent can act on.
+ * accepted extension, an existing regular file, and at most `maxBytes`. A
+ * file of kind "file" that starts like a program is refused whatever its
+ * extension. Throws an AttachmentError the agent can act on.
  */
 export function resolveAttachment(workDir: string, input: AttachmentInput, maxBytes: number): ResolvedAttachment {
   const raw = input.path;
@@ -133,6 +182,9 @@ export function resolveAttachment(workDir: string, input: AttachmentInput, maxBy
     throw new AttachmentError(
       `attachments: "${raw}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, above the cap of ${(maxBytes / 1024 / 1024).toFixed(0)} MB: send a lighter render.`,
     );
+  }
+  if (type.kind === "file" && startsLikeProgram(real)) {
+    throw new AttachmentError(`attachments: "${raw}" is a program (it starts like an executable or a script), and programs are not accepted.`);
   }
   return {
     source: real,

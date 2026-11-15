@@ -53,7 +53,7 @@ export const approvalFileSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   mime: z.string(),
-  kind: z.enum(["video", "image", "audio", "model", "pdf"]),
+  kind: z.enum(["video", "image", "audio", "model", "pdf", "file"]),
   size: z.number(),
   sha256: z.string(),
   caption: z.string().nullable(),
@@ -264,7 +264,7 @@ export const folderEntrySchema = z.object({
   size: z.number(),
   modifiedAt: z.string(),
   role: z.enum(["drawer", "order"]).nullable(),
-  kind: z.enum(["video", "image", "audio", "model", "pdf"]).nullable(),
+  kind: z.enum(["video", "image", "audio", "model", "pdf", "file"]).nullable(),
 });
 export type FolderEntry = z.infer<typeof folderEntrySchema>;
 

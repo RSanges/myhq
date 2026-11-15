@@ -50,6 +50,10 @@ test("default drawer: by what the files are, a 3D model, else a video, else a so
   assert.equal(defaultDrawer(["thumb.png", "clip.mp4"]), "videos");
   assert.equal(defaultDrawer(["thumb.png", "voice.wav"]), "sons");
   assert.equal(defaultDrawer(["thumb.png", "spec.pdf"]), "documents");
+  // A client's piece decides only when nothing else does.
+  assert.equal(defaultDrawer(["report.json", "part.3mf"]), "modeles-3d");
+  assert.equal(defaultDrawer(["logo.svg"]), "documents");
+  assert.equal(defaultDrawer(["logo.svg", "photo.png"]), "visuels");
   assert.equal(defaultDrawer(["clip.mp4", "voice.wav", "part.stl"]), "modeles-3d");
   assert.equal(defaultDrawer([]), null);
 });
@@ -111,7 +115,7 @@ test("listRoomFolder: directories first then by name, with roles and kinds, hidd
       ["recu", "recu", "dir", "drawer", null],
       ["visuels", "visuels", "dir", "drawer", null],
       ["a.png", "a.png", "file", null, "image"],
-      ["notes.txt", "notes.txt", "file", null, null],
+      ["notes.txt", "notes.txt", "file", null, "file"],
     ],
   );
   assert.equal(top.find((e) => e.name === "a.png")!.size, 3);

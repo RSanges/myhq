@@ -251,7 +251,7 @@ test("an MCP server of the home receives the run's own variables through placeho
           mail: {
             command: "node",
             args: ["server.mjs", "--run=${HQ_RUN_ID}"],
-            env: { DB: "${HQ_DB_PATH}", RUN: "${HQ_RUN_ID}", WHO: "${HQ_ROOM}/${HQ_AGENT_ID}" },
+            env: { DB: "${HQ_DB_PATH}", RUN: "${HQ_RUN_ID}", WHO: "${HQ_ROOM}/${HQ_AGENT_ID}", WORK: "${HQ_WORK_DIR}" },
           },
         },
       },
@@ -264,7 +264,8 @@ test("an MCP server of the home receives the run's own variables through placeho
   const mcp = JSON.parse(mcpAtStart.get(seen[0]!.mcpConfigPath)!) as {
     mcpServers: { mail: { args: string[]; env: Record<string, string> } };
   };
-  assert.deepEqual(mcp.mcpServers.mail.env, { DB: config.dbPath, RUN: String(run.id), WHO: "demo/scout" });
+  assert.deepEqual(mcp.mcpServers.mail.env, { DB: config.dbPath, RUN: String(run.id), WHO: "demo/scout", WORK: seen[0]!.workDir });
+  assert.ok(path.isAbsolute(mcp.mcpServers.mail.env.WORK!), "the absolute working directory of the run");
   assert.deepEqual(mcp.mcpServers.mail.args, ["server.mjs", `--run=${run.id}`]);
 });
 

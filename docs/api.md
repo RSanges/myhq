@@ -252,7 +252,8 @@ order (empty for an item without any), each:
   "sha256": "9f2c...", "caption": "Plan d'ouverture", "url": "/api/approvals/1/files/4" }
 ```
 
-`kind` is `video`, `image`, `audio`, `model` (3mf, stl, glb) or `pdf`. `size`
+`kind` is `video`, `image`, `audio`, `model` (3mf, stl, glb), `pdf` or
+`file` (a client's piece or a data file, served as a download only). `size`
 and `sha256` are those of the copy MyHQ made at submission, which `url` serves
 (see `GET /api/approvals/[id]/files/[fileId]`).
 
@@ -1006,6 +1007,12 @@ same, without the body.
   submission), `X-Content-Type-Options: nosniff`.
 - `Content-Disposition`: `inline` with the original name, `attachment` with
   `?download=1` (the desk uses it for 3D parts).
+- A file of kind `file` (svg, ai, eps, psd, tif, tiff, heic, dxf, step, stp,
+  obj, docx, xlsx, txt, csv, md, json, zip) is a download only, whatever the
+  query: `Content-Type: application/octet-stream`, `Content-Disposition:
+  attachment` with its name, `X-Content-Type-Options: nosniff` and
+  `Content-Security-Policy: default-src 'none'; sandbox`, so the browser never
+  renders an SVG that came from outside.
 - `Accept-Ranges: bytes`. A `Range: bytes=<start>-<end>` (or `<start>-`, or a
   suffix `-<n>`) gets `206 Partial Content` with `Content-Range`; only the first
   range of a list is served. A range that starts past the end gets `416` with
@@ -1395,7 +1402,7 @@ file: its directory is then listed, so an address can point at a file. Directori
 come first, then by name; hidden entries (a leading dot) are left out.
 `role` is `drawer` (at the root of the room folder or of an order), `order` (at
 the root) or `null`; `kind` is the attachment kind of a file of an accepted
-extension (`video`, `image`, `audio`, `model`, `pdf`), `null` otherwise.
+extension (`video`, `image`, `audio`, `model`, `pdf`, `file`), `null` otherwise.
 `deposit` gives the caps of a deposit (below).
 
 #### `GET /api/rooms/[room]/folder/file?path=<relative>[&download=1]`
@@ -1404,7 +1411,7 @@ One file of the room folder (`HEAD` works the same, without the body), with
 `Accept-Ranges: bytes` and range requests (`206`), a weak `ETag` (the file may
 change) and `X-Content-Type-Options: nosniff` on every response. A file of a
 known attachment kind is served with its MIME type, inline unless
-`download=1`. Any other file is served only as a download
+`download=1`. A file of kind `file`, and any other file, is served only as a download
 (`Content-Type: application/octet-stream`, `Content-Disposition: attachment`,
 a `Content-Security-Policy: default-src 'none'; sandbox`), so the browser never
 renders an SVG or an HTML page that came from outside. A path that is not a

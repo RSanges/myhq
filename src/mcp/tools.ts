@@ -179,7 +179,7 @@ export const inputs = {
       .max(MAX_ATTACHMENTS)
       .optional()
       .describe(
-        "Files to validate with the item (a render: video mp4/webm/mov, image png/jpg/webp/gif, sound wav/mp3/ogg/flac/m4a, 3D 3mf/stl/glb, pdf), each { path, caption? }. path is relative to your working directory and must stay inside it: copy a render made elsewhere (ComfyUI output...) into your directory first. MyHQ keeps a copy, so the owner validates exactly what you sent. An image named like a 3D file or a PDF (piece.png next to piece.3mf) is shown as its preview.",
+        "Files to validate with the item (a render: video mp4/webm/mov, image png/jpg/webp/gif, sound wav/mp3/ogg/flac/m4a, 3D 3mf/stl/glb, pdf; or a client's piece or a data file: svg, ai, eps, psd, tif, heic, dxf, step, obj, docx, xlsx, txt, csv, md, json, zip, shown to the owner as a download only), each { path, caption? }. path is relative to your working directory and must stay inside it: copy a render made elsewhere (ComfyUI output...) into your directory first. MyHQ keeps a copy, so the owner validates exactly what you sent. An image named like a 3D file or a PDF (piece.png next to piece.3mf) is shown as its preview.",
       ),
     onApprove: z
       .array(

@@ -156,9 +156,10 @@ export function folderFileUrl(room: string, path: string, download = false): str
   return `/api/rooms/${encodeURIComponent(room)}/folder/file?path=${encodeURIComponent(path)}${download ? "&download=1" : ""}`;
 }
 
-/** How a file is shown: in the page for a kind MyHQ knows, a download for anything else. */
-export type PreviewKind = NonNullable<FolderEntry["kind"]> | "download";
-export const previewKind = (entry: Pick<FolderEntry, "kind">): PreviewKind => entry.kind ?? "download";
+/** How a file is shown: in the page for a kind MyHQ shows, a download for a client's piece (kind "file") and anything else. */
+export type PreviewKind = Exclude<NonNullable<FolderEntry["kind"]>, "file"> | "download";
+export const previewKind = (entry: Pick<FolderEntry, "kind">): PreviewKind =>
+  entry.kind === null || entry.kind === "file" ? "download" : entry.kind;
 
 /** What is wrong with a deposit before it is sent, in French, or null: the count, an empty file, one over the cap. */
 export function depositProblem(

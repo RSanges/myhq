@@ -634,15 +634,20 @@ function ModelFile({ entry, format, annotations, onAnnotations, focus }: { entry
   );
 }
 
-/** A 3D part or a PDF: a download link, with its preview image when the agent joined one. */
+/**
+ * A 3D part, a PDF or a client's piece (kind "file"): a link, with its preview
+ * image when the agent joined one. A PDF opens in a new tab; the others are a
+ * download only, never opened in the page.
+ */
 function DownloadFile({ entry }: { entry: FileEntry }) {
   const { file, preview } = entry;
-  const href = file.kind === "model" ? `${file.url}?download=1` : file.url;
+  const download = file.kind !== "pdf";
+  const href = download ? `${file.url}?download=1` : file.url;
   return (
     <figure className="space-y-2">
       <a
         href={href}
-        {...(file.kind === "model" ? { download: file.name } : { target: "_blank", rel: "noopener" })}
+        {...(download ? { download: file.name } : { target: "_blank", rel: "noopener" })}
         className="flex min-h-12 items-center gap-3 rounded-md border border-line bg-soft p-2 hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
       >
         {preview && (
@@ -661,7 +666,7 @@ function DownloadFile({ entry }: { entry: FileEntry }) {
           </span>
         </span>
         <span className="shrink-0 text-sm text-accent underline underline-offset-2">
-          {file.kind === "model" ? strings.attachments.download : strings.attachments.open}
+          {download ? strings.attachments.download : strings.attachments.open}
         </span>
       </a>
       {file.caption && <p className="whitespace-pre-wrap break-words text-xs">{file.caption}</p>}
@@ -672,7 +677,8 @@ function DownloadFile({ entry }: { entry: FileEntry }) {
 /**
  * The files joined to an item, for the owner to validate a render from the
  * desk or a phone: players for videos and sounds, images to enlarge, a 3D
- * viewer for parts (with their download), and a download for PDFs. Images,
+ * viewer for parts (with their download), a link for PDFs, and a plain
+ * download for a client's piece or a data file (kind "file"). Images,
  * videos and parts take remarks pinned on a point.
  */
 export function Attachments({ files, annotations, onAnnotations, focus }: { files: readonly ApprovalFile[] } & Remarks) {

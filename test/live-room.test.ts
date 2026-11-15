@@ -78,6 +78,8 @@ test("pieceKind: video, image and audio from the attachment types, text from a s
   assert.equal(pieceKind("part.stl"), null);
   assert.equal(pieceKind("doc.pdf"), null);
   assert.equal(pieceKind("archive.zip"), null);
+  assert.equal(pieceKind("logo.svg"), null, "a client's piece is never followed");
+  assert.equal(pieceKind("drawing.dxf"), null);
 });
 
 test("resolveInside: the real path and its POSIX path relative to the working directory, never outside", (t) => {
