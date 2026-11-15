@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { parseChoices, parseQuestionPayload, QUESTION_TYPE, type Question } from "@/server/questions";
@@ -9,6 +10,7 @@ import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
 import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
 import { excerpt } from "./excerpt";
+import { filedHref } from "./folders-model";
 import { formatAge, formatDateTime } from "./format";
 import { approvalTitle, branchHandover, claudeMdHandover, payloadUrl, typeLabel, type Action, type TeamAgent } from "./model";
 import { primaryDecision } from "./primary-decision";
@@ -158,6 +160,23 @@ function DeskItem({
   );
 }
 
+/** The line of an item MyHQ filed: « Rangé dans <filedPath> », a link to that place of the folders page. */
+function FiledLine({ filedPath }: { filedPath: string }) {
+  const href = filedHref(filedPath);
+  const text = strings.folders.filed(filedPath);
+  return (
+    <p className="text-xs text-muted">
+      {href ? (
+        <Link href={href} className="break-all rounded underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-accent">
+          {text}
+        </Link>
+      ) : (
+        <span className="break-all">{text}</span>
+      )}
+    </p>
+  );
+}
+
 /**
  * The files joined to the item, then the body, with its remarks: editable while
  * the item is pending (`onAnnotations`), read-only after. A remark made on a
@@ -192,6 +211,7 @@ function ApprovalContent({
         <AnnotatedBody source={approval.body} annotations={annotations} onChange={onAnnotations} onPoint={showPoint} />
       )}
       {showControls && <HandoverControls approval={approval} prominent={false} />}
+      {approval.filedPath && <FiledLine filedPath={approval.filedPath} />}
     </>
   );
 }

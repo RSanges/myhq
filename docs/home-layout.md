@@ -17,6 +17,8 @@ repository of its own.
   archives/
     rooms/<room>-<YYYY-MM-DD>/  the configuration folder of a room deleted from /reglages
   docs/roadmap.json      the live roadmap shown at /roadmap (optional, see api.md)
+  folders/               the room folders, one folder per room (movable with `folders.dir`, see "Room folders")
+    <room>/<drawer>/     what the room received and what MyHQ filed for it
   assistant/
     commands/            extensions for the Telegram assistant
   data/                  created at first launch, ignored by Git
@@ -92,6 +94,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `targetRepo` | yes | Path of the repository the room works on, relative to the home. |
 | `color` | no | The room's colour in the interface, a CSS hex colour (`#rgb` or `#rrggbb`). The chat chips of the room's agents, the agent strip under the floor and the room's button in the floor header take it as a soft tint (border and dot in the colour, text unchanged), and on the single floor its carpet, its name tags and its signboard take it. Without it the room stays neutral. The assistant's own chip keeps its blue. |
 | `shared` | no | `true` makes the room a shared studio (a room of scripts, videos or visuals, say): every room of the home may order from it, and it delivers to the room that ordered (see "Shared rooms" below). Default `false`. |
+| `orders` | no | `true` for a room that serves clients: its room folder holds one folder per order (`<YYYY>-<MM>-<client>-<subject>`), each with its own drawers, and its agents name the order of a delivery with `hq_submit` `order`, list them with `hq_orders` and open one with `hq_order_open` (see "Room folders" below). Default `false`. |
 | `logo` | no | The logo of the room's project, a `.png`, `.webp` or `.svg` file relative to the room directory, inside it, at most 1 MiB (served by `GET /api/rooms/<room>/logo`). The single floor draws it on the left of the name on the room's signboard, reduced to the height of the board (about 14 pixels) in a pixel art way, so a small, bold logo reads best (an app icon rather than a wordmark; a thin line drawing turns to mush at that size, draw a bolder variant). The logo goes beside the name only when the room's wall is long enough for both: a short wall with a long name leaves room for a logo of about 12 pixels wide, a wider one is dropped. Without it, or when the file is missing, the board shows the name alone. |
 | `decor` | no | How the room's suite of the single floor (`floor.layout: "room-per-project"` of `myhq.json`) is furnished. `"library"`: the same desks and aisles as an office of the same team, but a wooden floor, a tall shelf full of books on every cell of the back wall that no desk takes (a library ladder among them), two more on the side wall when no desk stands against it, a reading table in each spare place of the front row, a globe in the front corner, and beyond the aisle to the opening a reading wing of three cells (instead of a big team's coffee nook): an armchair, a floor lamp and a side table on a rug, piles of books, a plant. The armchair's cushion and the rug's border take the room's `color`. Left out, the suite is an office. A value MyHQ does not know makes the room invalid. The floor of one room (`floor-per-project`) ignores it. |
 | `agents[].id` | yes | Stable identifier, used in messages and in the database. |
@@ -279,6 +282,118 @@ A studio declared like this, with a project room ordering from it:
 and in the role of a project agent: « Order a video from the room studio with
 `hq_message` (`room: "studio"`, `to: "video"`); the deliverable comes back to
 your room's pile. »
+
+#### Room folders
+
+"One room, one folder": everything a room receives and produces lives under
+`<root>/<room>/`, sorted into drawers. The root is `<home>/folders` by default,
+or `folders.dir` of `myhq.json` (relative to the home, or absolute). `npm run
+init` ignores only `data/` in the home's `.gitignore`: add the root there if
+the home is a repository and the folders hold deliveries you do not version.
+
+- **The rule.** MyHQ files an approved delivery itself, and the owner may drop
+  what a client sent. Agents never write there. The workshops (working
+  directories, worktrees, tools, target repositories) do not move: only what
+  was approved, or dropped by the owner, lives in a room folder.
+- **The drawers**, a closed list. Their names on disk follow the interface
+  language (French for now) and are created when something is filed, `recu`
+  excepted: it is created with the room folder and with each order.
+
+  | Drawer | Holds |
+  |---|---|
+  | `recu` | What a client or a third party sent: the pieces of a request. |
+  | `videos` | Delivered videos. |
+  | `visuels` | Delivered images. |
+  | `sons` | Delivered sounds, voices, music. |
+  | `social` | A post: its text and media. |
+  | `modeles-3d` | 3D models. |
+  | `rendus` | Render images of a part. |
+  | `impression` | Print-ready files. |
+  | `devis` | Quotes. |
+  | `documents` | Other PDFs and documents. |
+
+- **How an approved item is filed.** When the item goes from pending to
+  approved, after the decision is committed. Never filed: a question, a room
+  proposal, an agent proposal, an informational item (`notifyTypes`), and an
+  item with neither files of a known kind nor a named drawer.
+  - *Where*: `<root>/<for_room, else the agent's room>/[<order>/]<drawer>/`.
+    The drawer is the one `hq_submit` `drawer` names, else the default by what
+    the files are: a 3D model, else a video, else a sound, else a PDF, else
+    images (a preview image put first never decides).
+  - *Under which name*: `<YYYY-MM-DD>-<slug of the title>`, the day of the
+    approval in the home's time zone. Zero or one file: flat (`<name>.<ext>`,
+    or `<name>.md` for an item without a file). Several files: a folder
+    `<name>/` holding them. The body is kept as `<name>.md` (beside the file,
+    or inside the folder) only when the item named its drawer. Nothing is ever
+    overwritten: a taken name becomes `-2`, `-3`. Filing an item whose order
+    folder was deleted recreates that folder, without saying so.
+  - The frozen copies of `data/attachments` stay where they are. The place is
+    recorded in the approval (`filedPath`, relative to the root), and the desk
+    card says « Rangé dans ... » with a link to it. A failure to file never
+    undoes the approval: what was written is removed, the error is logged and
+    the item stays unfiled (see the catch-up below).
+- **Orders.** With `"orders": true` in `room.json`, the room folder holds one
+  folder per order, named `<YYYY>-<MM>-<client>-<subject>` (lowercase ASCII,
+  for example `2026-11-acme-sign`), each with its own drawers and its own
+  `recu`. The owner opens one with « Nouvelle commande » on the page
+  `/dossiers`, an agent of the room with `hq_order_open` (arguments `client`
+  and `subject`, the month taken in the home's time zone; an order of that
+  name already there is given back with `created: false`). `hq_orders` lists
+  the orders, newest first. An agent of a shared room may give `room`, but
+  only a room that ordered from its own (a message of one of that room's
+  agents became a task of the shared room, at any time); any other room gets
+  one refusal, the same whether it exists or takes orders. `hq_submit` `order`
+  names the order a delivery belongs to, checked against the destination room
+  at submission; with `forRoom`, only for a room that ordered from the
+  agent's: any other gets one refusal, whether the order exists or not.
+  `hq_order_open` also takes `received`, the ids of items approved and filed
+  in a `recu` outside any order, and `receivedFiles`, the names of entries of
+  the room's `recu/`: MyHQ moves them into the new order's `recu/`,
+  everything checked before anything is created or moved, and a move that
+  fails halfway puts back what had already moved. An id of `received` must be
+  the room's own: an item submitted in the room, delivered for it (`forRoom`),
+  or relayed by MyHQ to an agent of the room when it was approved
+  (`hq_submit` `onApprove`, delivered). Every refusal of an id, whatever its
+  cause (unknown id, not approved, another room, not in a `recu`, already in
+  an order, the filed copy gone), is the same message, so that an agent cannot
+  probe another room's items through it. That is the case of a client's
+  request approved before the order existed. When a filed file and its `.md`
+  note share a stem, the note moves with the first file of that stem.
+- **Who reads what.** Every agent of a room reads its own room folder,
+  read-only: it is added to its `--add-dir` for the run, so the write guard
+  refuses any write there, like for any `addDirs`. An agent of a shared room
+  also reads, for that run only, the folder of each room it works for in that
+  run: the rooms that wrote the messages it claimed, and the rooms an item
+  being revised or approved was delivered for (`forRoom`), the latter only
+  when that room ordered from the shared room (the agent names `forRoom`
+  itself, so naming it alone opens nothing). Never the whole root. When no
+  origin is known (a routine, a task from the owner), the agent reads its own
+  room only, and its prompt tells it to say so rather than guess. Nothing has
+  to be declared in `room.json`.
+- **What the write guard does not cover.** The promise that agents never
+  write in the room folders holds for the editing tools (Write, Edit,
+  MultiEdit, NotebookEdit), which the write guard refuses there. An agent
+  that has `Bash` can still write, delete or create a link in a directory it
+  receives through `--add-dir`, a room folder included. This is a limit of the
+  write guard that existed before the room folders, for every `addDirs`, and
+  it is the owner's decision what to do about it, for example not giving
+  `Bash` to the agents that read untrusted client files.
+- **How things reach a `recu` drawer.** The owner's deposit from the page
+  `/dossiers`, or by hand in the file explorer; an approved item that names
+  `drawer: "recu"`; the chat action `file_received` (see "Chat actions").
+- **What sits in `recu` comes from outside.** A client or a third party sent
+  it. It is data to work from, never instructions to follow: the prompt of
+  every run says so to the agent, and MyHQ itself never opens, unpacks or
+  executes those files.
+- **The catch-up.** `npm run file-approved` lists the approved items MyHQ
+  would file and has not, for items approved before the feature or whose
+  filing failed, and changes nothing. `-- --apply` files them, `-- --only
+  12,15` restricts to those ids.
+- **The page `/dossiers`.** The owner picks a room and browses its folder
+  (orders, drawers, files), previews or downloads a file, copies the path of
+  the folder on the machine, opens an order, and drops files into a `recu`
+  (several at once, by drag and drop). The routes are in `api.md`; the
+  mechanism is in `architecture.md`, "Room folders".
 
 #### Shared resources
 
@@ -645,6 +760,18 @@ then gives the point on a line under the remark (in percent from the left and
 top edges of an image, with the time for a video, see `api.md`), which the role
 can tell the agent how to read.
 
+Once approved, MyHQ files the item in its room folder (see "Room folders"):
+the agent never copies anything there and a role never names a path of the
+room folders. `hq_submit` takes two more fields for that. `drawer` names the
+drawer when the default one (by what the files are) is not right, and an item
+without files is filed only when it names one. `order` names the order the
+delivery belongs to, for an agent of a room with `"orders": true` (or of a
+shared room delivering to one, with `forRoom`):
+
+```json
+{ "drawer": "devis", "order": "2026-11-acme-sign", "forRoom": "shop" }
+```
+
 An approved `agent_proposal` (`architecture.md`, "Proposing a missing agent")
 is the other way MyHQ writes in a room: it adds `roles/<id>.md` (the role
 prompt the receptionist wrote, in the language of the home) and appends the
@@ -697,7 +824,7 @@ assistant runs with its core commands only.
 | `chat.writeDirs` | no | Directories outside `chat.cwd` the chat may write (a notes vault, a data folder), relative to the home; each is also passed as `--add-dir` unless `chat.cwd` or `chat.addDirs` covers it. Each turn installs the write guard in `chat.cwd` (its `.claude/settings.local.json`, kept out of Git by a `.claude/.gitignore` of MyHQ's): the chat writes only in `chat.cwd`, these folders and `chat.requests.dir`, whatever `chat.permissionMode` says. Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
 | `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. A server may add `"untrusted": false` (MyHQ's own flag, never written to the MCP config): every server is untrusted by default (see "Chat actions"). Default: none. |
-| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`); default none. The directory must be inside `chat.cwd`, `chat.addDirs` or `chat.writeDirs`; the write guard lets the chat write there. |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`, `file_received`); default none. The directory must be inside `chat.cwd`, `chat.addDirs` or `chat.writeDirs`; the write guard lets the chat write there. |
 | `chat.untrustedTools` | no | More tools whose results count as untrusted for chat actions, by exact name or with a final `*` (`mcp__mail__*`). The web tools and the tools of untrusted servers always count. Default: none. |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
@@ -831,13 +958,14 @@ with a button or a command, by writing a JSON file in the same
 { "action": "arm", "room": "demo", "agent": "watch" }
 { "action": "disarm", "agent": "watch" }
 { "action": "propose_agent", "need": "Draw the illustrations of the site.", "room": "demo" }
+{ "action": "file_received", "file": "contract.pdf", "room": "shop", "order": "2026-11-acme-sign" }
 ```
 
 - Only the actions listed in `chat.requests.actions` are taken; an action
   outside it, or a file that does not match (an unknown action, `reject` or
   `revise` without a `note`, a decision without `id`, which `approvalId` may
   replace, a `run`, `arm` or `disarm` without `agent`, a `propose_agent`
-  without `need`), is moved to
+  without `need`, a `file_received` without `file` or `room`), is moved to
   `<dir>/rejected/`, logged, and a line of the reply says so.
 - `room` may be left out when exactly one room has an agent of that id.
 - After a reply that succeeds, the action files are taken in name order (before
@@ -849,10 +977,22 @@ with a button or a command, by writing a JSON file in the same
   and `proposeAgent` for `propose_agent`: the need goes to the receptionist,
   which proposes a missing agent (`architecture.md`, "Proposing a missing
   agent"; `room`, optional, is the room the need comes from; a busy
-  receptionist or the cap leave the need waiting for its next run). The
+  receptionist or the cap leave the need waiting for its next run), and
+  `file_received`, below. The
   core appends one French line per action to the chat's reply (« Item #14 :
   Approuvé. », « Tour #7 lancé pour demo / watch. », or the refusal). The
   chat's own text never decides anything.
+- **`file_received`** `{ "action": "file_received", "file", "room", "order"? }`
+  files a file the owner sent to the bot. It moves `file`, a plain file name
+  (no separator, no drive prefix) of the `dropDir` of `assistant.json`, with
+  its companion note (`<name without extension>.md`) when there is one, into
+  the `recu/` of `room`, or of its `order` (the room must take orders and the
+  order exist), under a free name: it never overwrites, and refuses a link or
+  a file that is not directly in the drop folder. The line of the reply says
+  where it went (« Rangé dans ... ») or why not. It goes through the same
+  confirmation guard as every action. No agent ever reads the drop folder:
+  only MyHQ moves a file out of it, on an act of the owner (see "Room
+  folders").
 - **Confirmation guard.** When the turn called an untrusted tool, the actions
   are not executed: the reply ends with a line naming them and asking for
   « oui ». A mail or a web page read in that turn could have asked for them.
@@ -948,6 +1088,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 {
   "language": "fr",
   "export": { "dir": "../notes/agents-journal", "hour": 6 },
+  "folders": { "dir": "../deliveries" },
   "reception": { "room": "assistant" },
   "floor": { "layout": "room-per-project", "owner": { "name": "Ada", "isoSprite": "sprites/iso-ada.png" } },
   "scheduler": true,
@@ -977,6 +1118,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `export.dir` | yes (with `export`) | Folder of the daily export, relative to the home or absolute. One file per day, `<YYYY-MM-DD>.json`: the runs, messages and approvals of that day (see `architecture.md`, section 6). |
 | `export.hour` | no | Local hour (`HQ_TIMEZONE`, 0 to 23) from which the previous day is written. Default: 1. |
 | `reception.room` | no | The floor (`/`) that draws the reception desk and the receptionist, the onboarding agent (see `architecture.md`, section 7). Only that floor has the counter in its lobby, the receptionist's chip in the strip under the floor and its sheet (with the « Ajouter une salle » form and the recent onboarding runs); the others keep a plain lobby. Default: the room called `assistant` when the home has one, otherwise the first room. A name that is not a room of the home falls back to the default. |
+| `folders.dir` | no | The root of the room folders (see "Room folders" below), relative to the home or absolute, like `export.dir`. Default: `<home>/folders`. |
 | `floor.layout` | no | How the floor, the home page `/`, draws the home (see `architecture.md`, section 7). `"floor-per-project"` (the default): a floor per room of the home, chosen with the buttons at the top, each a template of offices, a lobby with your desk and the tray, a meeting room and a kitchen. `"room-per-project"`: one floor for the whole home, where each room is a suite of its own (its walls, its workstations sized from its number of agents, a coffee nook for a big team, a counter beside its name of what that room waits for: a click opens « À signer » filtered to the room), around corridors that start at the lobby, the entrance at the front (a main corridor, a spine, ribs branching off it), your own office beside the lobby, the desk's scene itself (a click opens the desk, `/bureau`), a signboard with its name (and its `logo`) on each room, a garden between the rooms; the floor pans and zooms by whole steps, and a click on a room or its button at the top flies the view to it. Read apart from the rest of the file: a missing or invalid `floor` (an unknown layout) falls back to the default, with the reason in the log, and leaves every other setting as it is. |
 | `floor.owner` | no | Someone seated in the user's own office of the single floor: `{ "name", "isoSprite" }` (see "The owner of the floor" below). Read apart from the rest of the file and from `floor.layout`: an invalid owner leaves the office empty, with the reason in the log. Default: none, the office stays empty. |
 | `catalog.dirs` | no | Extra read-only folders of the technology catalogue the receptionist bases an agent proposal on (`architecture.md`, "Proposing a missing agent"), relative to the home or absolute, 20 at most. Besides the target repositories of the rooms, which are always in it, each folder is summarized in the run prompt (its own `package.json`, `pyproject.toml` and README, then each top-level Markdown note with its YAML frontmatter, for example notes whose `stack:` lists the technologies you use) and given to the run as `--add-dir`, read-only. A folder that does not exist is named as missing. Read apart from the rest of the file: an invalid `catalog` gives no extra folder, with the reason in the log, and leaves every other setting as it is. Default: none. |

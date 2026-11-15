@@ -35,6 +35,8 @@ export const homeSettingsSchema = z.looseObject({
       hour: z.number().int().min(0).max(23).default(1),
     })
     .optional(),
+  /** The root of the room folders (room-folders.ts), relative to the home or absolute; `<home>/folders` when absent. */
+  folders: z.strictObject({ dir: z.string().trim().min(1) }).optional(),
   /**
    * Informational approval types: an item of one of them is stored already
    * approved (note « notification ») and sent to Telegram in full, without buttons.

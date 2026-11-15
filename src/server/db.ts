@@ -122,6 +122,12 @@ export type ApprovalRow = {
   notified_at: string | null;
   /** The room that ordered the item from a shared room: it shows in that room's pile. Null: the agent's own room. */
   for_room: string | null;
+  /** The drawer the agent named (hq_submit `drawer`, room-folders.ts), null: the default one of its files. */
+  drawer: string | null;
+  /** The order of the destination room the item belongs to (hq_submit `order`), null: none. */
+  order_name: string | null;
+  /** Where MyHQ filed the approved item, relative to the root of the room folders, null: not filed. */
+  filed_path: string | null;
   created_at: string;
 };
 
@@ -138,7 +144,16 @@ const list = (values: readonly string[]) => values.map((v) => `'${v}'`).join(", 
  * recorded in `schema_migrations`. Never edit a migration that has shipped:
  * add a new one.
  */
-const MIGRATIONS: { version: number; sql: string }[] = [
+const MIGRATIONS: {
+  version: number;
+  sql: string;
+  /**
+   * Columns added with ALTER TABLE ... ADD COLUMN when the table does not have
+   * them yet: SQLite has no ADD COLUMN IF NOT EXISTS, and the migrations after
+   * 14 must stay idempotent.
+   */
+  columns?: { table: string; column: string; type: string }[];
+}[] = [
   {
     version: 1,
     sql: `
@@ -835,6 +850,19 @@ CREATE TABLE IF NOT EXISTS supervisor_closes (
 CREATE INDEX IF NOT EXISTS supervisor_closes_closed ON supervisor_closes (closed_at);
 `,
   },
+  {
+    version: 27,
+    // The room folders (room-folders.ts): a room with orders (room.json
+    // "orders"); the drawer and the order an item names (hq_submit `drawer`,
+    // `order`), and where MyHQ filed it once approved, relative to the root.
+    sql: "",
+    columns: [
+      { table: "rooms", column: "orders", type: "INTEGER NOT NULL DEFAULT 0" },
+      { table: "approvals", column: "drawer", type: "TEXT" },
+      { table: "approvals", column: "order_name", type: "TEXT" },
+      { table: "approvals", column: "filed_path", type: "TEXT" },
+    ],
+  },
 ];
 
 function migrate(db: Db): void {
@@ -851,6 +879,10 @@ function migrate(db: Db): void {
     if (applied.has(migration.version)) continue;
     db.transaction(() => {
       db.exec(migration.sql);
+      for (const { table, column, type } of migration.columns ?? []) {
+        const has = db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, column);
+        if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      }
       db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
         migration.version,
         now(),

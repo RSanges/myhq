@@ -70,6 +70,12 @@ Every error has the same shape and an HTTP status:
 | `ACTION_TIMEOUT` | 504 | An action command ran past its `timeoutSeconds`. |
 | `ACTION_INVALID_OUTPUT` | 502 | An action command exited with an error code, or printed something that is not `{ "ok", "message"? }`. Its stderr is in the server's log only. |
 | `SETTINGS_GROUP_NOT_FOUND` | 404 | `PUT /api/settings/<group>` with a group that is not `layout`, `limits`, `notifications` or `rooms`. |
+| `FOLDER_PATH_INVALID` | 400 | A room folder route (`/api/rooms/<room>/folder`): a path that is not inside the folder, a name that leaves nothing once slugged, an order that does not exist. |
+| `ORDERS_NOT_TAKEN` | 409 | Opening an order, or dropping files into one, in a room without `"orders": true`. |
+| `NO_FILE`, `TOO_MANY_FILES`, `EMPTY_FILE` | 400 | `POST /api/rooms/<room>/folder/received`: no `file` part, more than 20, or an empty one. |
+| `FILE_TOO_LARGE` | 413 | `POST /api/rooms/<room>/folder/received`: a file over `HQ_ATTACHMENT_MAX_MB`, or a request that declares more than the caps allow. |
+| `CROSS_SITE` | 403 | `POST /api/rooms/<room>/folder/received` sent from the page of another site. |
+| `LENGTH_REQUIRED` | 411 | `POST /api/rooms/<room>/folder/received` without a `Content-Length`, or with one that is not a non negative whole number. |
 | `INTERNAL` | 500 | Unexpected error. |
 
 The `message` is in English and meant for logs; the interface shows its own
@@ -188,6 +194,9 @@ see `architecture.md`, "Shared rooms"), `null` otherwise.
   "actionDone": false,
   "informational": false,
   "forRoom": null,
+  "drawer": null,
+  "order": null,
+  "filedPath": null,
   "files": [],
   "decidedAt": null,
   "createdAt": "2026-11-02T16:18:11.483Z"
@@ -225,6 +234,15 @@ belongs to that room's pile: the desk shows it with that room's colour and as
 `GET /api/desk` take that colour, and a view that groups items by room uses
 `forRoom ?? room`. `room` and `agentId` stay the producing agent's: its
 decisions, a revise included, go back to that agent.
+
+`drawer` and `order` are what the agent named with `hq_submit` for the room
+folders (`home-layout.md`, "Room folders"): the drawer, one of `recu`,
+`videos`, `visuels`, `sons`, `social`, `modeles-3d`, `rendus`, `impression`,
+`devis`, `documents`, and the order of the destination room; `null` when it
+named none. `filedPath` is where MyHQ filed the item once approved, relative to
+the root of the room folders, with `/` (`shop/2026-11-acme-sign/devis/2026-11-14-quote.pdf`);
+`null` while it is not filed (pending, rejected, an item that is never filed, or
+a filing that failed). The agent never gives a path: it is always MyHQ's.
 
 `files` are the files the agent joined with `hq_submit` `attachments`, in its
 order (empty for an item without any), each:
@@ -1337,6 +1355,104 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND` (only a room loaded
 from the home is accepted), `DELETE_CONFIRM_MISMATCH`, `ROOM_DELETE_REFUSED`
 (the checks of `GET /api/rooms/[room]/deletion`, made again), `ROOM_PATH_REFUSED`.
 
+### Room folders
+
+The room folders (`home-layout.md`, "Room folders"; `architecture.md`, "Room
+folders"): the owner browses the folder of a room, downloads its files, opens
+orders and drops files into a `recu/` drawer. Four routes under
+`/api/rooms/<room>/folder`. In all of them the room must be a room of the home
+(else `ROOM_NOT_FOUND`, 404), a refused path is `FOLDER_PATH_INVALID` (400: not
+relative, a `..`, a link that leads out of the room folder, a path that is not
+what the route expects), and errors have the usual `{ "error": { "code",
+"message" } }` shape. Paths are relative to the room folder, with `/`.
+
+#### `GET /api/rooms/[room]/folder?path=<relative>`
+
+The entries of a directory of the room folder (`path` empty: the folder
+itself). The room folder and its `recu/` are created on the first listing, so
+the owner can drop files before any run. Response `200`:
+
+```json
+{
+  "room": "shop",
+  "path": "2026-11-acme-sign",
+  "location": "<root>/shop/2026-11-acme-sign",
+  "orders": true,
+  "file": null,
+  "entries": [
+    { "name": "recu", "path": "2026-11-acme-sign/recu", "type": "dir", "size": 0,
+      "modifiedAt": "2026-11-14T09:02:11.000Z", "role": "drawer", "kind": null },
+    { "name": "devis", "path": "2026-11-acme-sign/devis", "type": "dir", "size": 0,
+      "modifiedAt": "2026-11-14T10:40:03.000Z", "role": "drawer", "kind": null }
+  ],
+  "deposit": { "maxFiles": 20, "maxFileBytes": 209715200 }
+}
+```
+
+`location` is the absolute path on the machine of the directory listed.
+`orders` says whether the room takes orders. `file` is set when `path` names a
+file: its directory is then listed, so an address can point at a file. Directories
+come first, then by name; hidden entries (a leading dot) are left out.
+`role` is `drawer` (at the root of the room folder or of an order), `order` (at
+the root) or `null`; `kind` is the attachment kind of a file of an accepted
+extension (`video`, `image`, `audio`, `model`, `pdf`), `null` otherwise.
+`deposit` gives the caps of a deposit (below).
+
+#### `GET /api/rooms/[room]/folder/file?path=<relative>[&download=1]`
+
+One file of the room folder (`HEAD` works the same, without the body), with
+`Accept-Ranges: bytes` and range requests (`206`), a weak `ETag` (the file may
+change) and `X-Content-Type-Options: nosniff` on every response. A file of a
+known attachment kind is served with its MIME type, inline unless
+`download=1`. Any other file is served only as a download
+(`Content-Type: application/octet-stream`, `Content-Disposition: attachment`,
+a `Content-Security-Policy: default-src 'none'; sandbox`), so the browser never
+renders an SVG or an HTML page that came from outside. A path that is not a
+file of the room folder is `FILE_NOT_FOUND` (404).
+
+#### `POST /api/rooms/[room]/folder/orders`
+
+Opens an order. Body (JSON): `{ "client": "Acme", "subject": "Neon sign" }`
+(each 1 to 200 characters, and each must leave a letter or a digit once turned
+into a slug). Response `201` when the order was created, `200` when it was
+already there:
+
+```json
+{ "order": "2026-11-acme-neon-sign", "created": true, "path": "shop/2026-11-acme-neon-sign" }
+```
+
+The name is `<YYYY>-<MM>-<client>-<subject>`, the month in the home's time
+zone, and the order gets its `recu/`. Errors: `INVALID_JSON`, `INVALID_INPUT`,
+`ORDERS_NOT_TAKEN` (409, the room has no `"orders": true`), `FOLDER_PATH_INVALID`
+(a client or a subject with nothing left once slugged).
+
+#### `POST /api/rooms/[room]/folder/received`
+
+Drops files into the `recu/` of the room, or of one of its orders. Body:
+`multipart/form-data` with one or several `file` parts (at most 20, each
+non empty and at most `HQ_ATTACHMENT_MAX_MB`, any type) and an optional
+`order` text field (an order of the room). Every file is checked before any is
+written; each is saved under a neutralised, free name (never overwriting).
+Response `201`:
+
+```json
+{ "room": "shop", "order": "2026-11-acme-neon-sign", "saved": ["2026-11-acme-neon-sign/recu/logo.png"] }
+```
+
+`order` is `null` without one; `saved` lists the paths relative to the room
+folder. The whole request is held in memory while it is saved, which the caps
+bound. Errors: `UNSUPPORTED_MEDIA_TYPE` (415, not multipart),
+`LENGTH_REQUIRED` (411, no `Content-Length`, or one that is not a non
+negative whole number: the size cap must apply before the body is read;
+browsers always send it), `NO_FILE`,
+`TOO_MANY_FILES`, `EMPTY_FILE` (400), `FILE_TOO_LARGE` (413, also answered from
+the declared `Content-Length` before the body is read), `ORDERS_NOT_TAKEN`
+(409, an `order` for a room with none), `FOLDER_PATH_INVALID` (400, an order
+that does not exist or a folder that leads out), `INVALID_INPUT`, and
+`CROSS_SITE` (403): a multipart form can be posted from another site without a
+preflight, so the request is refused when the browser says it comes from
+another site (`Sec-Fetch-Site`) or its `Origin` is not this host.
+
 ### `PATCH /api/rooms/[room]/agents/[agent]`
 
 Arms or disarms the routines of an agent. The value is stored in the database
@@ -1678,7 +1794,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its twenty tools write to the same
+for each run (see `architecture.md`). Its twenty-two tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the
@@ -1699,3 +1815,27 @@ tool the agent's, limited to its reach):
 - It is read-only and never marks a decision seen (unlike `hq_read_decisions`).
   An item out of reach is an error (`outside what you may read`), an unknown id
   is another (`No item #N exists`).
+
+Two tools belong to the room folders (`home-layout.md`, "Room folders"):
+
+- `hq_orders { room? }` returns `{ room, orders }`: the orders of the agent's
+  room, newest first. `room` is only for an agent of a shared room, and only
+  for a room that ordered from its own (one of that room's messages became a
+  task of the shared room); any other room is refused with one message
+  (`You may list the orders of a room only when it ordered from your room.`),
+  the same whether it exists or takes orders. A room that takes no orders is
+  an error.
+- `hq_order_open { client, subject, received?, receivedFiles? }` returns
+  `{ order, created, path, received }`: opens an order in the agent's own room
+  (one of that name already there is given back with `created: false`), and
+  moves into its `recu/` the items whose ids `received` lists (approved and
+  filed in a `recu` outside any order, and the room's own: submitted in it,
+  delivered for it with `forRoom`, or relayed to one of its agents by a
+  delivered `onApprove`) and the entries `receivedFiles` names (in the room's
+  `recu/`), all checked before anything is created or moved; a move that
+  fails halfway puts back what had moved. Every refused id gets the same
+  message (`received: item #N cannot be pulled into an order of your room:
+  nothing was moved.`), whatever the cause. `path` and `received` are
+  relative to the root of the room folders.
+
+`hq_submit` also takes `drawer` and `order` (see Approval above).

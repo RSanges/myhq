@@ -100,6 +100,12 @@ export type ApprovalDto = {
   forRoom: string | null;
   /** The files joined by the agent (hq_submit `attachments`), in the order given. */
   files: ApprovalFileDto[];
+  /** The drawer the agent named (hq_submit `drawer`, room-folders.ts), null: the default one of its files. */
+  drawer: string | null;
+  /** The order of the destination room it belongs to (hq_submit `order`), null: none. */
+  order: string | null;
+  /** Where MyHQ filed it once approved, relative to the root of the room folders with "/", null: not filed. */
+  filedPath: string | null;
   decidedAt: string | null;
   createdAt: string;
 };
@@ -178,6 +184,9 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
     (r.status === "approved" && r.decision_note === NOTIFICATION_NOTE && r.decided_at === r.created_at),
   forRoom: r.for_room ?? null,
   files: parseFiles(r.files, r.id),
+  drawer: r.drawer ?? null,
+  order: r.order_name ?? null,
+  filedPath: r.filed_path ?? null,
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });

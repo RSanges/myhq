@@ -128,6 +128,7 @@ export class Assistant {
         config: deps.config,
         db: deps.db,
         chat: deps.assistant.chat,
+        dropDir: deps.assistant.dropDir,
         // The home's commands (afterReply, preamble) never see the Telegram variables.
         env: deps.env,
         chatMaxBudgetUsd: deps.chatMaxBudgetUsd,

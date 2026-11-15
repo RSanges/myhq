@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { orderNameSchema } from "../server/room-folders";
 import { strings } from "../ui/strings";
 import type { ChatConfig } from "./home-config";
 import { REJECTED_DIR } from "./requests";
@@ -10,10 +11,17 @@ import { REJECTED_DIR } from "./requests";
  * the directory of `chat.requests` (whitelisted by `chat.requests.actions`).
  * The core executes them with the code of the buttons and of the commands.
  */
-export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm", "propose_agent"] as const;
+export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm", "propose_agent", "file_received"] as const;
 export type ChatActionName = (typeof CHAT_ACTIONS)[number];
 
 const DECISIONS: readonly ChatActionName[] = ["approve", "reject", "revise"];
+
+/** A plain file name of the drop folder: no separator, not only dots (`..`), no drive prefix (`C:`), 255 characters at most. */
+const dropFileName = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((name) => !/[\\/]/.test(name) && !/^\.+$/.test(name) && !/^[a-zA-Z]:/.test(name), "a plain file name");
 
 const actionFileSchema = z
   .strictObject({
@@ -30,6 +38,9 @@ const actionFileSchema = z
     task: z.string().trim().min(1).max(20_000).optional(),
     /** propose_agent: what no agent covers (the room, optional, is where the need comes from). */
     need: z.string().trim().min(1).max(2_000).optional(),
+    /** file_received: the name of a file in the drop folder (the room, required, and the order, optional, say where it goes). */
+    file: dropFileName.optional(),
+    order: orderNameSchema.optional(),
   })
   .superRefine((file, ctx) => {
     if (file.id !== undefined && file.approvalId !== undefined && file.id !== file.approvalId) {
@@ -44,6 +55,9 @@ const actionFileSchema = z
       }
     } else if (file.action === "propose_agent") {
       if (!file.need) ctx.addIssue({ code: "custom", message: "propose_agent needs a need", path: ["need"] });
+    } else if (file.action === "file_received") {
+      if (!file.file) ctx.addIssue({ code: "custom", message: "file_received needs a file", path: ["file"] });
+      if (!file.room) ctx.addIssue({ code: "custom", message: "file_received needs a room", path: ["room"] });
     } else if (!file.agent) {
       ctx.addIssue({ code: "custom", message: `${file.action} needs an agent`, path: ["agent"] });
     }
@@ -57,6 +71,8 @@ export type ChatAction = {
   note?: string;
   task?: string;
   need?: string;
+  file?: string;
+  order?: string;
 };
 
 function describe(error: unknown): string {
@@ -145,6 +161,8 @@ export function takeChatActions(
       ...(file.note ? { note: file.note } : {}),
       ...(file.task ? { task: file.task } : {}),
       ...(file.need ? { need: file.need } : {}),
+      ...(file.file ? { file: file.file } : {}),
+      ...(file.order ? { order: file.order } : {}),
     });
   }
   return { actions, refused };
@@ -190,6 +208,8 @@ export function describeAction(action: ChatAction): string {
       return t.disarm(who);
     case "propose_agent":
       return strings.agentProposal.describe(action.need ?? "", action.room ?? null);
+    case "file_received":
+      return strings.assistant.actions.fileReceived(action.file ?? "", action.room ?? "", action.order ?? null);
   }
 }
 

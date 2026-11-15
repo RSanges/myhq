@@ -35,6 +35,18 @@ import {
   writeMessage,
   type RelayMessage,
 } from "../server/supervisor";
+import {
+  drawerSchema,
+  listOrders,
+  moveIntoOrder,
+  openOrder,
+  orderNameSchema,
+  receivedEntries,
+  receivedNames,
+  RoomFolderError,
+  roomFoldersRoot,
+  roomOrderedFrom,
+} from "../server/room-folders";
 import { normalizeStatus, STATUS_MAX_CHARS } from "../ui/activity";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "../ui/reception";
 
@@ -123,7 +135,7 @@ export const SHOW_CAPTION_MAX = 200;
 /** The most files one run may show with hq_show: the room shows the latest ones only. */
 export const PINS_MAX = 50;
 
-/** Input shapes of the twenty tools (zod raw shapes, as the MCP SDK expects). */
+/** Input shapes of the twenty-two tools (zod raw shapes, as the MCP SDK expects). */
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -189,6 +201,16 @@ export const inputs = {
       .optional()
       .describe(
         "Use it when the deliverable offers variants or options the owner has to choose between (two voices, three music seeds, a few titles): put the choices here, 2 to 6 concrete options per question, instead of a separate hq_ask. The owner sees the deliverable and the questions together, and approving needs every question answered. The answers come back to you with the decision. Not for a yes or no (that is the approval itself).",
+      ),
+    drawer: drawerSchema
+      .optional()
+      .describe(
+        'The drawer of the room folder where MyHQ files the item once approved: "recu" (what a client or a third party sent: the pieces of a request), "videos", "visuels" (images), "sons" (sounds), "social" (a post: text and media), "modeles-3d" (3D models), "rendus" (render images of a part), "impression" (print-ready files), "devis" (quotes), "documents" (other PDFs). Without drawer, the item goes by what its files are: a 3D model, else a video, else a sound, else a PDF, else images. An item without files is filed only when it names a drawer, and its body is then kept as a Markdown file (with a drawer named, the body is kept beside the files too). The destination room is forRoom when set, else yours. You never copy anything into the room folders yourself.',
+      ),
+    order: orderNameSchema
+      .optional()
+      .describe(
+        "For a room with orders: the name of the order of the destination room (forRoom when set, else yours) the item belongs to, such as 2026-11-acme-sign (hq_orders lists them). With forRoom, only for a room that ordered from yours. MyHQ files it in that order's folder.",
       ),
   },
   hq_ask: {
@@ -265,6 +287,32 @@ export const inputs = {
       .describe(`With id only: the most characters of the body to give (default ${ITEM_BODY_DEFAULT}, at most ${ITEM_BODY_MAX}); bodyTruncated tells when it was cut.`),
   },
   hq_rooms: {},
+  hq_orders: {
+    room: z
+      .string()
+      .min(1)
+      .max(63)
+      .optional()
+      .describe("Only for an agent of a shared room: a room that ordered from yours (one of its messages became a task of your room), whose orders to list. Default: your room."),
+  },
+  hq_order_open: {
+    client: z.string().trim().min(1).max(100).describe("The client, a short name (acme): it starts the name of the order, after the month."),
+    subject: z.string().trim().min(1).max(100).describe("What is ordered, in a few words (neon sign): it ends the name of the order."),
+    received: z
+      .array(z.number().int().positive())
+      .max(20)
+      .optional()
+      .describe(
+        "Ids of items already approved and filed in a recu drawer outside any order (a client's request approved before the order existed), each one of your room's: submitted in your room, delivered for it (forRoom), or relayed by MyHQ to an agent of your room on its approval (onApprove). MyHQ moves what it filed for each into the new order's recu/.",
+      ),
+    receivedFiles: z
+      .array(z.string().min(1).max(255))
+      .max(50)
+      .optional()
+      .describe(
+        "Names of entries (files or folders) sitting directly in the recu/ folder of your room, outside any order: MyHQ moves them into the new order's recu/. Plain names only.",
+      ),
+  },
   hq_suggest_agent: {
     need: needSchema.describe(
       "What nobody in the office can do, in a few sentences: the work, the technologies involved, and the order that needs it.",
@@ -356,10 +404,26 @@ export function toolErrorText(error: unknown): string {
  */
 const CURRENT_ROOM = "synced_at = (SELECT MAX(synced_at) FROM rooms)";
 
-function roomInfo(db: Db, name: string): { name: string; shared: number } | undefined {
-  return db.prepare(`SELECT name, shared FROM rooms WHERE name = ? AND ${CURRENT_ROOM}`).get(name) as
-    | { name: string; shared: number }
+function roomInfo(db: Db, name: string): { name: string; shared: number; orders: number } | undefined {
+  return db.prepare(`SELECT name, shared, orders FROM rooms WHERE name = ? AND ${CURRENT_ROOM}`).get(name) as
+    | { name: string; shared: number; orders: number }
     | undefined;
+}
+
+/** The root of the room folders of the home of this run. */
+function foldersRoot(ctx: HqContext): string {
+  if (!ctx.home) throw new ToolError("The home of the office is not known in this run: the room folders cannot be found.");
+  try {
+    return roomFoldersRoot(ctx.home);
+  } catch (error) {
+    throw new ToolError(`The room folders cannot be found: ${(error as Error).message}`);
+  }
+}
+
+/** The orders of a room that takes them, newest first; a tool error that says what to do otherwise. */
+function ordersOf(db: Db, ctx: HqContext, room: string): string[] {
+  if (roomInfo(db, room)?.orders !== 1) throw new ToolError(`Room "${room}" takes no orders: leave out order.`);
+  return listOrders(foldersRoot(ctx), room);
 }
 
 /** Whether `agent` of `room` ordered from the room of `ctx`: one of its messages became a task there. */
@@ -447,6 +511,54 @@ export function hqRooms(db: Db, ctx: HqContext) {
   };
 }
 
+/**
+ * hq_orders: the orders of the agent's room, or, for an agent of a shared
+ * room, of a room that ordered from it (roomOrderedFrom), newest first.
+ * Read-only. Any other room gets one refusal, which says neither whether it
+ * exists nor whether it takes orders.
+ */
+export function hqOrders(db: Db, ctx: HqContext, args: Args<"hq_orders">): { room: string; orders: string[] } {
+  const parsed = z.object(inputs.hq_orders).parse(args);
+  const room = parsed.room ?? ctx.room;
+  if (room !== ctx.room) {
+    if (roomInfo(db, ctx.room)?.shared !== 1) {
+      throw new ToolError(`room is only for the agents of a shared room, and room "${ctx.room}" is not shared: leave it out.`);
+    }
+    if (!roomOrderedFrom(db, room, ctx.room)) throw new ToolError("You may list the orders of a room only when it ordered from your room.");
+  }
+  return { room, orders: ordersOf(db, ctx, room) };
+}
+
+/**
+ * hq_order_open: an agent of a room with orders opens one in its own room (an
+ * existing one of the same name is given back). `received` and
+ * `receivedFiles` are all checked before anything is created or moved; then
+ * MyHQ moves them into the order's recu/. `path` and `received` are relative
+ * to the root of the room folders.
+ */
+export function hqOrderOpen(
+  db: Db,
+  ctx: HqContext,
+  args: Args<"hq_order_open">,
+): { order: string; created: boolean; path: string; received: string[] } {
+  const parsed = z.object(inputs.hq_order_open).parse(args);
+  if (roomInfo(db, ctx.room)?.orders !== 1) {
+    throw new ToolError(`Room "${ctx.room}" takes no orders: only an agent of a room with orders opens one.`);
+  }
+  const root = foldersRoot(ctx);
+  try {
+    const entries = receivedEntries(db, root, ctx.room, parsed.received ?? []);
+    const names = receivedNames(db, root, ctx.room, parsed.receivedFiles ?? []);
+    const timeZone = getConfig({ ...ctx.appEnv, MYHQ_HOME: ctx.home }).timeZone;
+    const { order, created } = openOrder(root, ctx.room, parsed.client, parsed.subject, new Date(), timeZone);
+    const moved = moveIntoOrder(db, root, ctx.room, order, entries, names);
+    return { order, created, path: `${ctx.room}/${order}`, received: [...moved.received.map((entry) => entry.filedPath), ...moved.files] };
+  } catch (error) {
+    if (error instanceof RoomFolderError) throw new ToolError(error.message);
+    throw error;
+  }
+}
+
 /** The repository a stored or submitted room proposal is about, as an absolute path, or null when unreadable. */
 function proposalRepo(home: string | undefined, payload: unknown): string | null {
   const targetRepo = (payload as { room?: { targetRepo?: unknown } } | null)?.room?.targetRepo;
@@ -504,6 +616,10 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
       `You are the supervisor of the Standard: you submit nothing to approve, only a note to the owner (type "${OWNER_NOTE}"). To tell the owner about an entry of the Standard, use hq_blocked_note; to close an entry you settled, hq_blocked_close.`,
     );
   }
+  const filing = parsed.drawer !== undefined || parsed.order !== undefined;
+  if (filing && (supervisor || [QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL].includes(parsed.type))) {
+    throw new ToolError(`drawer and order are for a deliverable MyHQ files once approved: not for type "${parsed.type}". Leave them out.`);
+  }
   // A shared room delivers to the room that ordered: the item goes to that room's pile.
   let forRoom: string | null = null;
   if (parsed.forRoom !== undefined && parsed.forRoom !== ctx.room) {
@@ -512,6 +628,22 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
     }
     if (!roomInfo(db, parsed.forRoom)) throw new ToolError(`forRoom: unknown room "${parsed.forRoom}".`);
     forRoom = parsed.forRoom;
+  }
+  // Checked now, so that the agent can name an order that exists within the same run.
+  if (parsed.order !== undefined) {
+    const destination = forRoom ?? ctx.room;
+    // Another room's orders are looked at only for a room that ordered from this one: otherwise one answer, whether the order exists or not.
+    if (destination !== ctx.room && !roomOrderedFrom(db, destination, ctx.room)) {
+      throw new ToolError(`Room "${destination}" has no order "${parsed.order}".`);
+    }
+    const orders = ordersOf(db, ctx, destination);
+    if (!orders.includes(parsed.order)) {
+      throw new ToolError(
+        orders.length === 0
+          ? `Room "${destination}" has no orders yet: ${destination === ctx.room ? "open one with hq_order_open" : "its agent opens them with hq_order_open"}, or leave out order.`
+          : `Room "${destination}" has no order "${parsed.order}". Its orders, newest first: ${orders.join(", ")}.`,
+      );
+    }
   }
   if (parsed.type === ROOM_PROPOSAL) {
     // Checked now, so that the agent can fix its payload within the same run.
@@ -577,8 +709,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
   const at = now();
   const insert = db.prepare(
     `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
-         decided_at, seen_by_agent_at, for_room, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         decided_at, seen_by_agent_at, for_room, drawer, order_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // The item and the copies of its files are one: a failed copy leaves neither.
   // Immediate: the check for a duplicate and the insert see the same queue.
@@ -601,6 +733,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
         null,
         informational ? at : null,
         forRoom,
+        parsed.drawer ?? null,
+        parsed.order ?? null,
         at,
       );
       const id = Number(result.lastInsertRowid);

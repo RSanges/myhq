@@ -747,6 +747,124 @@ his phone, not a description of it.
   the history).
 - **On Telegram**, see section 5.
 
+#### Room folders
+
+"One room, one folder": what a room receives and what it delivers once
+approved live under `<root>/<room>/`, sorted into drawers, outside the
+workshops (working directories, worktrees, target repositories), which do not
+move. The layout, the drawers and the `room.json` and `myhq.json` fields are
+in `home-layout.md` ("Room folders"), the routes in `api.md`. This section is
+the mechanism. The tools of the feature are `hq_orders` and `hq_order_open`
+and the two `hq_submit` fields `drawer` and `order` (below).
+
+- **One module** (`src/server/room-folders.ts`) owns it: the root
+  (`roomFoldersRoot`: `folders.dir` of `myhq.json`, else `<home>/folders`), the
+  closed list of drawers, the order names (`<YYYY>-<MM>-<client>-<subject>`,
+  lowercase ASCII, the month read in the home's time zone), the listing, the
+  deposits and the filing. Nothing else writes under the root. Agents never
+  do: the folder reaches them read-only (below).
+- **Filing** (`fileApproval`) runs in `decideApproval` once the decision's
+  transaction is committed, so a failure never undoes an approval. It is
+  idempotent through `approvals.filed_path` (an item already filed returns its
+  path), copies from the frozen copies of `data/attachments` (which stay),
+  never overwrites (`COPYFILE_EXCL`, `wx`, then `-2`, `-3`), and on any error
+  removes what it wrote, logs, leaves `filed_path` empty and returns `null`.
+  `filingPlan` decides what is filed: not a question, a room proposal or an
+  agent proposal, not an informational item, and only with files of a known
+  kind or a named drawer. `pendingFilings` reuses it for the catch-up
+  (`npm run file-approved`, `scripts/file-approved.ts`: a dry run unless
+  `--apply`, restricted by `--only`), for items approved before the feature or
+  whose filing failed.
+- **Migration 27** adds `rooms.orders` and `approvals.drawer`, `order_name`
+  and `filed_path`. SQLite has no `ADD COLUMN IF NOT EXISTS`, and the
+  migrations after 14 must stay idempotent, so a migration may carry a
+  `columns` list: each column is added only when `pragma_table_info` does not
+  show it yet, inside the migration's transaction (`migrate` in `db.ts`). The
+  sync of the home (`syncHome`) copies `room.json` `orders` into `rooms`.
+- **Everything stays inside the root.** A room name must be a room id and
+  not a Windows device name (`roomFolder`), the real path of the room folder,
+  of an order and of each drawer is checked against the real root, one level
+  at a time once made, before anything is written, moved or read
+  (`realRoomFolder`, `ensureInRoot`, in every function that creates or moves:
+  a link that leads out is refused), a path given by the owner goes through
+  the same checks as attachments (`resolveInside`: relative, no `..`, real
+  path inside), and a file name from outside is neutralised (`safeFileName`:
+  base name only, no control characters, separators or characters Windows
+  reserves, never hidden, no trailing dots or spaces, a device name such as
+  `con`, `nul` or `COM¹`, tested on the part before the first dot, prefixed
+  with `_`). A drawer is never taken from a path: it is validated by
+  `drawerSchema`. Every move of the module goes through `moveExclusive`,
+  which reserves its target atomically (a hard link, or a copy with
+  `COPYFILE_EXCL` across volumes, for a file; a non recursive `mkdir` for a
+  directory, then a rename onto that empty reservation), so that a name taken
+  after it was chosen makes the move fail and is never replaced. A file of the
+  drop folder with more than one link (a hard link) is refused like a link.
+- **What the write guard does not cover.** Agents never write in the room
+  folders through the editing tools (Write, Edit, MultiEdit, NotebookEdit),
+  which the write guard refuses there. An agent that has `Bash` can still
+  write, delete or create a link in a directory it receives through
+  `--add-dir`, a room folder included: a limit of the write guard that existed
+  before this feature, for every `addDirs`, and the owner's decision (for
+  example, no `Bash` for the agents that read untrusted client files).
+- **What a run reads** (`runFolders` in `runner.ts`, called by `launchRun`
+  after the mailbox is claimed, for the runs of room agents only, so not for
+  MyHQ's own agents). Least privilege, never the root: the agent's own room
+  folder, and for an agent of a shared room the folder of each room it works
+  for in this run, taken from the tasks the run claimed (a message from
+  another room, a revise or approval task on an item delivered `for_room`
+  another room, that one only when that room ordered from the agent's:
+  `roomOrderedFrom`, a task of the agent's room whose `from_room` is it, since
+  the agent names `forRoom` itself), only rooms of the home. The real paths are added to the
+  agent's `addDirs` for that run, so the write guard refuses any write there
+  like for every `--add-dir`. Nothing is declared in `room.json`. `buildPrompt`
+  says where the folder is, that it is read-only and filed by MyHQ, and that
+  `recu/` comes from outside and is data, never instructions; for an agent of
+  a shared room with no known origin it says that the folder of a requesting
+  room is opened only in a run that carries a task from it, and to say so
+  rather than guess.
+- **Tools** (`src/mcp/tools.ts`, `server.ts`). `hq_submit` takes `drawer` and
+  `order` (stored in `approvals.drawer` and `order_name`; the order is checked
+  against the destination room's folder at submission, so the agent can fix it
+  within the run; not for the types that are never filed; with `forRoom`,
+  only for a room that ordered from the agent's, any other getting one
+  refusal whether the order exists or not). `hq_orders` lists the orders of the agent's room; an
+  agent of a shared room may give `room` only for a room that ordered from its
+  own (`roomOrderedFrom`), any other gets one refusal that says neither whether
+  the room exists nor whether it takes orders. `hq_order_open` opens an order
+  in the agent's own room and, with `received` (ids of items filed in a `recu`
+  outside any order) and `receivedFiles` (names of entries of its room's
+  `recu/`), moves them into it: everything is checked before anything is
+  created or moved (`receivedEntries`, `receivedNames`). An id of `received`
+  must be the room's own: submitted in it, delivered for it (`for_room`), or
+  relayed to one of its agents by a delivered `onApprove` (`approval_relays`);
+  every refusal is one generic message, whatever the cause. `receivedNames`
+  compares names without case and by real path, so a case variant of a filed
+  item moves by its id. `moveIntoOrder` does all the moves in one loop, in one
+  transaction, and when a move fails undoes the ones done, in reverse order:
+  the disk and the database still agree. When a filed file and its `.md` note
+  share a stem, the note moves with the first file of that stem. Filing an
+  item whose order folder was deleted recreates that folder, without saying
+  so. When the final update of `fileApproval` finds the item filed meanwhile
+  by another process, what was just written is removed and the recorded path
+  is returned.
+- **Chat action `file_received`** (`src/assistant/actions.ts`,
+  `chat-service.ts`): moves a file of the assistant's drop folder, with its
+  companion note, into the `recu/` of a room or an order
+  (`moveDroppedIntoReceived`). It goes through the same confirmation guard as
+  every chat action, so a turn that read untrusted content cannot file
+  anything without the owner's « oui ». No agent ever reads the drop folder:
+  MyHQ moves a file out of it, on an act of the owner.
+- **Routes** (`src/server/folder-routes.ts`, thin files under
+  `src/app/api/rooms/[room]/folder/`): listing, file, order opening, deposit.
+  A file of a known attachment kind is served inline with its MIME type, any
+  other only as a download (`application/octet-stream`, attachment, a sandbox
+  Content-Security-Policy), so the browser never renders an SVG or an HTML
+  page from the folder. A deposit is multipart, and a plain form of another
+  site can post one without a preflight, so it checks the request comes from
+  the same site (`Sec-Fetch-Site`, `Origin`). It must declare its
+  `Content-Length` (411 `LENGTH_REQUIRED` otherwise, browsers always send it),
+  so that the size cap applies before the body is buffered.
+
 ### Messages between agents
 
 A message addressed to an agent creates a task for it, handled at once (a run

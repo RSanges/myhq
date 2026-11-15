@@ -221,3 +221,16 @@ for (const [label, pieces] of [
     assert.match(home.invalid[0]!.error, /pieces/);
   });
 }
+
+test("orders: room.json accepts the boolean, the room carries it and syncHome mirrors it into the database", () => {
+  const config = makeHome({}, { name: "demo", targetRepo: "x", orders: true, agents: [agent] });
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  assert.equal(home.rooms[0]!.orders, true);
+  assert.equal(loadHome(makeHome().home).rooms[0]!.orders, false, "left out: no orders");
+  const db = getDbAt(config.dbPath);
+  syncHome(db, home);
+  assert.deepEqual(db.prepare("SELECT name, orders FROM rooms").all(), [{ name: "demo", orders: 1 }]);
+  const wrong = makeHome({}, { name: "demo", targetRepo: "x", orders: "yes", agents: [agent] });
+  assert.equal(loadHome(wrong.home).invalid.length, 1);
+});

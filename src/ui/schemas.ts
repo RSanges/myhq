@@ -82,6 +82,10 @@ export const approvalSchema = z.object({
   forRoom: z.string().nullable().optional(),
   /** Absent from the items built before files existed (and in the tests that build items by hand). */
   files: z.array(approvalFileSchema).optional(),
+  /** The room folders (room-folders.ts): the drawer named, the order, where MyHQ filed it. Absent from the items built by hand. */
+  drawer: z.string().nullable().optional(),
+  order: z.string().nullable().optional(),
+  filedPath: z.string().nullable().optional(),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
 });
@@ -251,6 +255,36 @@ export const dirListingSchema = z.object({
   room: z.string().nullable(),
   dirs: z.array(z.object({ name: z.string(), path: z.string(), project: z.boolean(), room: z.string().nullable() })),
 });
+
+/** An entry of a room folder (`GET /api/rooms/<room>/folder`, docs/api.md). */
+export const folderEntrySchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  type: z.enum(["dir", "file"]),
+  size: z.number(),
+  modifiedAt: z.string(),
+  role: z.enum(["drawer", "order"]).nullable(),
+  kind: z.enum(["video", "image", "audio", "model", "pdf"]).nullable(),
+});
+export type FolderEntry = z.infer<typeof folderEntrySchema>;
+
+/** `GET /api/rooms/<room>/folder`: a directory of a room folder. */
+export const folderListingSchema = z.object({
+  room: z.string(),
+  path: z.string(),
+  location: z.string(),
+  orders: z.boolean(),
+  file: z.string().nullable(),
+  entries: z.array(folderEntrySchema),
+  deposit: z.object({ maxFiles: z.number().int(), maxFileBytes: z.number() }),
+});
+export type FolderListing = z.infer<typeof folderListingSchema>;
+
+/** `POST /api/rooms/<room>/folder/orders`. */
+export const orderOpenedSchema = z.object({ order: z.string(), created: z.boolean(), path: z.string() });
+
+/** `POST /api/rooms/<room>/folder/received`. */
+export const receivedSchema = z.object({ room: z.string(), order: z.string().nullable(), saved: z.array(z.string()) });
 export const approvalResponseSchema = z.object({ approval: approvalSchema });
 /** The answer to « Demander à Rom2 »: the chat's reply (or why it did not answer), and the item as it is now. */
 export const itemAskResponseSchema = z.object({

@@ -13,6 +13,7 @@
     "mcp": "tsx src/mcp/server.ts",
     "init": "tsx scripts/init.ts",
     "wait-idle": "tsx scripts/wait-idle.ts",
+    "file-approved": "tsx scripts/file-approved.ts",
     "deploy": "tsx scripts/deploy.ts"
   },
   "dependencies": {

@@ -24,10 +24,13 @@ import {
   dirListingSchema,
   discussionClearedSchema,
   errorBodySchema,
+  folderListingSchema,
   itemAskResponseSchema,
   liveRoomSchema,
   liveRunSchema,
+  orderOpenedSchema,
   proposalResponseSchema,
+  receivedSchema,
   relaunchResponseSchema,
   reopenResponseSchema,
   routinesResponseSchema,
@@ -41,6 +44,7 @@ import {
   type ChatTurn,
   type Desk,
   type DirListing,
+  type FolderListing,
   type LiveRoom,
   type LiveRun,
   type Run,
@@ -209,6 +213,58 @@ export async function startOnboarding(path: string): Promise<Run> {
 /** The sub-folders of a folder of the projects root (`path` is relative to the root, empty for the root). */
 export const fetchDirs = (path: string): Promise<DirListing> =>
   request(`/api/fs/dirs?path=${encodeURIComponent(path)}`, dirListingSchema);
+
+const folderUrl = (room: string) => `/api/rooms/${encodeURIComponent(room)}/folder`;
+
+/** A directory of a room folder (`path` relative to it, empty for the folder itself); a path to a file lists its directory. */
+export const fetchFolder = (room: string, path: string): Promise<FolderListing> =>
+  request(`${folderUrl(room)}?path=${encodeURIComponent(path)}`, folderListingSchema);
+
+/** « Nouvelle commande »: opens an order of a room that takes orders. */
+export const openFolderOrder = (room: string, client: string, subject: string) =>
+  request(`${folderUrl(room)}/orders`, orderOpenedSchema, jsonInit("POST", { client: client.trim(), subject: subject.trim() }));
+
+/**
+ * « Déposer des fichiers »: sends files into the `recu/` of a room or of one
+ * of its orders. Through XMLHttpRequest, the one browser API that reports the
+ * progress of an upload (`onProgress`, from 0 to 1). Fails with an ApiError as
+ * the other calls do.
+ */
+export function uploadReceived(
+  room: string,
+  order: string | null,
+  files: readonly File[],
+  onProgress: (share: number) => void,
+): Promise<z.output<typeof receivedSchema>> {
+  const form = new FormData();
+  for (const file of files) form.append("file", file, file.name);
+  if (order !== null) form.append("order", order);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${folderUrl(room)}/received`);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+    };
+    xhr.onerror = () => reject(new ApiError("NETWORK", "Network error"));
+    xhr.onload = () => {
+      let body: unknown;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = undefined;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const parsed = errorBodySchema.safeParse(body);
+        reject(parsed.success ? new ApiError(parsed.data.error.code, parsed.data.error.message) : new ApiError("BAD_RESPONSE", `HTTP ${xhr.status}`));
+        return;
+      }
+      const parsed = receivedSchema.safeParse(body);
+      if (parsed.success) resolve(parsed.data);
+      else reject(new ApiError("BAD_RESPONSE", parsed.error.message));
+    };
+    xhr.send(form);
+  });
+}
 
 export const fetchChatHistory = () => request("/api/chat/history?limit=50", chatHistorySchema);
 

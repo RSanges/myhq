@@ -191,6 +191,8 @@ export const roomFileSchema = z.strictObject({
   color: roomColorSchema.optional(),
   /** A shared studio: every room of the home may order from it (hq_message with `room`), and it delivers with hq_submit `forRoom`. */
   shared: z.boolean().optional(),
+  /** The room serves clients and has orders: one folder per order in its room folder (room-folders.ts), hq_submit `order`. */
+  orders: z.boolean().optional(),
   /** The logo of its project, relative to the room directory (.png, .webp or .svg): drawn on its signboard on the floor. */
   logo: z
     .string()
@@ -284,6 +286,8 @@ export type Room = {
   color: string | null;
   /** A shared studio that every room may order from. */
   shared: boolean;
+  /** It serves clients and has orders (room.json `orders`); left out, false. */
+  orders?: boolean;
   /** Absolute path of the logo of its project, always inside the room directory, or null. */
   logo?: string | null;
   /** How its suite of the single floor is furnished (room.json `decor`), or null for an office. */
@@ -442,6 +446,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     targetRepo,
     color: room.color ?? null,
     shared: room.shared ?? false,
+    orders: room.orders ?? false,
     logo,
     decor: room.decor ?? null,
     agents,
@@ -486,9 +491,9 @@ export function toPosix(p: string): string {
 export function syncHome(db: Db, home: Home): void {
   const at = now();
   const upsertRoom = db.prepare(
-    `INSERT INTO rooms (name, target_repo, shared, synced_at) VALUES (?, ?, ?, ?)
+    `INSERT INTO rooms (name, target_repo, shared, orders, synced_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET target_repo = excluded.target_repo, shared = excluded.shared,
-       synced_at = excluded.synced_at`,
+       orders = excluded.orders, synced_at = excluded.synced_at`,
   );
   const upsertAgent = db.prepare(
     `INSERT INTO agents (room, id, name, model, role_path, synced_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -508,7 +513,7 @@ export function syncHome(db: Db, home: Home): void {
     db.prepare("DELETE FROM supervisors").run();
     for (const room of home.rooms) for (const agent of room.agents) if (agent.supervisor) addSupervisor.run(room.name, agent.id, at);
     for (const room of home.rooms) {
-      upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), room.shared ? 1 : 0, at);
+      upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), room.shared ? 1 : 0, room.orders ? 1 : 0, at);
       for (const agent of room.agents) {
         upsertAgent.run(
           room.name,

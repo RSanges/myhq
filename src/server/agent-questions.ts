@@ -79,6 +79,7 @@ export const QUESTION_DENIED_TOOLS = [
   "mcp__hq__hq_task_update",
   "mcp__hq__hq_read_decisions",
   "mcp__hq__hq_memory_write",
+  "mcp__hq__hq_order_open",
   "mcp__hq__hq_suggest_agent",
   "mcp__hq__hq_relaunch",
   "mcp__hq__hq_blocked_note",

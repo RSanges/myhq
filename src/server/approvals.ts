@@ -20,6 +20,7 @@ import {
   QUESTION_TYPE,
 } from "./questions";
 import { startApprovalCommand } from "./approval-command";
+import { fileApproval } from "./room-folders";
 import { loadHome, type Agent } from "./rooms";
 import { agentEnv, wakeAgents, type RunnerDeps } from "./runner";
 import { deliverRelays, hasRelays } from "./supervisor";
@@ -126,6 +127,10 @@ function agentOf(config: HqConfig, row: ApprovalRow): Agent | null {
  * delivered by MyHQ on approval (`deliverRelays`, expects `action`), and its
  * agent gets no task for it (a command still runs). No other type is acted
  * on: the item keeps its payload, and publishing or pushing stays the user's.
+ *
+ * Once approved, an item with files or a drawer is filed in its room folder
+ * (room-folders.ts, fileApproval), after the decision is committed. Filing
+ * needs `config`: without it nothing is filed (the catch-up does it later).
  */
 export function decideApproval(
   db: Db,
@@ -170,7 +175,7 @@ export function decideApproval(
       else if (wanted === "queue") queueTaskFor = cfg;
     }
   }
-  const approval = db
+  let approval = db
     .transaction(() => {
       const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
       if (!row) throw new HqError("APPROVAL_NOT_FOUND", 404, `No approval #${id}.`);
@@ -278,6 +283,10 @@ export function decideApproval(
       return toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
     })
     .immediate();
+  // MyHQ files the approved delivery in its room folder, once the decision is committed; a failure never undoes it.
+  if (decision.decision === "approved" && config && fileApproval(db, config, id) !== null) {
+    approval = toApproval(db.prepare(`${APPROVAL_SELECT} WHERE a.id = ?`).get(id) as ApprovalRowWithAction);
+  }
   if (command) {
     const { config: cfg, agent, row } = command;
     startApprovalCommand({

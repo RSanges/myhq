@@ -23,6 +23,8 @@ import {
   hqMemoryRead,
   hqMemoryWrite,
   hqMessage,
+  hqOrderOpen,
+  hqOrders,
   hqPending,
   hqReadDecisions,
   hqRelaunch,
@@ -173,6 +175,24 @@ async function main(): Promise<void> {
         inputSchema: inputs.hq_rooms,
       },
       async () => respond(() => hqRooms(db, ctx)),
+    );
+    server.registerTool(
+      "hq_orders",
+      {
+        description:
+          "List the orders of your room (a room with orders: one folder per client order, named like 2026-11-acme-sign), newest first; an agent of a shared room gives `room`, the room it delivers to. Name one in hq_submit `order` to have the approved item filed in that order's folder. Read-only.",
+        inputSchema: inputs.hq_orders,
+      },
+      async (args) => respond(() => hqOrders(db, ctx, args)),
+    );
+    server.registerTool(
+      "hq_order_open",
+      {
+        description:
+          "For an agent of a room with orders: open an order in your room for a new client request, from the client and the subject (an order of that name already there is given back, `created: false`). Its folder gets a recu/ drawer. What the client sent before the order existed joins it: `received` takes the ids of items approved and filed in a recu drawer outside any order (in any room), `receivedFiles` the names of entries of your room's recu/ folder; MyHQ moves them into the order's recu/, all or nothing. Answers { order, created, path, received }, paths relative to the room folders' root.",
+        inputSchema: inputs.hq_order_open,
+      },
+      async (args) => respond(() => hqOrderOpen(db, ctx, args)),
     );
     server.registerTool(
       "hq_suggest_agent",

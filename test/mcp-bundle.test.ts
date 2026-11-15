@@ -79,6 +79,8 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
       "hq_memory_read",
       "hq_memory_write",
       "hq_message",
+      "hq_order_open",
+      "hq_orders",
       "hq_pending",
       "hq_read_decisions",
       "hq_relaunch",

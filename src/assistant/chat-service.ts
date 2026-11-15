@@ -20,6 +20,7 @@ import type { ApprovalDto } from "../server/feed";
 import { proposeAgent } from "../server/agent-need";
 import { findAgent, startRun as defaultStartRun, type RunnerDeps, type StartRunRequest } from "../server/runner";
 import { loadHome } from "../server/rooms";
+import { DroppedFileError, moveDroppedIntoReceived, RoomFolderError, roomFoldersRoot } from "../server/room-folders";
 import { lastChatTurnEnd, recordChatTurn } from "../server/usage";
 import { strings } from "../ui/strings";
 import { confirmationAnswer, describeAction, isUntrustedTool, takeChatActions, type ChatAction } from "./actions";
@@ -75,6 +76,8 @@ export type ChatServiceDeps = {
   db: Db;
   /** The `chat` section of assistant.json, or null when the conversation is not configured. */
   chat: ChatConfig | null;
+  /** The drop folder of assistant.json (`dropDir`, absolute), where files sent to the bot land; null when there is none. */
+  dropDir?: string | null;
   /** The app's environment (process.env). */
   env: Env;
   chatMaxBudgetUsd: number;
@@ -479,6 +482,10 @@ export class ChatService {
             lines.push(run ? strings.agentProposal.chat.started(run.id) : strings.agentProposal.chat.queued);
             break;
           }
+          case "file_received": {
+            lines.push(this.fileReceived(action, what));
+            break;
+          }
           case "run":
           case "arm":
           case "disarm": {
@@ -511,6 +518,36 @@ export class ChatService {
     }
     this.log(`chat actions executed: ${actions.map((a) => a.action).join(", ")}`);
     return { lines, approved };
+  }
+
+  /** The line of a `file_received` action: where the file went, or why it did not move. */
+  private fileReceived(action: ChatAction, what: string): string {
+    const t = strings.assistant.actions;
+    const f = t.fileMoved;
+    const dropDir = this.deps.dropDir ?? null;
+    if (!dropDir) return t.failed(what, f.noDropDir);
+    const room = loadHome(this.deps.config.home).rooms.find((each) => each.name === action.room);
+    if (!room) return t.failed(what, f.unknownRoom(action.room!));
+    if (action.order && !room.orders) return t.failed(what, f.noOrders(room.name));
+    try {
+      const root = roomFoldersRoot(this.deps.config.home);
+      return f.filed(moveDroppedIntoReceived(root, dropDir, room.name, action.order ?? null, action.file!));
+    } catch (error) {
+      if (error instanceof DroppedFileError) {
+        const why = {
+          not_in_drop: f.notInDrop(action.file!),
+          not_a_file: f.notAFile(action.file!),
+          leads_out: f.leadsOut(action.file!),
+          no_such_order: error.orders.length ? f.unknownOrder(room.name, action.order!, error.orders) : f.noOrders(room.name),
+        }[error.code];
+        return t.failed(what, why);
+      }
+      if (error instanceof RoomFolderError) {
+        this.log(`file_received refused: ${error.message}`);
+        return t.failed(what, f.refused);
+      }
+      throw error;
+    }
   }
 
   /** The room of an action on an agent: the one given, or the only room that has that agent. */
@@ -616,10 +653,13 @@ export function getChatService(config: HqConfig = getConfig(), overrides: Partia
   const log = overrides.log ?? ((message: string) => console.log(`[assistant] ${message}`));
   const env = overrides.env ?? process.env;
   let chat: ChatConfig | null;
+  let dropDir: string | null = overrides.dropDir ?? null;
   if ("chat" in overrides) chat = overrides.chat ?? null;
   else {
     try {
-      chat = loadAssistantConfig(config.home).chat;
+      const loaded = loadAssistantConfig(config.home);
+      chat = loaded.chat;
+      if (!("dropDir" in overrides)) dropDir = loaded.dropDir;
     } catch (error) {
       log(`invalid assistant.json, the conversation is off: ${describe(error)}`);
       chat = EMPTY_ASSISTANT_CONFIG.chat;
@@ -634,7 +674,7 @@ export function getChatService(config: HqConfig = getConfig(), overrides: Partia
       chatMaxBudgetUsd = 0.5;
     }
   }
-  const service = new ChatService({ ...overrides, config, db: getDbAt(config.dbPath), chat, env, chatMaxBudgetUsd, log });
+  const service = new ChatService({ ...overrides, config, db: getDbAt(config.dbPath), chat, dropDir, env, chatMaxBudgetUsd, log });
   services.set(config.dbPath, service);
   return service;
 }

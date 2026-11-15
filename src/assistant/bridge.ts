@@ -114,6 +114,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge |
     // The same pipeline as the desk's panel (POST /api/chat): one turn at a time across both.
     chatService: getChatService(config, {
       chat: assistantConfig.chat,
+      dropDir: assistantConfig.dropDir,
       env,
       chatMaxBudgetUsd: settings.chatMaxBudgetUsd,
       runChat: options.runChat,
