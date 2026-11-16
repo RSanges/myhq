@@ -109,6 +109,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].worktree` | no | Path, relative to the home and inside it, of a Git worktree of the target repository: created with `git worktree add` on branch `hq/<agent>` when missing (on approval of an onboarding proposal, and before a run). The agent works in it. |
 | `agents[].disallowedTools` | no | Denied to this agent on top of the global deny list (deploy and schema push commands), for example `Bash(git push *)`. A write rule with a path (`Write(supabase/**)`) is also enforced by the write guard. |
 | `agents[].addDirs` | no | Directories the agent may read besides its working directory (`--add-dir`), relative to the home. Read-only: the write guard refuses any write there. When left out, an agent whose `allowedTools` include `Read`, `Glob` or `Grep` and that has no `worktree` gets the room's `targetRepo`; an agent with a worktree already runs inside the code. |
+| `agents[].notebook` | no | The agent's notebook: one folder where it keeps what lasts (what was agreed with the owner, the owner's lasting preferences, the lessons of a piece of work), one Markdown note per topic, which the owner opens and corrects. Relative to the home or absolute, and it may be outside the home (a folder of the owner's notes vault). MyHQ creates it when missing. In a run it is readable (`--add-dir`) and writable (the write guard's one `writeDirs` entry, with `Write` and `Edit` added to the run's tools even when its rules have no write); in a question to the agent it is the only place a write may land (see "The notebook" in `architecture.md`). It must not be, hold or sit inside a working directory of the room, overlap the home's `rooms/` or `data/` folder, or overlap another agent's notebook (in any room): the room is invalid otherwise. Default: none. |
 | `agents[].maxBudgetUsd` | no | Value passed to `--max-budget-usd` for each run. |
 | `agents[].isoSprite` | no | Isometric character sheet of the floor (`/room`): a `.png` or `.webp` file, relative to the home, inside it (see "Character sheets" below). Without it, or when the file is missing or is not a sheet of the right size, the agent is drawn as one of the neutral people shipped with MyHQ, always the same one for the same agent. |
 | `agents[].floor` | no | How the agent lives on the single floor (`floor.layout: "room-per-project"`): `{ "behaviour": "desk" }` (the default) sits at a desk of its room; `{ "behaviour": "roam" }` has no desk (see "Agents who roam the floor" below). |
@@ -823,7 +824,13 @@ assistant runs with its core commands only.
   },
   "transcribe": "my-speech-to-text --language fr {file}",
   "dropDir": "../notes/inbox",
-  "extensions": ["assistant/commands/hello.ts"]
+  "extensions": ["assistant/commands/hello.ts"],
+  "door": {
+    "dirs": ["../notes/Projects", "../notes/Knowledge"],
+    "sensitive": ["../notes/Relations", "../notes/Money"],
+    "model": "sonnet",
+    "effort": "low"
+  }
 }
 ```
 
@@ -850,6 +857,11 @@ assistant runs with its core commands only.
 | `transcribe` | no | Shell command that turns a voice note into text: `{file}` is replaced by the quoted path of the audio file (do not quote it yourself), and the command prints the text on stdout. Without it, voice notes get a "not configured" answer. |
 | `dropDir` | no | Folder where photos and documents sent to the bot are saved, with a free name (never overwritten) and, when the message has a caption, a companion `.md` note. Without it, files get a "not configured" answer. |
 | `extensions` | no | Extension modules, asked in this order (below). |
+| `door` | no | The door agents ask the assistant through (`hq_ask_assistant`, see "The door to the assistant" in `architecture.md`). Without it the door is closed: the tool answers so, and no model is called. It is read at each request, no restart needed, by the app whether polling is on or not. A `door` of the wrong shape makes the whole file invalid, like any other key. |
+| `door.dirs` | yes | The folders the door's call may read (`--add-dir`, read-only), relative to the home or absolute: 1 to 32. |
+| `door.sensitive` | no | Folders that open only for a question the owner approved on the desk: never mounted otherwise. A sensitive folder may not overlap a folder of `door.dirs` (mounting that one would open it): the door is then invalid, and stays closed. Default: none. |
+| `door.model` | no | `opus`, `sonnet` (default) or `haiku`. |
+| `door.effort` | no | `--effort` of the call: `low` (default) to `max`. |
 
 ### The preamble
 
