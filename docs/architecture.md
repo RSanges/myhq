@@ -1541,7 +1541,9 @@ An entry also shows the latest note of the supervisor on its tasks (« Note de
 <its name> : ... », see below). An entry handed to the owner (by the
 supervisor, by MyHQ, or by a reopening) is marked « Remis au propriétaire »,
 drawn apart and listed first, whatever its age. A hand-off is for good: a
-later note, whatever it says, takes nothing back.
+later note, whatever it says, takes nothing back. MyHQ's note on a bench it
+keeps open (cause `bench`, see "Several benches") is the owner's from the
+start, and « Relancer » on it first tries the closing again.
 
 ### The supervisor
 
@@ -1651,7 +1653,8 @@ into the `supervisors` table, which the HQ MCP server reads.
     a note (`handOffRelaunched`: in the supervisor's name for its relaunch, in
     MyHQ's for MyHQ's own);
   - **what starts again on its own is left alone**: a pending task held by the
-    daily cap, a resource, the anti ping-pong window or a stop of MyHQ;
+    daily cap, a resource, the anti ping-pong window or a stop of MyHQ, and
+    MyHQ's note on a bench (`bench`, the owner's anyway);
   - **everything else goes to the supervisor**: the blocks in free text (an
     agent's note, a run that failed for another reason, a timeout, a stop, the
     hard limit) and the states no rule covers.
@@ -1811,73 +1814,158 @@ writes there is safe with two runs: the guards' settings file is the same for
 every run of the agent (its hook names a script, the configuration of each
 run travels in its environment) and is written only when it changes; the MCP
 configuration, the journal and the other files of a run are per run, in
-`data/runs/`. The skills are copied again at each start (removed then
-copied), so a run in progress could miss a skill file for the instant of
-another run's start.
+`data/runs/`. The skills are brought up to date at each start by writing
+only the files that changed, each replaced in one rename, and removing only
+what a skill no longer has (`syncSkills`), so a run in progress never misses a
+file of a skill another run's start copies.
 
 **With a worktree**, each subject other than the general one gets its own
 bench (`src/server/benches.ts`): a Git worktree beside the agent's,
-`<worktree>--subject-<id>`, on its own branch `hq/<agent>--subject-<id>`,
-created by `git worktree add -b <branch> <dir> hq/<agent>` (the tip of the
-agent's own branch, not the repository's HEAD) when the subject's first run
-starts, and recorded (`benches`, migration 32: its paths, its branches, the
-state of its closing). The general subject keeps the agent's worktree. The
-run's working directory, `HQ_WORK_DIR` (so the attachment roots of
-`hq_submit` and `hq_show`), the write and read guards, the skills copy, a
-question asked in the subject (once the bench exists) and the pieces of the
-surveillance room follow the bench. The run's prompt says, in a few lines,
-that this is the bench of its subject, a copy of the agent's branch; to
-commit its work on the bench's branch before it finishes (uncommitted work
-blocks the closing); to write only what belongs to the subject; and that a
-change in files its other subjects share (a common model, a library, a tool)
-is said first in its submission, or asked, never made silently, because it
-can conflict with its other benches.
+`<worktree>.subject-<id>`, on its own branch `hq/<agent>.subject-<id>`. The
+dot is a character an agent id cannot hold (`idSchema`), so no agent's own
+branch or worktree ever takes the name of another agent's bench. It is
+created by `git worktree add -b <branch> <dir> refs/heads/hq/<agent>` (the
+tip of the agent's own branch, not the repository's HEAD, and never a tag of
+that name) when the subject's first run starts, and recorded (`benches`,
+migration 32: its paths, its branches, the state of its closing). A bench
+whose folder is gone (removed by hand, or half removed) is first forgotten by
+Git (`git worktree prune`), then made again from its branch. The general
+subject keeps the agent's worktree. The run's working directory,
+`HQ_WORK_DIR` (so the attachment roots of `hq_submit` and `hq_show`), the
+write and read guards, the skills copy, a question asked in the subject (once
+the bench exists) and the pieces of the surveillance room follow the bench.
+The run's prompt says, in a few lines, that this is the bench of its subject,
+a copy of the agent's branch; to commit its work on the bench's branch before
+it finishes (uncommitted work blocks the closing); that outputs it leaves in
+folders Git ignores are carried to the agent's own worktree when the subject
+closes, unless a file of the same path is already there; to write only what
+belongs to the subject; and that a change in files its other subjects share
+(a common model, a library, a tool) is said first in its submission, or
+asked, never made silently, because it can conflict with its other benches.
 
 **Closing a bench** (`closeBench`): when the subject is archived, by itself
-once its work is validated (`settleSubject`) or by the owner, and again at
-each tick of the scheduler and at the end of each run of the agent while it
-is not closed (`closeArchivedBenches`):
+once its work is validated (`settleSubject`) or by the owner, then while it
+is not closed (`closeArchivedBenches`) at the end of each run of the agent,
+and at the ticks of the scheduler. In order, with the Git commands it runs
+(the agent's worktree is `<base>`, the bench `<bench>`):
 
-1. It waits, silently, while a run, a question or a task (pending or in
-   progress) of the subject goes on.
-2. Never lose work: a bench with changes Git does not ignore, tracked or not
-   (`git status --porcelain`), is kept and the owner told.
-3. Its branch is merged into the agent's, inside the agent's own worktree,
-   only when that worktree is on its branch, has no change and no run works
-   in it (a run of the general subject, or of a subject without a bench). A
-   busy worktree waits silently; one with changes, or on another branch, is
-   told to the owner and waited for. A branch with nothing new
-   (`git merge-base --is-ancestor`) needs no merge.
-4. A conflict: the merge is aborted (`git merge --abort`), the bench kept,
-   and the owner told once, with the two branch names. It is tried again
-   only once one of the two tips moved. This is how MyHQ learns that two
-   subjects touched the same files.
-5. After a clean merge, or nothing to merge: `git worktree remove <bench>`
-   and `git branch -d <branch>`, never by force (no `--force`, no `-D`); a
-   branch Git refuses to delete after a merge is kept and logged, and the
-   bench is closed all the same.
-6. A reopened subject whose bench was closed gets a fresh one from the
-   agent's branch at its next run (the same row starts afresh).
+1. It waits, silently and without a Git call, while a run, a question or a
+   task (pending or in progress) of the subject goes on. A bench already held
+   (below) is tried again by the tick only once its wait is over: 1 minute
+   after the first hold, doubled at each hold up to 30 minutes (in memory: a
+   restart tries each one at its first tick). The end of a run of the agent,
+   the owner archiving the subject again and « Relancer » on the note try it
+   at once.
+2. The agent's worktree must be there: `git rev-parse --show-toplevel` in
+   `<base>` must answer `<base>` itself (`baseMissing` otherwise).
+3. The bench: `git rev-parse --show-toplevel` in `<bench>`. When the folder
+   is gone or is no longer a worktree (removed by hand, half removed, or
+   removed by a closing that stopped before recording it), `git worktree
+   prune` in `<base>`, and the closing goes on without the bench's status:
+   its branch is merged as usual. When it is there,
+   `git --no-optional-locks status --porcelain`: never lose work, a bench
+   with changes Git does not ignore, tracked or not, is kept (`dirty`).
+4. It waits, silently, while a run works in the agent's worktree (a run of
+   the general subject, or of a subject without an open bench).
+5. `git rev-parse --verify --quiet refs/heads/<branch>^{commit}`: a bench
+   gone with its branch gone was already merged and deleted, it closes.
+6. The agent's worktree: `git rev-parse --absolute-git-dir`, then MyHQ reads
+   that folder. A `MERGE_HEAD` that is the bench's tip is MyHQ's own merge,
+   left half done by a crash or a timeout: `git merge --abort` first, so it
+   is never blamed on the agent nor committed with its conflict markers. Any
+   other operation in progress (a merge, a cherry-pick, a revert, a rebase)
+   is left alone (`baseOperation`). Then `git symbolic-ref --quiet HEAD` must
+   be `refs/heads/hq/<agent>` (`baseBranch` otherwise),
+   `git --no-optional-locks status --porcelain` empty (`base` otherwise), and
+   `git rev-parse --verify HEAD^{commit}` gives its tip.
+7. A conflict told before with the same two tips is not tried again, even
+   when asked: only once one of them moved.
+8. `git merge-base --is-ancestor <bench tip> <base tip>`: nothing new needs
+   no merge. Otherwise `git merge --no-edit --no-overwrite-ignore
+   refs/heads/<branch>`. It never overwrites a file the agent's worktree has
+   and Git ignores there: Git refuses before it starts, and MyHQ says so
+   (`overwrite`). A merge that stops is looked at with
+   `git ls-files --unmerged`, then `git merge --abort` when a `MERGE_HEAD`
+   is left: unmerged paths are a `conflict`, said with the two branch names
+   (this is how MyHQ learns that two subjects touched the same files);
+   anything else (a commit signature that fails, a lock) is an `error`.
+9. What Git ignores in the bench is carried into the agent's worktree:
+   `git ls-files -z --others --ignored --exclude-standard --directory` in
+   `<bench>` lists it, at the coarsest level (a wholly ignored folder is one
+   entry). What the agent's worktree does not have at that relative path is
+   moved there (a whole folder in one rename); a folder it has too is
+   descended into; what it already has at a path is left to go with the bench
+   (its virtual environment, a cache, its dependencies). Nothing is ever
+   overwritten; MyHQ's own files stay (`.claude/settings.local.json`, MyHQ's
+   `.claude/.gitignore`, the skills' copies); no link is followed (a link is
+   moved as a link, and nothing lands through a link out of the agent's
+   worktree). The work is bounded, 100 000 entries and 10 s: past that, or
+   when a move fails, the bench is held (`carry`) with what is left in it,
+   and nothing is deleted. It is idempotent: the next try moves what remains.
+10. `git worktree remove <bench>`, never by force: Git refuses a locked
+    worktree or one with changes (an `error`). When it fails after Git has
+    forgotten the worktree (on Windows, a file held open stops the removal
+    of the folder once the rest is deleted and the registration gone), what
+    is left is logged and no longer Git's, and the bench is closed.
+11. `git branch -d <branch>` when the branch still exists: a command on
+    branches only (a tag of the same name never matters), which refuses an
+    unmerged branch or one checked out elsewhere. A branch Git refuses to
+    delete after the merge is kept and logged, and the bench is closed all the
+    same. A remnant folder left by step 3 or 10 is logged too.
+12. A reopened subject whose bench was closed gets a fresh one from the
+    agent's branch at its next run (the same row starts afresh).
 
-Telling the owner is a blocked task of the agent on the Standard, MyHQ's
-note said as written (as for a long run), one per hold: the same hold again
-only refreshes the note of a task still blocked (closed by the owner, it
-stays closed), another hold closes the previous task. Its text is what the
-agent would do if relaunched: commit on the bench's branch, merge the
-agent's branch into the bench and resolve the conflict, or tidy its own
-worktree (that one on the general subject, so the relaunched run works
-there). The task is done by MyHQ once the bench closes. Every Git call runs
-with an argument array (no shell), a timeout of 60 s, no hooks (an empty
-hooks folder of MyHQ's) and no fsmonitor; an error is caught, told to the
-owner and never thrown into the callers of `settleSubject`. The calls are
-synchronous, like the creation of a worktree.
+**What holds a bench, said to the owner** (`BenchHold`): three holds a run of
+the agent settles, `dirty` (commit on the bench's branch), `conflict` (merge
+the agent's branch into the bench and resolve) and `base` (commit in its own
+worktree); the others are the owner's: `baseBranch`, `baseOperation`,
+`baseMissing`, `overwrite`, `carry`, `error` (Git's own words, after « Git a
+répondu : »). Each has its own sentence in French
+(`strings.deskModules.standard.bench`).
+
+**One stable entry per bench, which costs nothing.** The first hold creates
+one blocked task of the agent (the note task of the bench); every later hold,
+the same or another, rewrites its note and its text in place, and the bench
+closing marks it done (« Réglé : MyHQ a fermé le banc. »). Its note is
+MyHQ's, said as written on the Standard (cause `bench`). It is handed to the
+owner from the start (`handedOff` counts the bench notes): it never wakes the
+supervisor, no rule relaunches it, and `hq_relaunch` and `hq_blocked_close`
+refuse it. It never leaves the owner's sight while the bench is open: once
+the owner closes it, or a run that took it ends, the next try still held puts
+the same task back to blocked with the current note; a task a run blocked in
+its own words, or still pending or in progress, is left as it is until then
+(and a task a run took is no longer said as MyHQ's). « Relancer » on it tries
+the closing again first (`retryBenchNote`): a bench that closes, or that
+holds for one of the owner's reasons, starts no run (`BENCH_CLOSED`,
+`BENCH_HELD`, said on the page); only for `dirty`, `conflict` and `base` does
+the relaunch go on, and the run takes the note's text (the `base` note works
+on the general subject, so the run works in the agent's worktree). A run of
+the subject that takes the relaunched note makes the closing wait until it
+ends, and its end tries again.
+
+Every Git call of a closing runs with an argument array (no shell), a
+timeout of 30 s, no hooks (an empty hooks folder of MyHQ's: a hooks path the
+repository sets, `.husky` say, is a tracked folder agents write) and no
+fsmonitor, and `GIT_CEILING_DIRECTORIES` set to the parent of its folder, so
+a bench or a worktree that is gone is never taken for a repository around it
+(a home that Git versions). The creation of a worktree, the agent's own or a
+bench, runs without hooks and fsmonitor too (`safeGitArgs` in
+`worktree.ts`). An error is caught, told to the owner and never thrown into
+the callers of `settleSubject`. The calls are synchronous, in the server's
+single process, like the creation of a worktree: a closing makes fewer
+than twenty of them, each bounded by its timeout, and a held bench costs
+none between its tries.
 
 **Before turning `parallel` on**, the home owner should know:
 
 - A fresh bench holds what Git tracks on the agent's branch, nothing else:
-  ignored files (a virtual environment, `node_modules`, generated outputs,
-  a local configuration) are not there, and whatever such files a run makes
-  in a bench are deleted with it when it closes.
+  ignored files (a virtual environment, `node_modules`, a local
+  configuration) are not there. What a run leaves in ignored folders of a
+  bench is carried to the agent's worktree at the closing, except at a path
+  that worktree already has (that copy goes with the bench). Dependencies a
+  run installs in a bench are carried too when the agent's worktree has none
+  of its own; tens of thousands of such files exceed the bound and hold the
+  bench until the owner removes them.
 - The agent should commit its work on the bench: uncommitted work keeps the
   bench open, and nothing merges it.
 - Two subjects that change the same files conflict at the closing, and the
@@ -1885,13 +1973,31 @@ synchronous, like the creation of a worktree.
   to announce, as its prompt says.
 - The general subject works in the agent's worktree, and a bench waits to be
   merged while a general run goes on there, or while that worktree has
-  uncommitted changes or is on another branch (a pull request branch, say).
+  uncommitted changes, is on another branch (a pull request branch, say), or
+  is in the middle of a merge, a rebase, a cherry-pick or a revert. A merge
+  in progress there whose `MERGE_HEAD` is the bench's tip is taken for MyHQ's
+  own and aborted.
 - A repository whose configuration declares filters or merge drivers runs
-  them during a merge: MyHQ turns off hooks and fsmonitor, not those.
+  them during a merge: MyHQ turns off hooks and fsmonitor, not those. Hooks
+  do not run at the creation of a worktree either.
+- A held bench is tried again by the tick at most every 30 minutes; a branch
+  the owner commits to by hand closes at the next try, or at once with
+  « Relancer » on its note.
 - The benches lie beside the agent's worktree in the home; deleting a room
   leaves them, as it leaves every working directory. The paths recorded are
-  absolute: a home moved to another machine with benches open needs them
-  closed first (a missing bench is told to the owner, never removed).
+  absolute. A bench whose folder is missing at its recorded path closes from
+  its branch alone (anything uncommitted that was in it is gone with the
+  folder), and an agent's worktree missing holds every bench (`baseMissing`).
+  So before moving a home, restoring its database or changing an agent's
+  `worktree`, let its benches close (archive their subjects and check that
+  the Standard shows none), or move the folders with the home to the same
+  absolute paths.
+- `git worktree prune` forgets every worktree of the repository whose folder
+  is missing, not only MyHQ's benches (a worktree on a drive not mounted, say,
+  unless it is locked with `git worktree lock`).
+- A remnant folder left by a removal that failed on Windows stays at the
+  bench's path: the reopened subject's next run then fails on it ("exists, is
+  not empty and is not a Git worktree") until the owner removes it.
 - Without a worktree, the runs of the subjects share one folder: what one
   writes, the other sees.
 
