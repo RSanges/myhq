@@ -41,7 +41,7 @@ import { skillTools, syncSkills } from "./skills";
 import { settleSubject } from "./subjects";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
-import { benchOf, openBench, type Bench } from "./benches";
+import { benchOf, closeArchivedBenches, openBench, type Bench } from "./benches";
 import { agentReadGuard } from "./read-guard";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
@@ -789,6 +789,8 @@ export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = 
     applyRunStops(db);
     // What the runs with needs take from the machine, measured on this tick (machine.ts).
     sampleMachine(db, deps.machine);
+    // The benches of archived subjects that waited (benches.ts): closed once nothing holds them back.
+    closeArchivedBenches(db);
     if (runsToday(db) >= liveConfig(config).maxRunsPerDay) return [];
     return wakeAgents(config, db, deps);
   } catch (error) {
@@ -1372,6 +1374,8 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   // The end of a run may be what closes a subject whose work is validated.
   settleSubject(db, run.subject_id);
+  // It may also free what a bench of an archived subject waited for: the agent's worktree, the subject itself (benches.ts).
+  closeArchivedBenches(db, { room: room.name, agentId: agent.id });
   // What the machine gave it, stored with whether it ran alone (machine.ts); nothing for an agent without needs.
   closeRunMachine(db, run.id, p.deps.machine);
   wake(p);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { closeBench } from "./benches";
 import { now, type ApprovalStatus, type Db } from "./db";
 import { DOOR_TYPE } from "./door";
 import { HqError } from "./errors";
@@ -94,7 +95,7 @@ export function createSubject(db: Db, room: string, agentId: string, title?: str
 
 /** Renames, archives or reopens a subject of this agent. */
 export function updateSubject(db: Db, room: string, agentId: string, id: number, patch: SubjectPatch): SubjectRow {
-  return db
+  const row = db
     .transaction(() => {
       readSubject(db, room, agentId, id);
       if (patch.title !== undefined) db.prepare("UPDATE subjects SET title = ? WHERE id = ?").run(patch.title, id);
@@ -103,6 +104,9 @@ export function updateSubject(db: Db, room: string, agentId: string, id: number,
       return readSubject(db, room, agentId, id);
     })
     .immediate();
+  // Archived by the owner: its bench closes (benches.ts), out of the transaction since it runs Git.
+  if (patch.status === "archived" && row.status === "archived") closeBench(db, id);
+  return row;
 }
 
 function archive(db: Db, id: number): boolean {
@@ -129,7 +133,8 @@ export function reopenSubject(db: Db, id: number | null): void {
  * The general subject never closes. Called where those states change: a
  * decision (decideApproval), the end of a run, the end of an approval
  * command. The one place where a subject ends: what else goes with that end
- * (the worktree of a subject, later) belongs here. Never throws; returns
+ * belongs here, and its bench closes (benches.ts, closeBench: merged into
+ * the agent's branch, or kept and told to the owner). Never throws; returns
  * whether it archived the subject.
  */
 export function settleSubject(db: Db, subjectId: number | null): boolean {
@@ -158,7 +163,9 @@ export function settleSubject(db: Db, subjectId: number | null): boolean {
              WHERE a.subject_id = ? AND d.status IN ('owner', 'answering')) AS n`,
       )
       .get(subjectId, item.id, item.id, subjectId, subjectId, subjectId, item.decided_at ?? "", subjectId, subjectId) as { n: number };
-    return unsettled.n === 0 && archive(db, subjectId);
+    if (unsettled.n !== 0 || !archive(db, subjectId)) return false;
+    closeBench(db, subjectId);
+    return true;
   } catch (error) {
     console.error(`[subjects] subject #${subjectId} could not be settled`, error);
     return false;

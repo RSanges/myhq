@@ -2,6 +2,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { RECEPTION_ROOM } from "../ui/reception";
 import { liveConfig, type HqConfig } from "./config";
+import { isBenchNote } from "./benches";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
@@ -307,8 +308,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
   for (const task of blocked) {
     if (listed.has(task.id)) continue;
     const note = oneLine(task.note);
-    // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts): said as written.
-    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined;
+    // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts), or on a bench it could not close (benches.ts): said as written.
+    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined || isBenchNote(db, task.id);
     entries.push({
       entry: "task",
       id: task.id,

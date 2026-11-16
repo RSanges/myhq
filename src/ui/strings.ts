@@ -1597,6 +1597,18 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       /** Written by MyHQ on the Standard when the supervisor did not answer the check of a long run (long-runs.ts). */
       longRunNoAnswer: (p: { supervisor: string; runId: number; agent: string; minutes: number; slice: number; hard: number }) =>
         `Pas de réponse de ${p.supervisor} sur le tour #${p.runId} de ${p.agent}, qui tourne depuis ${p.minutes} min : MyHQ le laisse continuer par tranches de ${p.slice} min, jusqu'au plafond de ${p.hard} min.`,
+      /** Written by MyHQ on the Standard when the bench of an archived subject cannot be closed (benches.ts). */
+      bench: {
+        dirty: (p: { subject: string; dir: string; branch: string }) =>
+          `Le banc du sujet ${p.subject} a des changements non validés (${p.dir}) : MyHQ le garde. Qu'ils soient validés sur la branche ${p.branch} (Relancer le demande à l'agent) ou écartés, et le banc se fermera tout seul.`,
+        conflict: (p: { subject: string; branch: string; base: string }) =>
+          `Le banc du sujet ${p.subject} ne se fusionne pas : ${p.branch} entre en conflit avec ${p.base}, deux sujets ont touché les mêmes fichiers. MyHQ a annulé la fusion et garde le banc. Relancer demande à l'agent de fusionner ${p.base} dans ${p.branch} et de résoudre le conflit.`,
+        base: (p: { subject: string; dir: string; base: string }) =>
+          `Le banc du sujet ${p.subject} attend : le dossier de travail principal de l'agent (${p.dir}) a des changements non validés, ou n'est pas sur sa branche ${p.base}. Le banc se fermera dès qu'il sera propre.`,
+        error: (p: { subject: string; error: string }) => `Le banc du sujet ${p.subject} n'a pas pu être fermé : ${p.error}. MyHQ le garde.`,
+        /** The note of MyHQ's task once the bench closed, or once what held it back changed. */
+        solved: "Réglé : MyHQ a fermé le banc, ou ce qui le retenait a changé.",
+      },
       /** Why an entry is stuck, one sentence, written by the server (GET /api/desk). */
       reasons: {
         blocked: (note: string) => `Bloquée par l'agent : ${note}`,
