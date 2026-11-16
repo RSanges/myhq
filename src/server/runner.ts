@@ -12,6 +12,7 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine"
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
 import { discussionHandoff } from "./discussion-handoff";
+import { notebookAccess, notebookText } from "./notebook";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import {
@@ -1036,8 +1037,15 @@ async function execute(p: ExecuteParams): Promise<void> {
       fs.mkdirSync(agent.workDir, { recursive: true });
       syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
       // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
-      const guard = writeGuardConfig({ workDir: agent.workDir, allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools });
-      if (guard.allow.length > 0) {
+      // The notebook is the one folder outside the working directory it writes, from its own rules or none (notebook.ts).
+      const notebook = agent.notebook ? notebookAccess(agent) : null;
+      const guard = writeGuardConfig({
+        workDir: agent.workDir,
+        allowedTools: agent.allowedTools,
+        disallowedTools: agent.disallowedTools,
+        writeDirs: notebook ? [notebook.dir] : [],
+      });
+      if (guard.allow.length > 0 || guard.writeDirs.length > 0) {
         installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
       }
       fs.mkdirSync(config.runsDir, { recursive: true });
@@ -1055,7 +1063,8 @@ async function execute(p: ExecuteParams): Promise<void> {
         briefing = briefingText(decisions, readMemories(db, room.name, agent.id));
       }
       const ready = prepared?.kind === "run" ? prepared : null;
-      const prompt = [p.prompt, briefing, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
+      const notes = notebook ? notebookText(notebook.dir, languageName(promptLanguage(config.home)), "run") : null;
+      const prompt = [p.prompt, briefing, notes, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
         .filter((part): part is string => part !== null)
         .join("\n\n");
       const effort = ready?.effort ?? agent.effort ?? null;
@@ -1068,10 +1077,10 @@ async function execute(p: ExecuteParams): Promise<void> {
         ...(effort ? { effort } : {}),
         ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
         rolePath: agent.rolePath,
-        allowedTools: agent.allowedTools,
+        allowedTools: notebook ? notebook.allowedTools : agent.allowedTools,
         disallowedTools: agent.disallowedTools,
-        addDirs: agent.addDirs,
-        tools: skillTools(agent),
+        addDirs: notebook ? notebook.addDirs : agent.addDirs,
+        tools: notebook ? notebook.tools : skillTools(agent),
         mcpConfigPath,
         maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
         workDir: agent.workDir,

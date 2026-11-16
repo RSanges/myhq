@@ -94,6 +94,8 @@ export const agentSchema = z.strictObject({
   disallowedTools: z.array(z.string().min(1)).optional(),
   /** Extra directories the agent may read (`--add-dir`), relative to the home. */
   addDirs: z.array(z.string().min(1)).optional(),
+  /** The agent's notebook (notebook.ts): one folder it reads and writes, in runs and in questions, relative to the home or absolute. */
+  notebook: z.string().trim().min(1).optional(),
   maxBudgetUsd: z.number().positive().optional(),
   /** Claude Code skill folders (each holding a SKILL.md), relative to the room directory: copied into the agent's working directory before each run. */
   skills: z.array(z.string().min(1)).min(1).max(32).optional(),
@@ -228,6 +230,8 @@ export type Agent = {
   disallowedTools: string[];
   /** Absolute paths passed as `--add-dir`. */
   addDirs: string[];
+  /** Absolute path of its notebook, the one folder outside its working directory it writes (notebook.ts); null or absent: none. */
+  notebook?: string | null;
   /** Built-in tools that exist for the agent when they differ from its whitelist (MyHQ's own agents only). */
   tools?: string[];
   maxBudgetUsd: number | null;
@@ -326,6 +330,33 @@ function defaultAddDirs(agent: RoomFile["agents"][number], targetRepo: string): 
   return reads ? [targetRepo] : [];
 }
 
+const overlaps = (a: string, b: string): boolean => isInside(a, b) || isInside(b, a);
+
+/**
+ * What is wrong with the notebooks of these agents, or null. A notebook is
+ * writable in a question too, where the working directory is not
+ * (agent-questions.ts), so it may overlap no working directory (its agent's
+ * or another's), no other notebook (`others`: those of the rooms already
+ * loaded), nor the home's `rooms/` and `data/` folders (the roles, the
+ * room.json files, the database).
+ */
+function notebookError(home: string, agents: readonly Agent[], others: readonly { owner: string; dir: string }[] = []): string | null {
+  const taken = [...others];
+  for (const agent of agents) {
+    const dir = agent.notebook;
+    if (!dir) continue;
+    const workDir = agents.find((each) => overlaps(dir, each.workDir));
+    if (workDir) return `notebook of "${agent.id}" must not be, hold or sit inside the working directory of "${workDir.id}"`;
+    for (const folder of ["rooms", "data"]) {
+      if (overlaps(dir, path.join(home, folder))) return `notebook of "${agent.id}" must not overlap the ${folder}/ folder of the home`;
+    }
+    const other = taken.find((each) => overlaps(dir, each.dir));
+    if (other) return `notebook of "${agent.id}" overlaps the notebook of ${other.owner}`;
+    taken.push({ owner: `"${agent.id}"`, dir });
+  }
+  return null;
+}
+
 /** Loads and validates one room directory. Throws an explicit Error when invalid. */
 export function loadRoom(home: string, roomDir: string): Room {
   const file = path.join(roomDir, "room.json");
@@ -412,6 +443,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       worktree,
       disallowedTools: agent.disallowedTools ?? [],
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
+      notebook: agent.notebook ? path.resolve(home, agent.notebook) : null,
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
       skills,
       sprite,
@@ -435,6 +467,9 @@ export function loadRoom(home: string, roomDir: string): Room {
       pieces: agent.pieces ?? [],
     };
   });
+
+  const notebook = notebookError(home, agents);
+  if (notebook) throw new Error(`${file}: ${notebook}`);
 
   const logo = room.logo ? path.resolve(roomDir, room.logo) : null;
   if (logo && !isInside(roomDir, logo)) throw new Error(`${file}: logo must stay inside the room directory`);
@@ -469,9 +504,14 @@ export function loadHome(home: string): Home {
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(roomsDir, entry.name))
     .sort();
+  const notebooks: { owner: string; dir: string }[] = [];
   for (const dir of dirs) {
     try {
       const room = loadRoom(home, dir);
+      // Two rooms may not share a notebook either: the later room is the invalid one.
+      const shared = notebookError(home, room.agents, notebooks);
+      if (shared) throw new Error(`${path.join(dir, "room.json")}: ${shared}`);
+      for (const agent of room.agents) if (agent.notebook) notebooks.push({ owner: `"${room.name}/${agent.id}"`, dir: agent.notebook });
       const at = archivedAt.get(room.name);
       if (at === undefined) result.rooms.push(room);
       else result.archived!.push({ room, archivedAt: at });
