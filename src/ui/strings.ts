@@ -781,6 +781,10 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     zoomLabel: (name: string) => `Agrandir ${name}`,
     loop: "en boucle",
     unreadable: "Aperçu impossible : ce fichier n'est pas du texte.",
+    model: {
+      open: "Ouvrir le détail pour la tourner en 3D",
+      download: "Télécharger la pièce",
+    },
     empty: {
       title: "Personne ne travaille pour l'instant",
       text: "Les tuiles reviendront d'elles-mêmes au prochain tour.",

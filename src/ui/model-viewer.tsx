@@ -90,6 +90,7 @@ export default function ModelViewer({
   picking,
   onPick,
   onPin,
+  compact = false,
 }: {
   url: string;
   name: string;
@@ -101,6 +102,8 @@ export default function ModelViewer({
   picking: boolean;
   onPick: (point: ModelPoint) => void;
   onPin: (key: string) => void;
+  /** The part alone, without the row of views and the help line (a tile of the surveillance room). */
+  compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneHandle | null>(null);
@@ -455,7 +458,7 @@ export default function ModelViewer({
             </div>
           ))}
       </div>
-      {status === "ready" && (
+      {status === "ready" && !compact && (
         <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap" role="toolbar" aria-label={strings.attachments.viewsLabel}>
           {(Object.keys(VIEWS) as View[]).map((view) => (
             <button key={view} type="button" className={viewButton} onClick={() => sceneRef.current?.view(view)}>
@@ -464,7 +467,7 @@ export default function ModelViewer({
           ))}
         </div>
       )}
-      {status === "ready" && <p className="text-xs text-muted">{strings.attachments.viewerHelp}</p>}
+      {status === "ready" && !compact && <p className="text-xs text-muted">{strings.attachments.viewerHelp}</p>}
     </div>
   );
 }
