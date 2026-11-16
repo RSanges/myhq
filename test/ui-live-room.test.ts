@@ -7,6 +7,8 @@ import {
   elapsedText,
   liveFigures,
   mergeTimeline,
+  MODEL_VIEWERS_MAX,
+  modelViewerRuns,
   shownIndex,
   wantsReload,
 } from "../src/ui/live-room-model";
@@ -128,6 +130,25 @@ test("canCompare: two versions or more, all videos or all images", () => {
   assert.equal(canCompare({ source: "auto", versions: [version("a.png", 1, "image"), version("b.png", 2, "image")] }), true);
   assert.equal(canCompare({ source: "auto", versions: [version("a.mp4", 1), version("b.png", 2, "image")] }), false);
   assert.equal(canCompare({ source: "auto", versions: [version("a.md", 1, "text"), version("b.md", 2, "text")] }), false);
+  assert.equal(canCompare({ source: "auto", versions: [version("a.3mf", 1, "model"), version("b.3mf", 2, "model")] }), false, "never two 3D viewers");
+});
+
+test("modelViewerRuns: at most two live tiles draw their 3D part, the shown version only, never a finished tile", () => {
+  const part = { source: "auto" as const, versions: [version("parts/a.3mf", 1, "model")] };
+  const video = { source: "auto" as const, versions: [version("a.mp4", 1)] };
+  const tiles = [
+    tile({ runId: 1, piece: video }),
+    tile({ runId: 2, piece: part, state: "done" }),
+    tile({ runId: 3, piece: part, state: "waiting" }),
+    tile({ runId: 4, piece: part }),
+    tile({ runId: 5, piece: part }),
+  ];
+  assert.equal(MODEL_VIEWERS_MAX, 2);
+  assert.deepEqual([...modelViewerRuns(tiles, new Map())], [3, 4]);
+  const mixed = { source: "auto" as const, versions: [version("parts/a.3mf", 1, "model"), version("parts/a.png", 2, "image")] };
+  assert.deepEqual([...modelViewerRuns([tile({ runId: 1, piece: mixed })], new Map())], [], "the latest is the board, not the part");
+  assert.deepEqual([...modelViewerRuns([tile({ runId: 1, piece: mixed })], new Map([[1, "parts/a.3mf"]]))], [1], "the part chosen on the strip");
+  assert.deepEqual([...autoplayRuns(tiles, new Map(), false)], [1], "a part never takes a video's turn");
 });
 
 test("wantsReload: a run, a status or a shown piece, and the result of those calls; other events do not", () => {

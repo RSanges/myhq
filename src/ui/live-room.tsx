@@ -11,8 +11,11 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import dynamic from "next/dynamic";
 import { errorText, fetchLiveRun } from "./api";
+import { MODEL_FRAME_CLASS, modelFormat } from "./attachments-model";
 import { DESK_PATH, runHash } from "./deep-link";
+import { formatSize } from "./folders-model";
 import { formatClock, formatCost, formatTime } from "./format";
 import {
   autoplayRuns,
@@ -20,11 +23,13 @@ import {
   elapsedText,
   liveFigures,
   mergeTimeline,
+  modelViewerRuns,
   pausedMinutes,
   shownIndex,
   taskHeadline,
   type TimelineEntry,
 } from "./live-room-model";
+import type { Pin } from "./model-viewer";
 import type { LiveRun, LiveTile, PieceVersion } from "./schemas";
 import { SiteNav } from "./site-nav";
 import { strings } from "./strings";
@@ -41,6 +46,15 @@ const t = strings.live;
 type Piece = NonNullable<LiveTile["piece"]>;
 /** The version the owner picked on each run's strip, by path (none: the latest). */
 type Chosen = ReadonlyMap<number, string>;
+
+/** three.js and the viewer of the desk, fetched only when a 3D part is drawn, never rendered on the server. */
+const ModelViewer = dynamic(() => import("./model-viewer"), {
+  ssr: false,
+  loading: () => <div className={`${MODEL_FRAME_CLASS} flex items-center justify-center text-sm text-muted`}>{strings.attachments.loading3d}</div>,
+});
+/** Stable props: the viewer redraws when its pins change, and the clock renders the page every second. No remark here. */
+const NO_PINS: readonly Pin[] = [];
+const ignore = () => {};
 
 // ---- Icons -------------------------------------------------------------------
 
@@ -70,6 +84,12 @@ const HoldIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
     <circle cx="12" cy="12" r="9" />
     <path d="M10 9v6M14 9v6" />
+  </svg>
+);
+const CubeIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+    <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />
+    <path d="M4 7.5l8 4.5 8-4.5M12 12v9" />
   </svg>
 );
 const PlayIcon = () => (
@@ -137,6 +157,7 @@ export function LiveRoomView() {
 
   const tiles = useMemo(() => (state.status === "ready" ? state.room.tiles : []), [state]);
   const playing = useMemo(() => autoplayRuns(tiles, chosen, reducedMotion), [tiles, chosen, reducedMotion]);
+  const drawing = useMemo(() => modelViewerRuns(tiles, chosen), [tiles, chosen]);
 
   return (
     <div className="wall-page">
@@ -189,6 +210,7 @@ export function LiveRoomView() {
                 now={now}
                 chosen={chosen.get(tile.runId)}
                 play={playing.has(tile.runId)}
+                draw={drawing.has(tile.runId)}
                 onChoose={(path) => choose(tile.runId, path)}
                 onOpen={() => open(tile.runId)}
                 onZoom={setZoomed}
@@ -279,19 +301,20 @@ function Head({ tile, now, titleId }: { tile: LiveTile; now: number; titleId?: s
 
 const roomStyle = (tile: LiveTile): CSSProperties => (tile.roomColor ? ({ "--room": tile.roomColor } as CSSProperties) : {});
 
-/** Clicks on a control inside a tile do not open its panel. */
-const fromControl = (event: MouseEvent) => (event.target as HTMLElement).closest("a, button, select, audio, video[controls]") !== null;
+/** Clicks on a control inside a tile do not open its panel (a drag on a 3D part turns it). */
+const fromControl = (event: MouseEvent) => (event.target as HTMLElement).closest("a, button, select, audio, video[controls], .watch-model") !== null;
 
 function Tile(props: {
   tile: LiveTile;
   now: number;
   chosen: string | undefined;
   play: boolean;
+  draw: boolean;
   onChoose: (path: string) => void;
   onOpen: () => void;
   onZoom: (image: { url: string; caption: string }) => void;
 }) {
-  const { tile, now, chosen, play } = props;
+  const { tile, now, chosen, play, draw } = props;
   const piece = tile.piece;
   const index = piece ? shownIndex(piece, chosen) : -1;
   const shown = piece ? piece.versions[index]! : null;
@@ -311,7 +334,7 @@ function Tile(props: {
       </header>
       <div className="watch-tile-body">
         {piece && shown && (
-          <PieceView piece={piece} version={shown} name={tile.agentName} play={play} large={false} onZoom={props.onZoom} />
+          <PieceView piece={piece} version={shown} name={tile.agentName} play={play} draw={draw} large={false} onZoom={props.onZoom} />
         )}
         <div className="watch-info">
           <Info tile={tile} now={now} pin={piece?.source === "pin" ? shown : null} />
@@ -386,6 +409,8 @@ function PieceView(props: {
   version: PieceVersion;
   name: string;
   play: boolean;
+  /** A 3D part is drawn (the viewer), else shown as a card. */
+  draw: boolean;
   large: boolean;
   onZoom: (image: { url: string; caption: string }) => void;
 }) {
@@ -394,6 +419,7 @@ function PieceView(props: {
   const pinned = piece.source === "pin";
   if (version.kind === "text") return <TextPiece piece={piece} version={version} />;
   const fileName = version.path.split("/").pop() ?? version.path;
+  if (version.kind === "model") return <ModelPiece piece={piece} version={version} name={fileName} draw={props.draw} large={large} />;
   return (
     <div className="watch-piece" data-large={large ? "" : undefined}>
       {version.kind === "image" ? (
@@ -442,6 +468,60 @@ function PieceView(props: {
           <audio src={version.url!} controls preload="metadata" />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A 3D part: the desk's viewer, without remarks, which loads the file again
+ * only when its address changes (a new version, `&v=`); or, in a tile that
+ * does not draw it, a card that the click on the tile opens large.
+ */
+function ModelPiece({ piece, version, name, draw, large }: { piece: Piece; version: PieceVersion; name: string; draw: boolean; large: boolean }) {
+  const format = modelFormat(version.path);
+  const pinned = piece.source === "pin" ? "" : undefined;
+  const details = `${strings.attachments.kind.model}, ${formatSize(version.size)}, ${t.writtenAt(formatClock(version.at))}`;
+  if (!draw || !format) {
+    return (
+      <div className="watch-piece">
+        <div className="watch-model-card" data-pin={pinned}>
+          <SourceBadge source={piece.source} />
+          <CubeIcon />
+          <b>{name}</b>
+          <small>{details}</small>
+          <span className="watch-model-hint">{t.model.open}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="watch-piece" data-large={large ? "" : undefined}>
+      <div className="watch-model" data-pin={pinned}>
+        <div className="watch-model-head">
+          <SourceBadge source={piece.source} />
+          <b title={version.path}>{name}</b>
+        </div>
+        <ModelViewer
+          url={version.url!}
+          name={name}
+          fileId={0}
+          format={format}
+          poster={null}
+          pins={NO_PINS}
+          picking={false}
+          onPick={ignore}
+          onPin={ignore}
+          compact={!large}
+        />
+        {large && (
+          <p className="watch-model-foot">
+            <small>{details}</small>
+            <a className="watch-link" href={version.url!} download={name}>
+              {t.model.download}
+            </a>
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -619,7 +699,7 @@ function Panel(props: {
               {piece && shown && comparing && <Compare piece={piece} name={tile.agentName} onZoom={props.onZoom} />}
               {piece && shown && !comparing && (
                 <div className="watch-stage-piece">
-                  <PieceView piece={piece} version={shown} name={tile.agentName} play={!props.reducedMotion} large onZoom={props.onZoom} />
+                  <PieceView piece={piece} version={shown} name={tile.agentName} play={!props.reducedMotion} draw large onZoom={props.onZoom} />
                 </div>
               )}
               {piece && !comparing && <Strip piece={piece} index={index} onChoose={(path) => props.onChoose(runId, path)} />}
@@ -695,7 +775,7 @@ function Compare({ piece, name, onZoom }: { piece: Piece; name: string; onZoom: 
           </option>
         ))}
       </select>
-      <PieceView piece={piece} version={piece.versions[value]!} name={name} play={false} large onZoom={onZoom} />
+      <PieceView piece={piece} version={piece.versions[value]!} name={name} play={false} draw={false} large onZoom={onZoom} />
     </div>
   );
   return (

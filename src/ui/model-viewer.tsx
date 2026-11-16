@@ -90,6 +90,7 @@ export default function ModelViewer({
   picking,
   onPick,
   onPin,
+  compact = false,
 }: {
   url: string;
   name: string;
@@ -101,6 +102,8 @@ export default function ModelViewer({
   picking: boolean;
   onPick: (point: ModelPoint) => void;
   onPin: (key: string) => void;
+  /** The part alone, without its dimensions, the row of views and the help line (a tile of the surveillance room). */
+  compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneHandle | null>(null);
@@ -401,7 +404,7 @@ export default function ModelViewer({
             <p>{status === "loading" ? strings.attachments.loading3d : strings.attachments.error3d}</p>
           </div>
         )}
-        {status === "ready" && dimensions && size && (
+        {status === "ready" && !compact && dimensions && size && (
           <p
             className="pointer-events-none absolute left-2 top-2 max-w-[calc(100%-4rem)] rounded bg-card/90 px-2 py-1 text-xs tabular-nums shadow-sm"
             title={strings.attachments.dimensionsLabel}
@@ -455,7 +458,7 @@ export default function ModelViewer({
             </div>
           ))}
       </div>
-      {status === "ready" && (
+      {status === "ready" && !compact && (
         <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap" role="toolbar" aria-label={strings.attachments.viewsLabel}>
           {(Object.keys(VIEWS) as View[]).map((view) => (
             <button key={view} type="button" className={viewButton} onClick={() => sceneRef.current?.view(view)}>
@@ -464,7 +467,7 @@ export default function ModelViewer({
           ))}
         </div>
       )}
-      {status === "ready" && <p className="text-xs text-muted">{strings.attachments.viewerHelp}</p>}
+      {status === "ready" && !compact && <p className="text-xs text-muted">{strings.attachments.viewerHelp}</p>}
     </div>
   );
 }

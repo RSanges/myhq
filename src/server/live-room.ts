@@ -16,16 +16,16 @@ import { patternRegExp, relativeInside } from "./write-guard-lib.mjs";
  * (room.json `pieces`): the matching files written during the run.
  */
 
-export type PieceKind = "video" | "image" | "audio" | "text";
+export type PieceKind = "video" | "image" | "audio" | "model" | "text";
 
 /** The text files a piece may be: shown as their path and a short excerpt, never served raw. */
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".srt", ".vtt", ".html", ".css", ".js", ".ts", ".tsx", ".py", ".yaml", ".yml"]);
 
-/** The kind of a piece from its name: the media kinds of the attachments, text from a short list, null otherwise. */
+/** The kind of a piece from its name: the media and 3D kinds of the attachments, text from a short list, null otherwise. */
 export function pieceKind(name: string): PieceKind | null {
   const ext = path.extname(name).toLowerCase();
   const kind = ATTACHMENT_TYPES[ext]?.kind;
-  if (kind === "video" || kind === "image" || kind === "audio") return kind;
+  if (kind === "video" || kind === "image" || kind === "audio" || kind === "model") return kind;
   return TEXT_EXTENSIONS.has(ext) ? "text" : null;
 }
 
@@ -154,7 +154,7 @@ export type PieceVersionDto = {
   /** When the file was last written (followed), or when the agent showed it (pinned). */
   at: string;
   size: number;
-  /** Where a media file is served (GET /api/live/runs/<id>/file); null for a text piece. */
+  /** Where a media file or a 3D part is served (GET /api/live/runs/<id>/file); null for a text piece. */
   url: string | null;
   /** The start of a text piece; null otherwise, or for a text piece that cannot be read as text. */
   excerpt: string | null;
@@ -380,7 +380,7 @@ export function readLiveRun(
 /**
  * The media file of a run that GET /api/live/runs/<id>/file may serve, opened
  * once: inside the agent's working directory once links are followed, a
- * regular file of a media kind, at most `maxBytes`, and either shown by this
+ * regular file of a media kind or a 3D part, at most `maxBytes`, and either shown by this
  * run (hq_show) or matching the agent's patterns, outside `.git`,
  * `node_modules` and `.claude`, with a modification time inside the run. The
  * run must still be in the room (in progress, or ended under LIVE_DONE_MS

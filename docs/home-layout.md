@@ -120,7 +120,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram), or the answers of the owner to its questions (`hq_ask`), starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
 | `agents[].resources` | no | Shared resources the agent's runs hold, for example `["gpu"]` (lowercase letters, digits, `-` or `_`, each listed once). Two runs holding a common resource never run at once, in any room (see "Shared resources" below). Default: none. |
-| `agents[].pieces` | no | What the agent works on, shown large on its tile of the surveillance room (`/surveillance`): 1 to 8 patterns relative to its working directory, written as the write rules take them (`renders/**/*.mp4`, `drafts/*.md`; `**` any depth, `*` and `?` inside one name). MyHQ follows the matching files written during the run, newest first (see "The piece" below). Default: none, the tile shows the agent's words only. |
+| `agents[].pieces` | no | What the agent works on, shown large on its tile of the surveillance room (`/surveillance`): 1 to 8 patterns relative to its working directory, written as the write rules take them (`renders/**/*.mp4`, `parts/*.3mf`, `drafts/*.md`; `**` any depth, `*` and `?` inside one name). MyHQ follows the matching files written during the run, newest first (see "The piece" below). Default: none, the tile shows the agent's words only. |
 | `agents[].supervisor` | no | `true`: the supervisor of the Standard. It reads what is stuck (`hq_blocked`), writes to any agent of any room, reads the items of every room, relaunches a stuck entry once (`hq_relaunch`), leaves a note for the owner on it (`hq_blocked_note`) and closes, with its reason, what it settled (`hq_blocked_close`, the owner may reopen it), never a request of the owner nor an entry handed to the owner; it submits nothing to approve. MyHQ wakes it when something new is stuck, and every 30 minutes at most while entries remain open (see "The supervisor" in `architecture.md`). It also checks a run that reaches `HQ_RUN_TIMEOUT_MINUTES` (`hq_run_status`), and extends it (`hq_run_extend`) or stops it (`hq_run_stop`) instead of letting MyHQ interrupt it (see "Long runs"). Give it only the hq tools. MyHQ wakes the first one of the home. Default: `false`. |
 | `agents[].skills` | no | Claude Code skills the agent follows: folders relative to the **room directory**, each holding a `SKILL.md` (see "Skills" below). Default: none. |
 | `agents[].effort` | no | Reasoning effort of the agent's runs, passed as `--effort`: `low`, `medium`, `high`, `xhigh` or `max`. `low` suits an agent that formats more than it thinks (a brief, a recap, a watch). Default: the CLI's own (see "Run options" below). |
@@ -422,8 +422,11 @@ everything in its working directory: the role declares its piece with
 were written during the run, newest first, at most 12; the latest is shown
 large and the earlier ones form the strip of versions of the tile, marked
 « Suivi auto ». A video plays muted in a loop, an image opens large on a
-click, a sound gets a plain player, and a text file shows its path and its
-first lines. Other kinds (a 3D part, a PDF) are never followed.
+click, a sound gets a plain player, a 3D part (`.3mf`, `.stl`, `.glb`, as for
+the attachments) is drawn by the desk's 3D viewer (in the detail panel, and
+in at most two tiles at once; the others show a card), and a text file shows
+its path and its first lines. Other kinds (a PDF, a STEP file) are never
+followed.
 
 ```json
 { "id": "editor", "pieces": ["renders/*.mp4"] }
@@ -431,7 +434,10 @@ first lines. Other kinds (a 3D part, a PDF) are never followed.
 
 Name the files of a role with a version (`render-01.mp4`, `render-02.mp4`,
 or a time): a file written again under the same name is one version, the
-latest, and the strip has nothing to compare. Point the patterns at the
+latest, and the strip has nothing to compare. A 3D part written again under
+the same name is drawn again from its new version. A role that writes parts
+and render boards next to them may follow both (`["parts/*.3mf",
+"parts/*.png"]`): the newest file is the piece, whichever kind it is. Point the patterns at the
 deliverable, not at its by-products (`renders/*.mp4`, not `**/*.png` when the
 renders leave control frames next to them).
 

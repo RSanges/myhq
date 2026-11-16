@@ -6,13 +6,13 @@ import { app } from "../src/server/app";
 import { liveFileResponse, liveRoomResponse, liveRunResponse } from "../src/server/live-routes";
 import { makeHome } from "./helpers";
 
-test("the live routes: the tiles, one run, and its media file with a weak ETag that is revalidated", async () => {
+test("the live routes: the tiles, one run, and its media file or 3D part with a weak ETag that is revalidated", async () => {
   const config = makeHome(
     {},
     {
       name: "demo",
       targetRepo: "x",
-      agents: [{ id: "scout", name: "Scout", role: "roles/scout.md", model: "sonnet", allowedTools: ["Write"], pieces: ["renders/*.png"] }],
+      agents: [{ id: "scout", name: "Scout", role: "roles/scout.md", model: "sonnet", allowedTools: ["Write"], pieces: ["renders/*.png", "parts/*.3mf"] }],
     },
   );
   const saved = process.env.MYHQ_HOME;
@@ -73,6 +73,19 @@ test("the live routes: the tiles, one run, and its media file with a weak ETag t
       assert.doesNotMatch(await refused.text(), /secret|none|\.\./, "the answer does not repeat the path");
     }
     assert.equal((await liveFileResponse(new Request("http://x/f"), String(runId))).status, 400);
+
+    // A 3D part is served like a media file, with its own type.
+    fs.mkdirSync(path.join(work, "parts"), { recursive: true });
+    fs.writeFileSync(path.join(work, "parts", "bracket.3mf"), "3mf bytes");
+    const part = await liveFileResponse(new Request("http://x/f?path=parts%2Fbracket.3mf"), String(runId));
+    assert.equal(part.status, 200);
+    assert.equal(part.headers.get("content-type"), "model/3mf");
+    assert.equal(part.headers.get("cache-control"), "private, no-cache");
+    const partTag = part.headers.get("etag")!;
+    assert.match(partTag, /^W\/"9-\d+"$/);
+    assert.equal(await part.text(), "3mf bytes");
+    const partAgain = new Request("http://x/f?path=parts%2Fbracket.3mf", { headers: { "if-none-match": partTag } });
+    assert.equal((await liveFileResponse(partAgain, String(runId))).status, 304);
   } finally {
     if (saved === undefined) delete process.env.MYHQ_HOME;
     else process.env.MYHQ_HOME = saved;

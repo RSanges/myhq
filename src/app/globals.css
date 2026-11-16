@@ -4227,6 +4227,79 @@ body {
   width: 100%;
 }
 
+.watch-model {
+  width: 100%;
+  min-width: 0;
+}
+
+.watch-model-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.watch-model-head b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-model-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.watch-model-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  min-height: 10rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: var(--soft);
+  font-size: 0.84rem;
+}
+
+.watch-model-card[data-pin] {
+  outline: 3px solid var(--note-open);
+  outline-offset: -3px;
+}
+
+.watch-model-card > svg {
+  width: 2.2rem;
+  height: 2.2rem;
+  margin-top: 0.3rem;
+  color: var(--muted);
+}
+
+.watch-model-card b {
+  overflow-wrap: anywhere;
+}
+
+.watch-model-card small,
+.watch-model-hint {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.watch-model-hint {
+  margin-top: auto;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .watch-code {
   overflow: hidden;
   border-radius: 0.8rem;

@@ -61,7 +61,25 @@ export function autoplayRuns(tiles: readonly LiveTile[], chosen: ReadonlyMap<num
   return runs;
 }
 
-/** Two versions side by side make sense for two videos or two images. */
+/** The most tiles that draw their 3D part at once (a WebGL context and a download each); the others show a card. */
+export const MODEL_VIEWERS_MAX = 2;
+
+/**
+ * The runs whose tile draws its 3D part: the live tiles (not done) whose
+ * shown version is a model, MODEL_VIEWERS_MAX at most, in the order of the
+ * grid. The detail panel always draws its own.
+ */
+export function modelViewerRuns(tiles: readonly LiveTile[], chosen: ReadonlyMap<number, string>): Set<number> {
+  const runs = new Set<number>();
+  for (const tile of tiles) {
+    if (runs.size >= MODEL_VIEWERS_MAX) break;
+    if (tile.state === "done" || !tile.piece) continue;
+    if (tile.piece.versions[shownIndex(tile.piece, chosen.get(tile.runId))]?.kind === "model") runs.add(tile.runId);
+  }
+  return runs;
+}
+
+/** Two versions side by side make sense for two videos or two images (never two 3D parts: two viewers, two downloads). */
 export function canCompare(piece: Piece | null): boolean {
   if (!piece || piece.versions.length < 2) return false;
   const kind = piece.versions[0]!.kind;
