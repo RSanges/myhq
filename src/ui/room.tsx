@@ -302,15 +302,17 @@ export function RoomPage() {
     [selected, model.approvals],
   );
 
-  // What the agent whose sheet is open does: its header shows it. Its thread lists the steps again at each new status.
+  // What the agent whose sheet is open does: its header shows it. Its thread lists the steps again at each new status,
+  // on the result of the call: the HQ server has stored the status by then (the call itself comes before).
   const selectedActivity = selected ? (statusOf.get(selected.key)?.activity ?? null) : null;
   const selectedStatus = useMemo(() => {
     if (selected === null) return 0;
+    const calls = new Set<unknown>();
     let latest = 0;
     for (const event of model.events) {
-      if (event.room === selected.room && event.agentId === selected.id && event.type === "tool_call" && event.data.name === HQ_STATUS_TOOL) {
-        latest = event.id;
-      }
+      if (event.room !== selected.room || event.agentId !== selected.id) continue;
+      if (event.type === "tool_call" && event.data.name === HQ_STATUS_TOOL) calls.add(event.data.id);
+      if (event.type === "tool_result" && calls.has(event.data.toolUseId)) latest = event.id;
     }
     return latest;
   }, [selected, model.events]);
