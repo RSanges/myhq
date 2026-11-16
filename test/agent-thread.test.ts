@@ -5,7 +5,7 @@ import { readThread } from "../src/server/agent-thread";
 import { getDbAt, type Db } from "../src/server/db";
 import { QUESTION_TYPE } from "../src/server/questions";
 import { loadHome, syncHome } from "../src/server/rooms";
-import { localDay, runDurationMs, sheetState, summaryTail, threadLines } from "../src/ui/agent-thread-model";
+import { localDay, runDurationMs, sheetState, subjectTabs, summaryTail, threadLines } from "../src/ui/agent-thread-model";
 import type { ThreadEntry } from "../src/ui/schemas";
 import { makeHome } from "./helpers";
 
@@ -173,7 +173,7 @@ test("the state of the header: answering first, then at work with what it does, 
 
 test("an answer that proposes a run carries its card, a failed one never does", () => {
   const at = new Date(2026, 10, 8, 9, 0).toISOString();
-  const proposal = { task: "Refais le clip B", state: "pending" as const, runId: null, decidedAt: null };
+  const proposal = { task: "Refais le clip B", state: "pending" as const, runId: null, decidedAt: null, reviseId: null };
   const lines = threadLines(
     [
       { kind: "question", at, question: { ...question(1, at, "done", "Je lance un tour."), proposal } },
@@ -185,4 +185,22 @@ test("an answer that proposes a run carries its card, a failed one never does", 
   assert.ok(done?.kind === "reply" && done.proposal?.task === "Refais le clip B");
   const failed = lines[4];
   assert.ok(failed?.kind === "reply" && failed.proposal === null);
+});
+
+test("the tabs of the sheet: « Général » first, the open subjects, the current one marked, an archived one shown while it is read", () => {
+  const tabs = [
+    { id: null, title: null, working: false, waiting: true },
+    { id: 4, title: "Shop sign", working: true, waiting: false },
+  ];
+  const sign = { id: 4, title: "Shop sign", status: "open" as const, createdAt: "2026-11-10T09:00:00.000Z", archivedAt: null };
+  assert.deepEqual(subjectTabs(tabs, 4, sign), [
+    { key: "subject:general", id: null, title: null, working: false, waiting: true, current: false, archived: false },
+    { key: "subject:4", id: 4, title: "Shop sign", working: true, waiting: false, current: true, archived: false },
+  ]);
+  const old = { ...sign, id: 9, title: "Old poster", status: "archived" as const, archivedAt: "2026-11-11T09:00:00.000Z" };
+  const reading = subjectTabs(tabs, 9, old);
+  assert.equal(reading.length, 3);
+  assert.deepEqual(reading.at(-1), { key: "subject:9", id: 9, title: "Old poster", working: false, waiting: false, current: true, archived: true });
+  // Before the server gave its list (an older one gives none), the general tab is there, current.
+  assert.deepEqual(subjectTabs([], null, null).map((tab) => [tab.key, tab.current]), [["subject:general", true]]);
 });

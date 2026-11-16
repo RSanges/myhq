@@ -36,6 +36,8 @@ import {
   routinesResponseSchema,
   runResponseSchema,
   stateSchema,
+  subjectResponseSchema,
+  subjectsResponseSchema,
   threadSchema,
   usageSchema,
   type AgentQuestion,
@@ -49,6 +51,7 @@ import {
   type LiveRun,
   type Run,
   type State,
+  type Subject,
   type Thread,
   type Usage,
 } from "./schemas";
@@ -176,16 +179,37 @@ export async function startRun(room: string, agent: string, task: string): Promi
   return (await request("/api/runs", runResponseSchema, jsonInit("POST", body))).run;
 }
 
-const askUrl = (room: string, agent: string) =>
-  `/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}/ask`;
+const agentUrl = (room: string, agent: string) => `/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}`;
+const askUrl = (room: string, agent: string) => `${agentUrl(room, agent)}/ask`;
 
-/** The thread of an agent's sheet: the discussion, its runs and its items, oldest first. */
-export const fetchThread = (room: string, agent: string): Promise<Thread> =>
-  request(`/api/rooms/${encodeURIComponent(room)}/agents/${encodeURIComponent(agent)}/thread`, threadSchema);
+/** The thread of an agent's sheet in a subject (null: the general one): the discussion, its runs and its items, oldest first, with the tabs. */
+export const fetchThread = (room: string, agent: string, subject: number | null = null): Promise<Thread> =>
+  request(`${agentUrl(room, agent)}/thread${subject === null ? "" : `?subject=${subject}`}`, threadSchema);
 
-/** Asks an agent a question: it answers in the background, the discussion shows it. */
-export async function askAgent(room: string, agent: string, question: string): Promise<AgentQuestion> {
-  return (await request(askUrl(room, agent), askResponseSchema, jsonInit("POST", { question: question.trim() }))).question;
+/** Asks an agent a question in a subject (null: the general one): it answers in the background, the discussion shows it. */
+export async function askAgent(room: string, agent: string, question: string, subject: number | null = null): Promise<AgentQuestion> {
+  const body = { question: question.trim(), ...(subject === null ? {} : { subject }) };
+  return (await request(askUrl(room, agent), askResponseSchema, jsonInit("POST", body))).question;
+}
+
+/** The archived subjects of an agent, the latest archived first. */
+export async function fetchArchivedSubjects(room: string, agent: string): Promise<Subject[]> {
+  return (await request(`${agentUrl(room, agent)}/subjects?archived=1`, subjectsResponseSchema)).subjects;
+}
+
+/** Opens a new subject with an agent, without a title: the owner's first message in it gives one. */
+export async function createSubject(room: string, agent: string): Promise<Subject> {
+  return (await request(`${agentUrl(room, agent)}/subjects`, subjectResponseSchema, jsonInit("POST", {}))).subject;
+}
+
+/** Renames a subject, archives or reopens it. */
+export async function updateSubject(
+  room: string,
+  agent: string,
+  id: number,
+  patch: { title?: string; status?: "open" | "archived" },
+): Promise<Subject> {
+  return (await request(`${agentUrl(room, agent)}/subjects/${id}`, subjectResponseSchema, jsonInit("PATCH", patch))).subject;
 }
 
 /**

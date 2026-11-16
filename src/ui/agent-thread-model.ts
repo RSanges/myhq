@@ -1,4 +1,4 @@
-import type { AgentQuestion, ThreadEntry, ThreadItem, ThreadRun } from "./schemas";
+import type { AgentQuestion, Subject, SubjectTab, ThreadEntry, ThreadItem, ThreadRun } from "./schemas";
 
 // The thread of an agent's sheet, as the interface draws it: the entries of
 // GET /api/rooms/<room>/agents/<agent>/thread turned into the lines of a
@@ -172,6 +172,34 @@ export function threadLines(entries: readonly ThreadEntry[], now: number): Threa
         });
         break;
     }
+  }
+  return lines;
+}
+
+/** A tab of the sheet, as the tab bar draws it: `id` null is « Général », `title` null a subject with no title yet. */
+export type SubjectTabLine = SubjectTab & {
+  key: string;
+  /** The subject the thread shows. */
+  current: boolean;
+  /** An archived subject, read from the list of archived ones: a tab only while it is read. */
+  archived: boolean;
+};
+
+/**
+ * The tabs of the sheet: the general subject first (always, even before the
+ * server gave the list), then the open subjects, and the subject read when it
+ * is an archived one, last. The current one is marked.
+ */
+export function subjectTabs(tabs: readonly SubjectTab[], current: number | null, subject: Subject | null): SubjectTabLine[] {
+  const open = tabs.some((tab) => tab.id === null) ? tabs : [{ id: null, title: null, working: false, waiting: false }, ...tabs];
+  const lines = open.map((tab) => ({
+    ...tab,
+    key: tab.id === null ? "subject:general" : `subject:${tab.id}`,
+    current: tab.id === current,
+    archived: false,
+  }));
+  if (subject && subject.id === current && subject.status === "archived" && !open.some((tab) => tab.id === subject.id)) {
+    lines.push({ id: subject.id, title: subject.title, working: false, waiting: false, key: `subject:${subject.id}`, current: true, archived: true });
   }
   return lines;
 }

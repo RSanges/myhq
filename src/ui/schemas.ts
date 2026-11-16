@@ -349,10 +349,32 @@ export const agentQuestionSchema = z.object({
       state: z.enum(["pending", "launched", "dismissed"]),
       runId: z.number().int().nullable(),
       decidedAt: z.string().nullable(),
+      /** The item the answer proposes to revise instead of a run (`task` is then the note); absent from an older server: none. */
+      reviseId: z.number().int().nullable().default(null),
     })
     .nullable()
     .default(null),
 });
+
+/** A subject of the owner with an agent (docs/api.md, "Subjects"); `title` null: none yet. */
+export const subjectSchema = z.object({
+  id: z.number().int(),
+  title: z.string().nullable(),
+  status: z.enum(["open", "archived"]),
+  createdAt: z.string(),
+  archivedAt: z.string().nullable(),
+});
+
+/** A tab of an agent's sheet: the general subject (`id` null) or an open one, with what it shows. */
+export const subjectTabSchema = z.object({
+  id: z.number().int().nullable(),
+  title: z.string().nullable(),
+  working: z.boolean(),
+  waiting: z.boolean(),
+});
+
+export const subjectResponseSchema = z.object({ subject: subjectSchema });
+export const subjectsResponseSchema = z.object({ subjects: z.array(subjectSchema) });
 
 /** `GET /api/rooms/[room]/agents/[agent]/ask`: the discussion with an agent. */
 export const discussionSchema = z.object({
@@ -405,6 +427,10 @@ export const threadSchema = z.object({
   agent: z.object({ room: z.string(), id: z.string(), name: z.string() }),
   entries: z.array(threadEntrySchema),
   busy: z.boolean(),
+  /** The subject read, null: the general one; absent from an older server: the general one. */
+  subject: subjectSchema.nullable().default(null),
+  /** The tabs of the sheet; absent from an older server: none. */
+  subjects: z.array(subjectTabSchema).default([]),
 });
 
 export const readySchema = z.object({ cursor: z.number().int() });
@@ -531,6 +557,8 @@ export type ThreadRun = z.infer<typeof threadRunSchema>;
 export type ThreadItem = z.infer<typeof threadItemSchema>;
 export type ThreadEntry = z.infer<typeof threadEntrySchema>;
 export type Thread = z.infer<typeof threadSchema>;
+export type Subject = z.infer<typeof subjectSchema>;
+export type SubjectTab = z.infer<typeof subjectTabSchema>;
 export type DirListing = z.infer<typeof dirListingSchema>;
 export type Reception = z.infer<typeof receptionSchema>;
 export type Firing = z.infer<typeof firingSchema>;

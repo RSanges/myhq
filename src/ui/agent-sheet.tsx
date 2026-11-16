@@ -3,15 +3,24 @@
 import Link from "next/link";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { recentRuns } from "./agent-runs";
-import { localDay, sheetState, threadLines, type RunSteps, type SheetState, type ThreadLine } from "./agent-thread-model";
-import { errorText, startRun } from "./api";
+import {
+  localDay,
+  sheetState,
+  subjectTabs,
+  threadLines,
+  type RunSteps,
+  type SheetState,
+  type SubjectTabLine,
+  type ThreadLine,
+} from "./agent-thread-model";
+import { createSubject, errorText, fetchArchivedSubjects, startRun, updateSubject } from "./api";
 import { approvalHash, DESK_PATH, runHash } from "./deep-link";
 import { FeedRow } from "./feed";
 import { formatClock, formatCost, formatDateTime, formatDuration, formatShortDay } from "./format";
 import { Markdown } from "./markdown-view";
 import { roleFileName, type Action, type FeedEntry, type TeamAgent } from "./model";
 import { chipStyle } from "./room-color";
-import type { AgentQuestion, HqEvent } from "./schemas";
+import type { AgentQuestion, HqEvent, Subject } from "./schemas";
 import { strings } from "./strings";
 import { Routines } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
@@ -22,6 +31,8 @@ const t = strings.room.sheet;
 
 /** The longest message, as the API takes it (agent-questions.ts QUESTION_MAX_CHARS). */
 const MESSAGE_MAX_CHARS = 4_000;
+/** The longest title of a subject, as the API takes it (subjects.ts SUBJECT_TITLE_MAX_CHARS). */
+const SUBJECT_TITLE_MAX_CHARS = 60;
 
 /**
  * Focus for a sheet: what opened it is remembered, the element `first` gives
@@ -186,30 +197,38 @@ function ProposalCard({
 }) {
   const p = t.thread.proposal;
   const busy = decide.deciding === questionId;
+  // A revision of an item waits for the run in progress, if any: it is never refused for it.
+  const revision = proposal.reviseId;
+  const blocked = decide.working && revision === null;
   return (
-    <section className="agent-proposal" data-state={proposal.state} aria-label={p.label}>
-      <p className="agent-proposal-lead">{p.lead}</p>
+    <section className="agent-proposal" data-state={proposal.state} aria-label={revision === null ? p.label : p.reviseLabel}>
+      <p className="agent-proposal-lead">{revision === null ? p.lead : p.reviseLead(revision)}</p>
       <p className="agent-proposal-task">{proposal.task}</p>
+      {revision !== null && (
+        <Link className="agent-link" href={`${DESK_PATH}${approvalHash(revision)}`}>
+          {p.openItem}
+        </Link>
+      )}
       {proposal.state === "pending" ? (
         <>
           <div className="agent-proposal-actions">
             <button
               type="button"
               className="chat-btn chat-btn-primary"
-              disabled={busy || decide.working}
+              disabled={busy || blocked}
               onClick={() => void decide.onDecide(questionId, "launch")}
             >
-              {busy ? p.launching : p.launch}
+              {busy ? p.launching : revision === null ? p.launch : p.revise}
             </button>
             <button type="button" className="chat-btn" disabled={busy} onClick={() => void decide.onDecide(questionId, "dismiss")}>
               {p.talk}
             </button>
           </div>
-          {decide.working && <p className="agent-proposal-note">{p.busy(name)}</p>}
+          {blocked && <p className="agent-proposal-note">{p.busy(name)}</p>}
         </>
       ) : proposal.state === "launched" ? (
         <p className="agent-proposal-note" role="status">
-          <span className="agent-proposal-done">{p.launched(proposal.runId)}</span>
+          <span className="agent-proposal-done">{revision === null ? p.launched(proposal.runId) : p.revised}</span>
           {proposal.runId !== null && (
             <>
               {" "}
@@ -485,6 +504,182 @@ function AgentSettings({
 }
 
 /**
+ * The tabs of the sheet, one per subject: « Général », the open subjects (a
+ * mark when a run goes on one, another when an item of it waits for the
+ * owner), « + » for a new one, and the archived ones folded behind a link,
+ * read when it opens.
+ */
+function SubjectTabs({
+  tabs,
+  name,
+  creating,
+  onSelect,
+  onCreate,
+  loadArchived,
+}: {
+  tabs: SubjectTabLine[];
+  name: string;
+  creating: boolean;
+  onSelect: (id: number | null) => void;
+  onCreate: () => void;
+  loadArchived: () => Promise<Subject[]>;
+}) {
+  const s = t.subjects;
+  const [archived, setArchived] = useState<Subject[] | null>(null);
+  const foldRef = useRef<HTMLDetailsElement>(null);
+  return (
+    <nav className="agent-subjects" aria-label={s.label(name)}>
+      <ul className="agent-subject-tabs">
+        {tabs.map((tab) => (
+          <li key={tab.key}>
+            <button
+              type="button"
+              className="agent-subject-tab"
+              aria-current={tab.current ? "true" : undefined}
+              data-archived={tab.archived ? "" : undefined}
+              onClick={() => onSelect(tab.id)}
+            >
+              <span className="agent-subject-name">{tab.id === null ? s.general : (tab.title ?? s.untitled)}</span>
+              {tab.working && (
+                <span className="agent-subject-mark" data-kind="working">
+                  <span className="sr-only">{s.working}</span>
+                </span>
+              )}
+              {tab.waiting && (
+                <span className="agent-subject-mark" data-kind="waiting">
+                  <span className="sr-only">{s.waiting}</span>
+                </span>
+              )}
+            </button>
+          </li>
+        ))}
+        <li>
+          <button type="button" className="agent-subject-tab agent-subject-add" aria-label={s.add} title={s.add} disabled={creating} onClick={onCreate}>
+            +
+          </button>
+        </li>
+      </ul>
+      <details
+        ref={foldRef}
+        className="agent-subject-archived"
+        onToggle={(event) => {
+          if (!event.currentTarget.open) return;
+          setArchived(null);
+          void loadArchived().then(setArchived);
+        }}
+      >
+        <summary className="chat-link">{s.archived}</summary>
+        <div className="agent-subject-fold">
+          {archived === null ? (
+            <p className="text-muted">{s.archivedLoading}</p>
+          ) : archived.length === 0 ? (
+            <p className="text-muted">{s.archivedNone}</p>
+          ) : (
+            <ul>
+              {archived.map((subject) => (
+                <li key={subject.id}>
+                  <button
+                    type="button"
+                    className="agent-link"
+                    onClick={() => {
+                      if (foldRef.current) foldRef.current.open = false;
+                      onSelect(subject.id);
+                    }}
+                  >
+                    {subject.title ?? s.untitled}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
+    </nav>
+  );
+}
+
+/** Under the tabs, for a subject other than « Général »: rename it, archive it, or reopen it when it is archived. */
+function SubjectHead({
+  subject,
+  busy,
+  onRename,
+  onArchive,
+  onReopen,
+}: {
+  subject: Subject;
+  busy: boolean;
+  onRename: (title: string) => Promise<void>;
+  onArchive: () => void;
+  onReopen: () => void;
+}) {
+  const s = t.subjects;
+  const ids = useId();
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState("");
+  if (editing) {
+    return (
+      <form
+        className="agent-subject-head"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (title.trim() === "") return;
+          void onRename(title.trim()).then(() => setEditing(false));
+        }}
+      >
+        <label htmlFor={`${ids}-title`} className="sr-only">
+          {s.renameLabel}
+        </label>
+        <input
+          id={`${ids}-title`}
+          className="chat-input agent-subject-input"
+          value={title}
+          maxLength={SUBJECT_TITLE_MAX_CHARS}
+          autoFocus
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setEditing(false);
+            }
+          }}
+        />
+        <button type="submit" className="chat-btn chat-btn-primary" disabled={busy || title.trim() === ""}>
+          {s.save}
+        </button>
+        <button type="button" className="chat-btn" onClick={() => setEditing(false)}>
+          {s.cancel}
+        </button>
+      </form>
+    );
+  }
+  return (
+    <div className="agent-subject-head">
+      {subject.status === "archived" && <p className="agent-subject-note">{s.isArchived}</p>}
+      <button
+        type="button"
+        className="chat-link"
+        disabled={busy}
+        onClick={() => {
+          setTitle(subject.title ?? "");
+          setEditing(true);
+        }}
+      >
+        {s.rename}
+      </button>
+      {subject.status === "archived" ? (
+        <button type="button" className="chat-link" disabled={busy} onClick={onReopen}>
+          {s.reopen}
+        </button>
+      ) : (
+        <button type="button" className="chat-link" title={s.archiveTitle} disabled={busy} onClick={onArchive}>
+          {s.archive}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * The sheet of an agent, opened from its character or its chip under the
  * floor: a conversation with it. The header says who it is and what it is
  * doing; the thread mixes the owner's messages, its answers (a question is
@@ -534,7 +729,15 @@ export function AgentSheet({
   );
 
   const runKey = agent.lastRun ? `${agent.lastRun.id}:${agent.lastRun.status}` : "";
-  const { thread, readAt, error, busy, send, decide, reset } = useAgentThread(agent.room, agent.id, `${runKey}|${refreshKey}`);
+  // The subject of the tab shown, null: « Général ».
+  const [subject, setSubject] = useState<number | null>(null);
+  const { thread, subjects, readAt, error, setError, busy, send, decide, reset, reload } = useAgentThread(
+    agent.room,
+    agent.id,
+    subject,
+    `${runKey}|${refreshKey}`,
+  );
+  const tabs = useMemo(() => subjectTabs(subjects, subject, thread?.subject ?? null), [subjects, subject, thread]);
   // The clock of the durations: when the thread was read, and every half minute while a run goes on.
   const [clock, setClock] = useState(0);
   const working = agent.state === "working";
@@ -597,6 +800,44 @@ export function AgentSheet({
     setResetting(true);
     await reset();
     setResetting(false);
+  };
+
+  // The subjects: open one, rename, archive or reopen the one shown; a failure says why above the field.
+  const [subjectBusy, setSubjectBusy] = useState(false);
+  const act = async (action: () => Promise<void>) => {
+    setSubjectBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setSubjectBusy(false);
+    }
+  };
+  const select = (id: number | null) => {
+    atBottom.current = true;
+    setSubject(id);
+  };
+  const openSubject = () =>
+    act(async () => {
+      select((await createSubject(agent.room, agent.id)).id);
+      fieldRef.current?.focus();
+    });
+  const changeSubject = (patch: { title?: string; status?: "open" | "archived" }) =>
+    act(async () => {
+      if (subject === null) return;
+      await updateSubject(agent.room, agent.id, subject, patch);
+      if (patch.status === "archived") select(null);
+      else reload();
+    });
+  const loadArchived = async (): Promise<Subject[]> => {
+    try {
+      return await fetchArchivedSubjects(agent.room, agent.id);
+    } catch (failure) {
+      setError(errorText(failure));
+      return [];
+    }
   };
 
   const tint = chipStyle(agent.color);
@@ -666,6 +907,24 @@ export function AgentSheet({
         </div>
       ) : (
         <>
+          <SubjectTabs
+            tabs={tabs}
+            name={agent.name}
+            creating={subjectBusy}
+            onSelect={select}
+            onCreate={() => void openSubject()}
+            loadArchived={loadArchived}
+          />
+          {thread?.subject && (
+            <SubjectHead
+              key={thread.subject.id}
+              subject={thread.subject}
+              busy={subjectBusy}
+              onRename={(title) => changeSubject({ title })}
+              onArchive={() => void changeSubject({ status: "archived" })}
+              onReopen={() => void changeSubject({ status: "open" })}
+            />
+          )}
           <div
             ref={logRef}
             className="chat-log agent-log"
@@ -677,7 +936,9 @@ export function AgentSheet({
             }}
           >
             {thread === null && !error && <p className="chat-note">{t.thread.loading}</p>}
-            {thread !== null && lines.length === 0 && <p className="agent-empty">{t.thread.empty(agent.name)}</p>}
+            {thread !== null && lines.length === 0 && (
+              <p className="agent-empty">{subject === null ? t.thread.empty(agent.name) : t.subjects.empty(agent.name)}</p>
+            )}
             <ul className="chat-msgs">
               {lines.map((line) => (
                 <Line key={line.key} line={line} name={agent.name} now={now} decide={decision} />
@@ -729,7 +990,7 @@ export function AgentSheet({
               <p id={`${ids}-hint`} className="chat-hint">
                 {busy ? t.composer.busy(agent.name) : wide ? t.composer.hint : ""}
               </p>
-              {hasMessages && (
+              {hasMessages && subject === null && (
                 <button
                   type="button"
                   className="chat-link"
