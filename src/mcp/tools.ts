@@ -257,7 +257,7 @@ export const inputs = {
       .trim()
       .min(1)
       .max(1_000)
-      .describe("The file to show, relative to your working directory: a video, an image, a sound or a text file."),
+      .describe("The file to show, relative to your working directory: a video, an image, a sound, a 3D part (3MF, STL, GLB) or a text file."),
     caption: z
       .string()
       .trim()
@@ -1207,7 +1207,7 @@ export function hqShow(db: Db, ctx: HqContext, args: Args<"hq_show">) {
   const stat = fs.statSync(real);
   if (!stat.isFile()) throw new ToolError(`hq_show: "${parsed.path}" is not a file.`);
   if (!pieceKind(relative)) {
-    throw new ToolError(`hq_show: "${parsed.path}" is not of a kind the owner can see (a video, an image, a sound or a text file).`);
+    throw new ToolError(`hq_show: "${parsed.path}" is not of a kind the owner can see (a video, an image, a sound, a 3D part or a text file).`);
   }
   const maxBytes = ctx.attachmentMaxBytes ?? attachmentMaxBytes({});
   if (stat.size > maxBytes) {

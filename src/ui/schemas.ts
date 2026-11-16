@@ -545,7 +545,7 @@ const liveStatusSchema = z.object({ text: z.string(), at: z.string() });
 
 export const pieceVersionSchema = z.object({
   path: z.string(),
-  kind: z.enum(["video", "image", "audio", "text"]),
+  kind: z.enum(["video", "image", "audio", "model", "text"]),
   at: z.string(),
   size: z.number(),
   url: z.string().nullable(),

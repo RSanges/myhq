@@ -335,6 +335,59 @@ test("liveFile: an .svg or an .html matching a pattern, or a followed file under
   }
 });
 
+test("3D parts: followed and shown as kind model, served with their type under the same guards as a media file", () => {
+  const agent = { id: "maker", name: "Maker", role: "roles/scout.md", model: "sonnet", allowedTools: ["Write"], pieces: ["parts/*.3mf", "parts/*.stl", "parts/*.glb"] };
+  const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [agent] });
+  const db = getDbAt(config.dbPath);
+  const home = loadHome(config.home);
+  syncHome(db, home);
+  const runId = addRun(db, "maker", NOW - 10 * MINUTE, null);
+  const dir = path.join(config.home, "data", "work", "demo", "maker");
+  write(path.join(dir, "parts", "bracket.3mf"), "3mf bytes", NOW - 2 * MINUTE);
+  write(path.join(dir, "parts", "lid.stl"), "solid lid", NOW - 3 * MINUTE);
+  write(path.join(dir, "parts", "case.glb"), "glTF", NOW - 4 * MINUTE);
+  write(path.join(dir, "parts", "old.3mf"), "o", NOW - 20 * MINUTE);
+  write(path.join(dir, "loose.3mf"), "l", NOW - MINUTE);
+  write(path.join(dir, "shown.3mf"), "s", NOW - 30 * MINUTE);
+  write(path.join(dir, "parts", "big.3mf"), Buffer.alloc(2048), NOW - MINUTE);
+
+  const tile = readLiveRoom(db, home, config.runsDir, NOW).find((each) => each.runId === runId)!;
+  assert.equal(tile.piece?.source, "auto");
+  assert.deepEqual(
+    tile.piece!.versions.map((version) => [version.path, version.kind, version.excerpt]),
+    [
+      ["parts/case.glb", "model", null],
+      ["parts/lid.stl", "model", null],
+      ["parts/bracket.3mf", "model", null],
+      ["parts/big.3mf", "model", null],
+    ],
+  );
+  assert.equal(tile.piece!.versions[2]!.url, `/api/live/runs/${runId}/file?path=parts%2Fbracket.3mf&v=${NOW - 2 * MINUTE}`);
+
+  assert.equal(served(db, home, runId, "parts/bracket.3mf", 1024, NOW).mime, "model/3mf");
+  assert.equal(served(db, home, runId, "parts\\lid.stl", 1024, NOW).mime, "model/stl");
+  assert.equal(served(db, home, runId, "parts/case.glb", 1024, NOW).mime, "model/gltf-binary");
+  for (const [rel, why] of [
+    ["parts/old.3mf", "written before the run"],
+    ["loose.3mf", "matches no pattern"],
+    ["shown.3mf", "not shown by the run"],
+    ["parts/big.3mf", "above the cap"],
+    ["parts/none.3mf", "missing"],
+  ] as const) {
+    assert.throws(() => liveFile(db, home, runId, rel, 1024, NOW), is404, `${rel}: ${why}`);
+  }
+  hqShow(db, { dbPath: "", runId, room: "demo", agentId: "maker", workDir: dir },{ path: "shown.3mf", caption: "La pièce à regarder" });
+  assert.equal(served(db, home, runId, "shown.3mf", 1024, NOW).mime, "model/3mf", "shown by the run: served whatever its time");
+  const pinned = readLiveRoom(db, home, config.runsDir, NOW).find((each) => each.runId === runId)!;
+  assert.deepEqual(pinned.piece!.versions.map((version) => [version.path, version.kind, version.caption]), [["shown.3mf", "model", "La pièce à regarder"]]);
+
+  // Written again under the same name: one version, a new address.
+  write(path.join(dir, "parts", "bracket.3mf"), "3mf bytes, again", NOW - MINUTE);
+  const again = listPieces(dir, agent.pieces, NOW - 10 * MINUTE, NOW).filter((each) => each.relative === "parts/bracket.3mf");
+  assert.equal(again.length, 1);
+  assert.equal(again[0]!.mtimeMs, NOW - MINUTE);
+});
+
 test("liveFile: a link or a junction leading out is a 404, even for a pinned file replaced later by one", (t) => {
   const { db, home, work } = office();
   const runId = addRun(db, "painter", NOW - 10 * MINUTE, null);

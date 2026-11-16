@@ -107,7 +107,7 @@ async function main(): Promise<void> {
       "hq_show",
       {
         description:
-          "Show the owner a file you are working on, with why they should look at it: it becomes the piece shown large on your tile of the surveillance room, marked as chosen by you, with your caption. `path` is relative to your working directory: a video, an image, a sound or a text file (no 3D part, no PDF), at most the attachment cap. Use it for the file that matters now (the render to look at, the contact sheet that shows a problem), not for every file you write. It publishes nothing and asks for no decision: to get a render validated, use hq_submit.",
+          "Show the owner a file you are working on, with why they should look at it: it becomes the piece shown large on your tile of the surveillance room, marked as chosen by you, with your caption. `path` is relative to your working directory: a video, an image, a sound, a 3D part (3MF, STL, GLB) or a text file (no PDF), at most the attachment cap. Use it for the file that matters now (the render to look at, the contact sheet that shows a problem), not for every file you write. It publishes nothing and asks for no decision: to get a render validated, use hq_submit.",
         inputSchema: inputs.hq_show,
       },
       async (args) => respond(() => hqShow(db, ctx, args)),

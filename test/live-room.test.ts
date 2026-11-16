@@ -64,18 +64,23 @@ function showSetup() {
   fs.writeFileSync(path.join(work, "renders", "plan-01.mp4"), "fake mp4");
   fs.writeFileSync(path.join(work, "notes.md"), "# Notes\n");
   fs.writeFileSync(path.join(work, "model.stl"), "solid x");
+  fs.writeFileSync(path.join(work, "plan.pdf"), "%PDF-1.7");
   fs.writeFileSync(path.join(work, "big.png"), Buffer.alloc(64));
   const ctx: HqContext = { ...setup.ctx, workDir: work, attachmentMaxBytes: 32 };
   return { ...setup, work, ctx };
 }
 
-test("pieceKind: video, image and audio from the attachment types, text from a short list, nothing else", () => {
+test("pieceKind: video, image, audio and 3D model from the attachment types, text from a short list, nothing else", () => {
   assert.equal(pieceKind("a/clip.MP4"), "video");
   assert.equal(pieceKind("sheet.webp"), "image");
   assert.equal(pieceKind("take.wav"), "audio");
+  assert.equal(pieceKind("parts/bracket.3mf"), "model");
+  assert.equal(pieceKind("part.STL"), "model");
+  assert.equal(pieceKind("part.glb"), "model");
+  assert.equal(pieceKind("part.gltf"), null, "only the 3D formats the attachments accept");
+  assert.equal(pieceKind("part.step"), null);
   assert.equal(pieceKind("notes.md"), "text");
   assert.equal(pieceKind("src/app.ts"), "text");
-  assert.equal(pieceKind("part.stl"), null);
   assert.equal(pieceKind("doc.pdf"), null);
   assert.equal(pieceKind("archive.zip"), null);
   assert.equal(pieceKind("logo.svg"), null, "a client's piece is never followed");
@@ -109,6 +114,7 @@ test("hq_show pins a file of a known kind with its caption, in POSIX form, and w
   const rows = db.prepare("SELECT run_id, room, agent_id, path, caption FROM run_pins").all();
   assert.deepEqual(rows, [{ run_id: runId, room: "demo", agent_id: "scout", path: "renders/plan-01.mp4", caption: "Regarde la fin du plan" }]);
   hqShow(db, ctx, { path: "notes.md", caption: "Le plan du film" });
+  assert.equal(hqShow(db, ctx, { path: "model.stl", caption: "La pièce assemblée" }).path, "model.stl");
   assert.equal(changeCount(db), before);
 });
 
@@ -116,7 +122,7 @@ test("hq_show refuses a file out of reach, of an unknown kind, above the cap, a 
   const { db, ctx } = showSetup();
   assert.throws(() => hqShow(db, ctx, { path: "../x.mp4", caption: "c" }), /climbs out/);
   assert.throws(() => hqShow(db, ctx, { path: "missing.mp4", caption: "c" }), /does not exist/);
-  assert.throws(() => hqShow(db, ctx, { path: "model.stl", caption: "c" }), /kind/);
+  assert.throws(() => hqShow(db, ctx, { path: "plan.pdf", caption: "c" }), /kind/);
   assert.throws(() => hqShow(db, ctx, { path: "renders", caption: "c" }), /not a file/);
   assert.throws(() => hqShow(db, ctx, { path: "big.png", caption: "c" }), /cap/);
   assert.throws(() => hqShow(db, ctx, { path: "notes.md", caption: "   " }));
