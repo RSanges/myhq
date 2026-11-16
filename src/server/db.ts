@@ -989,6 +989,37 @@ CREATE TABLE IF NOT EXISTS machine_vetoes (
 `,
     columns: [{ table: "tasks", column: "queue_rank", type: "REAL" }],
   },
+  {
+    version: 32,
+    // Several benches (benches.ts): the Git worktree of one subject of a
+    // parallel agent, on its own branch, created at the subject's first run
+    // from the agent's own branch. dir and base_dir are the absolute paths
+    // of the bench and of the agent's worktree it merges into. Once the
+    // subject is archived MyHQ closes it: state is what held the closing
+    // back and was told to the owner (dirty, conflict, base, error), tried
+    // the tips of the two branches it was last tried at, note_task_id the
+    // blocked task that tells the owner, closed_at when the worktree was
+    // removed and its branch deleted. A reopened subject gets a fresh bench
+    // in the same row. Idempotent, as the migrations after 14.
+    sql: `
+CREATE TABLE IF NOT EXISTS benches (
+  subject_id INTEGER PRIMARY KEY,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  dir TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_dir TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  state TEXT,
+  tried TEXT,
+  note_task_id INTEGER,
+  closed_at TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS benches_open ON benches (closed_at, room, agent_id);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

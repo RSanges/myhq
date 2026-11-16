@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { benchOf } from "./benches";
 import { memoryText, readMemories } from "./briefing";
 import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
 import { getConfig, liveConfig, type HqConfig } from "./config";
@@ -797,7 +798,10 @@ async function answerQuestion(p: {
       notebook: notebook ? notebookText(notebook, language, "question") : null,
     });
     // The working directory is read, never created here: an agent that never ran answers from a scratch folder.
-    const workDir = fs.existsSync(agent.workDir) ? agent.workDir : path.join(dir, "scratch");
+    // A subject with a bench (benches.ts) is answered from it, once its first run made it.
+    const bench = benchOf(agent, subject)?.dir;
+    const workDir =
+      bench && fs.existsSync(bench) ? bench : fs.existsSync(agent.workDir) ? agent.workDir : path.join(dir, "scratch");
     fs.mkdirSync(workDir, { recursive: true });
     // The notebook is the one place a question writes: the guard, not the prompt, holds it there (questionNotebook).
     const writes = notebook ? questionNotebook({ config, agent, workDir, notebook }) : null;

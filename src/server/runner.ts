@@ -41,6 +41,7 @@ import { skillTools, syncSkills } from "./skills";
 import { settleSubject } from "./subjects";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
+import { benchOf, openBench, type Bench } from "./benches";
 import { agentReadGuard } from "./read-guard";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
@@ -347,6 +348,15 @@ export function findAgent(config: HqConfig, roomName: string, agentId: string): 
   return { room, agent };
 }
 
+/** What a run in the bench of its subject is told (benches.ts): where it works, to commit, and to keep to its subject. */
+export function benchLines(bench: Bench): string {
+  return [
+    `This run works on the bench of this subject: ${bench.dir}, a Git worktree on branch ${bench.branch}, a copy of your branch ${bench.baseBranch}; your other subjects have benches of their own.`,
+    `Commit your work on ${bench.branch} before you finish: MyHQ merges it into ${bench.baseBranch} once the subject is validated, and uncommitted work blocks that closing.`,
+    "Write only what belongs to this subject. If it needs a change in files your other subjects share (a common model, a library, a tool), do not make it silently: say it first in your submission, or ask, because it can conflict with your other benches.",
+  ].join(" ");
+}
+
 /** The run instruction of an agent with `needs` or `resources` (machine.ts): one sentence, and none for the others. */
 export const MACHINE_CHECKED =
   "MyHQ checked the machine before starting you (memory, shared resources); you still check it before a heavy step if your role tells you to.";
@@ -365,6 +375,8 @@ export function buildPrompt(params: {
   folders?: RunFolders;
   /** The block of the owner's discussion with this agent (discussion-handoff.ts), left out: none. */
   discussion?: string | null;
+  /** The bench of the run's subject (benches.ts), left out or null: the agent's own working directory. */
+  bench?: Bench | null;
 }) {
   const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
@@ -417,6 +429,7 @@ export function buildPrompt(params: {
   if (declaresNeeds(params.agent) || (params.agent.resources ?? []).length > 0) {
     lines.push(MACHINE_CHECKED);
   }
+  if (params.bench) lines.push(benchLines(params.bench));
   lines.push(
     "",
     "Task:",
@@ -505,6 +518,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
         language: promptLanguage(config.home),
         folders,
         discussion,
+        bench: benchOf(agent, subjectId),
       });
     },
   });
@@ -1124,6 +1138,9 @@ async function execute(p: ExecuteParams): Promise<void> {
   const logFile = path.join(config.runsDir, `${run.id}.jsonl`);
   const mcpConfigPath = path.join(config.runsDir, `${run.id}.mcp.json`);
   active.mcpConfigPath = mcpConfigPath;
+  // A subject of a parallel agent with a worktree works in its own bench (benches.ts); everything below follows it.
+  const bench = benchOf(agent, run.subject_id);
+  const workDir = bench?.dir ?? agent.workDir;
   const attachmentMaxMb = process.env.HQ_ATTACHMENT_MAX_MB?.trim();
   const hqEnv: Record<string, string> = {
     HQ_DB_PATH: config.dbPath,
@@ -1131,7 +1148,7 @@ async function execute(p: ExecuteParams): Promise<void> {
     HQ_AGENT_ID: agent.id,
     HQ_ROOM: room.name,
     // hq_submit reads the attachments relative to it, and refuses anything outside.
-    HQ_WORK_DIR: agent.workDir,
+    HQ_WORK_DIR: workDir,
     // hq_blocked and hq_relaunch tell the reasons of the Standard and its guards with the app's own values.
     HQ_MAX_RUNS_PER_DAY: String((config.fromEnv ?? config).maxRunsPerDay),
     HQ_MESSAGE_WAKE_MINUTES: String(config.messageWakeIntervalMs / 60_000),
@@ -1165,26 +1182,27 @@ async function execute(p: ExecuteParams): Promise<void> {
       if (agent.worktree) {
         ensureWorktree({ repo: room.targetRepo, dir: agent.worktree, branch: worktreeBranch(agent.id) });
       }
-      fs.mkdirSync(agent.workDir, { recursive: true });
-      syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
+      if (bench && run.subject_id !== null) openBench(db, room, agent, run.subject_id, bench);
+      fs.mkdirSync(workDir, { recursive: true });
+      syncSkills(workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
       // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
       // The notebook is the one folder outside the working directory it writes, from its own rules or none (notebook.ts).
       const notebook = agent.notebook ? notebookAccess(agent) : null;
       const guard = writeGuardConfig({
-        workDir: agent.workDir,
+        workDir,
         allowedTools: agent.allowedTools,
         disallowedTools: agent.disallowedTools,
         notebooks: notebook ? [notebook.dir] : [],
       });
       if (guard.allow.length > 0 || guard.notebooks !== undefined) {
-        installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
+        installWriteGuard(workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
       }
       const addDirs = notebook ? notebook.addDirs : agent.addDirs;
       // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.
       const reads = agentReadGuard({
         home: config.home,
         repoRoot: config.repoRoot,
-        workDir: agent.workDir,
+        workDir,
         readDirs: addDirs,
         ignoreInGit: agent.worktree !== null,
       });
@@ -1223,7 +1241,7 @@ async function execute(p: ExecuteParams): Promise<void> {
         tools: notebook ? notebook.tools : skillTools(agent),
         mcpConfigPath,
         maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
-        workDir: agent.workDir,
+        workDir,
         env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard), ...reads },
         signal: active.controller.signal,
         onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),

@@ -22,12 +22,13 @@ export const worktreeBranch = (agentId: string): string => `hq/${agentId}`;
 /**
  * Makes sure `dir` is a Git worktree of `repo`, on branch `branch`: does
  * nothing when it already is one, creates it with `git worktree add`
- * otherwise (the branch is created from the repository's current HEAD when it
- * does not exist yet). Throws an explicit Error when `dir` holds something
- * else or when Git fails. Returns whether it created the worktree.
+ * otherwise (the branch is created from `base` when it does not exist yet,
+ * the repository's current HEAD without one). Throws an explicit Error when
+ * `dir` holds something else or when Git fails. Returns whether it created
+ * the worktree.
  */
-export function ensureWorktree(params: { repo: string; dir: string; branch: string }): boolean {
-  const { repo, dir, branch } = params;
+export function ensureWorktree(params: { repo: string; dir: string; branch: string; base?: string }): boolean {
+  const { repo, dir, branch, base } = params;
   if (fs.existsSync(path.join(dir, ".git"))) return false;
   if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
     throw new Error(`${dir} exists, is not empty and is not a Git worktree`);
@@ -46,7 +47,7 @@ export function ensureWorktree(params: { repo: string; dir: string; branch: stri
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   try {
     git(
-      branchExists ? ["worktree", "add", dir, branch] : ["worktree", "add", "-b", branch, dir],
+      branchExists ? ["worktree", "add", dir, branch] : ["worktree", "add", "-b", branch, dir, ...(base ? [base] : [])],
       repo,
     );
   } catch (error) {

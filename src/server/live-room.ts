@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ATTACHMENT_TYPES, AttachmentError, resolveInside } from "./attachments";
+import { workDirOf } from "./benches";
 import type { Db, RunRow, RunStatus } from "./db";
 import { HqError } from "./errors";
 import { estimateCostUsd, journalUsage } from "./long-runs";
@@ -258,7 +259,7 @@ function pinnedVersions(db: Db, run: RunRow, agent: Agent): PieceVersionDto[] {
     let relative: string;
     let stat: fs.Stats;
     try {
-      ({ real, relative } = resolveInside(agent.workDir, pin.path, "pin"));
+      ({ real, relative } = resolveInside(workDirOf(agent, run.subject_id), pin.path, "pin"));
       stat = fs.statSync(real);
     } catch {
       continue;
@@ -277,8 +278,10 @@ function piece(db: Db, run: RunRow, agent: Agent | null, now: number): LiveTileD
   if (pinned.length > 0) return { source: "pin", versions: pinned };
   if (agent.pieces.length === 0) return null;
   const since = Date.parse(run.started_at);
-  const key = ["pieces", agent.workDir, ...agent.pieces, since, run.ended_at ?? "running"].join("\n");
-  const found = cached(key, () => listPieces(agent.workDir, agent.pieces, since, windowEnd(run, now)));
+  // The run's own working directory: the bench of its subject when it has one (benches.ts).
+  const workDir = workDirOf(agent, run.subject_id);
+  const key = ["pieces", workDir, ...agent.pieces, since, run.ended_at ?? "running"].join("\n");
+  const found = cached(key, () => listPieces(workDir, agent.pieces, since, windowEnd(run, now)));
   if (found.length === 0) return null;
   return { source: "auto", versions: [...found].reverse().map((each) => version(run.id, each, iso(each.mtimeMs), null)) };
 }
@@ -404,7 +407,7 @@ export function liveFile(
   if (!run || !found || !inRoom(run, now)) throw notFound();
   let inside: { real: string; relative: string };
   try {
-    inside = resolveInside(found.agent.workDir, raw, "file");
+    inside = resolveInside(workDirOf(found.agent, run.subject_id), raw, "file");
   } catch (error) {
     if (error instanceof AttachmentError) throw notFound();
     throw error;
