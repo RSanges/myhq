@@ -62,7 +62,8 @@ export function listQueue(db: Db, config: HqConfig, home: Home, read: MachineRea
       if (wait.cause === "notWoken" && ahead !== undefined) {
         wait = { cause: "behind", reason: strings.deskModules.standard.reasons.behind(ahead), stuck: false };
       } else if (SCARCE_CAUSES.has(wait.cause)) {
-        for (const each of scarce) if (!held.has(each)) held.set(each, task.id);
+        // A wait on memory keeps only what fell short (a RAM need does not wait behind a GPU need); a need that never fits keeps nothing.
+        for (const each of wait.holds ?? scarce) if (!held.has(each)) held.set(each, task.id);
       }
     }
     const subject = task.subject_id === null ? undefined : (title.get(task.subject_id) as { title: string | null } | undefined);
@@ -103,8 +104,12 @@ export type QueueMove = z.infer<typeof queueMoveSchema>;
  * Moves a pending task in the queue. `auto` gives it back to the automatic
  * order (oldest first, after the placed ones). `first`, `up` and `down` move
  * it in the order as it is, and the tasks from the head down to the moved
- * ones (and every task the owner had placed) get their places, in that order:
- * the placed ones come before the others, so the rest keeps its order.
+ * ones (and every task the owner had placed ahead) get their places, in that
+ * order: the placed ones come before the others, so the rest keeps its order.
+ * A `down` that makes it the last of the queue sends it to the end for good
+ * (a rank below 0): after every task without a place, the ones that arrive
+ * later included, so that a task the owner put out of the way no longer
+ * holds the new ones back. The others keep their places.
  */
 export function moveInQueue(db: Db, input: QueueMove): void {
   db.transaction(() => {
@@ -125,10 +130,18 @@ export function moveInQueue(db: Db, input: QueueMove): void {
     const to = input.move === "first" ? 0 : input.move === "up" ? Math.max(0, from - 1) : Math.min(ids.length - 1, from + 1);
     ids.splice(from, 1);
     ids.splice(to, 0, input.taskId);
-    const placed = new Set(order.filter((row) => row.queue_rank !== null).map((row) => row.id));
-    const last = Math.max(from, to, ...ids.map((id, index) => (placed.has(id) ? index : -1)));
     const place = db.prepare("UPDATE tasks SET queue_rank = ? WHERE id = ?");
-    for (let index = 0; index <= last; index++) place.run(index + 1, ids[index]!);
+    const atEnd = new Set(order.filter((row) => row.queue_rank !== null && row.queue_rank < 0).map((row) => row.id));
+    if (input.move === "down" && to === ids.length - 1) {
+      // To the end for good: the tasks already sent there, then this one (-n to -1).
+      const end = [...ids.filter((id) => atEnd.has(id) && id !== input.taskId), input.taskId];
+      end.forEach((id, index) => place.run(index - end.length, id));
+      return;
+    }
+    const placed = new Set(order.filter((row) => row.queue_rank !== null && row.queue_rank > 0).map((row) => row.id));
+    const last = Math.max(from, to, ...ids.map((id, index) => (placed.has(id) ? index : -1)));
+    // The tasks sent to the end keep their ranks; the moved one leaves the end if it was there.
+    for (let index = 0; index <= last; index++) if (!atEnd.has(ids[index]!) || ids[index] === input.taskId) place.run(index + 1, ids[index]!);
   }).immediate();
 }
 

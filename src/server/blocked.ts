@@ -6,7 +6,7 @@ import { isBenchNote } from "./benches";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
-import { machineCheck, type MachineRead, type MachineShortfall } from "./machine";
+import { isVetoNote, machineCheck, type MachineRead, type MachineShortfall } from "./machine";
 import { waitsForNextRun } from "./portier";
 import { RELAUNCH_REASON, relaunchSubject } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
@@ -67,7 +67,7 @@ export type BlockedEntry = {
    * What MyHQ knows of why, as a code: the rules of the Standard read it (supervisor.ts, `entryRule`).
    * A run: `failed`, `cancelled`, `stopped`, `hardLimit`. A task: `blocked` (an agent's note), `blockedNoNote`,
    * `myhqNote`. A pending task: the key of its reason (`busy`, `cap`, `resource`, `pingPong`, `stopping`,
-   * `givenBack`, `interruptedTwice`, `noWake`, `notWoken`, `unknownAgent`).
+   * `givenBack`, `interruptedTwice`, `noWake`, `notWoken`, `unknownAgent`, `machine`, `veto`, `neverFits`).
    */
   cause: string;
   /** The words of whoever wrote why, as written: the summary of a failed run, the note of a blocked task. */
@@ -136,12 +136,17 @@ type Why = { reason: string; cause: string };
  * (`afterRun`), or for what holds back any run (the cap, a resource, the
  * machine...). The reasons of the Standard and of the queue (queue.ts) alike.
  */
-export type TaskWait = Why & { stuck: boolean };
+export type TaskWait = Why & {
+  stuck: boolean;
+  /** For a wait on the machine: what the task keeps in the queue (no overtaking, queue.ts); left out: everything scarce its agent declares. */
+  holds?: string[];
+};
 
 /** The French sentence of a shortfall of the machine, with its figures. */
 export function shortfallReason(shortfall: MachineShortfall): string {
   const r = strings.deskModules.standard.reasons;
   if (shortfall.kind === "vramUnknown") return r.vramUnknown(shortfall.needGb);
+  if (shortfall.kind === "tooBig") return r.neverFits(shortfall);
   return r.machine({ ...shortfall, leftGb: Math.round((shortfall.freeGb - shortfall.reservedGb) * 100) / 100 });
 }
 
@@ -203,7 +208,9 @@ export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, ag
     if (holder) return why("resource", r.resource(holder.resource, holder.runId, `${holder.room} / ${holder.agentId}`));
     // The machine (machine.ts): read only for an agent with needs, the veto command's last answer only for one with needs or resources.
     const machine = agent ? machineCheck({ config, db, room: task.room, agent, read }) : null;
-    if (machine?.kind === "machine") return why("machine", shortfallReason(machine.shortfall));
+    // A need above the machine's total never starts: it holds nothing, and waits for the owner.
+    if (machine?.kind === "machine" && machine.shortfall.kind === "tooBig") return { ...why("neverFits", shortfallReason(machine.shortfall)), holds: [] };
+    if (machine?.kind === "machine") return { ...why("machine", shortfallReason(machine.shortfall)), holds: machine.holds };
     if (machine?.kind === "veto") return why("veto", machine.reason === null ? r.vetoAsking : r.veto(machine.reason));
     if (!overdue && task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
@@ -230,13 +237,13 @@ export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, ag
 }
 
 /** Why a pending task is stuck, or null when it is not (a wake-up will take it, or it waits by design). */
-function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null): Why | null {
-  const wait = taskWait(db, config, home, task, agent);
+function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null, read?: MachineRead): Why | null {
+  const wait = taskWait(db, config, home, task, agent, read);
   return wait.stuck ? { reason: wait.reason, cause: wait.cause } : null;
 }
 
-/** Everything stuck at the agents, newest first. */
-export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new Date()): BlockedEntry[] {
+/** Everything stuck at the agents, newest first. `read`: how the machine is read (machine.ts), the real reading by default. */
+export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new Date(), read?: MachineRead): BlockedEntry[] {
   const r = strings.deskModules.standard.reasons;
   const agentOf = (room: string, id: string): Agent | null =>
     home.rooms.find((each) => each.name === room)?.agents.find((each) => each.id === id) ?? null;
@@ -308,8 +315,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
   for (const task of blocked) {
     if (listed.has(task.id)) continue;
     const note = oneLine(task.note);
-    // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts), or on a bench it could not close (benches.ts): said as written.
-    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined || isBenchNote(db, task.id);
+    // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts), on a bench it could not close (benches.ts), or on a veto command that fails (machine.ts): said as written.
+    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined || isBenchNote(db, task.id) || isVetoNote(db, task.id);
     entries.push({
       entry: "task",
       id: task.id,
@@ -334,7 +341,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     .all(new Date(at.getTime() - STUCK_PENDING_MS).toISOString()) as TaskRow[];
   for (const task of pending) {
     if (listed.has(task.id)) continue;
-    const why = pendingReason(db, config, home, task, agentOf(task.room, task.agent_id));
+    const why = pendingReason(db, config, home, task, agentOf(task.room, task.agent_id), read);
     if (why === null) continue;
     entries.push({
       entry: "pending",

@@ -104,10 +104,23 @@ function recordFiring(db: Db, f: FiringInput): FiringDto {
 
 export type FireDeps = RunnerDeps & { start?: (request: StartRunRequest, deps: RunnerDeps) => RunRow };
 
+/** The outcome of a firing whose start was refused, and its detail. */
+function refusal(error: unknown): { outcome: FiringOutcome; detail: string } {
+  const detail = error instanceof Error ? error.message : String(error);
+  if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "RESOURCE_BUSY" || error.code === "MACHINE_BUSY")) {
+    return { outcome: "skipped_busy", detail };
+  }
+  if (error instanceof HqError && error.code === "DAILY_CAP_REACHED") return { outcome: "skipped_cap", detail };
+  return { outcome: "error", detail };
+}
+
 /**
  * Handles one routine that came due: a disarmed agent is skipped, otherwise a
  * run starts through the same lock and daily cap as any other run. Every
- * outcome is written to the journal.
+ * outcome is written to the journal. A start that meets the home's veto
+ * command being asked is journaled `skipped_busy`, then tried once more when
+ * the command answered (launchRun): its row becomes `started` with the run,
+ * or keeps why it did not start. One firing, one run at most.
  */
 export function fireRoutine(
   config: HqConfig,
@@ -121,22 +134,32 @@ export function fireRoutine(
   const base = { room: room.name, agentId: agent.id, routine, scheduledAt };
   if (!isArmed(db, room.name, agent)) return recordFiring(db, { ...base, outcome: "skipped_unarmed" });
   const start = deps.start ?? startRun;
+  // The row of this firing, once written: a start the veto command deferred updates it (always later, after the command ran).
+  let firingId: number | null = null;
+  const onDeferredStart: RunnerDeps["onDeferredStart"] = (result) => {
+    if (firingId === null) return;
+    try {
+      if ("run" in result) {
+        db.prepare("UPDATE routine_firings SET outcome = 'started', run_id = ?, detail = NULL WHERE id = ?").run(result.run.id, firingId);
+      } else {
+        const { outcome, detail } = refusal(result.error);
+        db.prepare("UPDATE routine_firings SET outcome = ?, detail = ? WHERE id = ?").run(outcome, detail, firingId);
+      }
+    } catch (error) {
+      console.error(`[scheduler] the firing #${firingId} could not be updated`, error);
+    }
+  };
   try {
     const run = start(
       { room: room.name, agent: agent.id, ...(routine.task ? { task: routine.task } : {}) },
       // The motive of the run for the agent's `modelFor` and `prepare`: a routine has no reason.
-      { ...deps, config, motive: "routine" },
+      { ...deps, config, motive: "routine", onDeferredStart },
     );
     return recordFiring(db, { ...base, outcome: "started", runId: run.id });
   } catch (error) {
-    if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "RESOURCE_BUSY" || error.code === "MACHINE_BUSY")) {
-      return recordFiring(db, { ...base, outcome: "skipped_busy", detail: error.message });
-    }
-    if (error instanceof HqError && error.code === "DAILY_CAP_REACHED") {
-      return recordFiring(db, { ...base, outcome: "skipped_cap", detail: error.message });
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    return recordFiring(db, { ...base, outcome: "error", detail });
+    const firing = recordFiring(db, { ...base, ...refusal(error) });
+    firingId = firing.id;
+    return firing;
   }
 }
 

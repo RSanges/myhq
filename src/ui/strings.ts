@@ -1612,6 +1612,11 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         /** The note of MyHQ's task once the bench closed, or once what held it back changed. */
         solved: "Réglé : MyHQ a fermé le banc, ou ce qui le retenait a changé.",
       },
+      vetoNote: {
+        failed: (error: string) =>
+          `La commande de veto du home échoue pour cet agent (${error}) : MyHQ laisse partir ses tours sans elle. À corriger dans myhq.json (machine.veto) ou dans la commande ; sous Windows, un script .cmd, .bat ou .ps1 se lance par son interpréteur (par exemple ["powershell", "-File", "veto.ps1"]).`,
+        solved: "Réglé : la commande de veto répond de nouveau.",
+      },
       /** Why an entry is stuck, one sentence, written by the server (GET /api/desk). */
       reasons: {
         blocked: (note: string) => `Bloquée par l'agent : ${note}`,
@@ -1638,6 +1643,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
           `Machine : il faut ${needGb} Go de mémoire vidéo et la carte graphique ne se lit pas (nvidia-smi absent ou en échec) : elle attend une lecture.`,
         veto: (reason: string) => `La commande de veto du home dit d'attendre : ${reason}`,
         vetoAsking: "La commande de veto du home est consultée : elle part dès sa réponse.",
+        neverFits: (p: { what: "ram" | "vram"; needGb: number; keepGb: number; totalGb: number }) =>
+          `Machine : il faut ${p.needGb} Go de ${p.what === "ram" ? "mémoire vive" : "mémoire vidéo"}, plus ${p.keepGb} Go de marge, et la machine n'en a que ${p.totalGb} en tout : elle ne partira jamais avec ce besoin. Baisse-le dans room.json (needs), ou clos la tâche.`,
         /** The reasons of the queue only (queue.ts): a task that is not stuck. */
         byDesign: "Elle attend le prochain tour de l'agent, comme prévu (réglage de l'agent, ou message sans réveil).",
         afterRun: (runId: number) => `Agent occupé sur le tour #${runId} : elle part à la fin de ce tour.`,

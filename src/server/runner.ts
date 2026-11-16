@@ -25,7 +25,18 @@ import {
   stopsFor,
   type DeadlineDecision,
 } from "./long-runs";
-import { closeRunMachine, declaresNeeds, machineCheck, recordRunMachine, sampleMachine, scarceOf, shortfallText, type MachineRead } from "./machine";
+import {
+  closeRunMachine,
+  closeStaleRunMachines,
+  machineCheck,
+  machineLooked,
+  readMachine,
+  recordRunMachine,
+  sampleMachine,
+  scarceOf,
+  shortfallText,
+  type MachineRead,
+} from "./machine";
 import { languageName, wakeOnboarding } from "./onboarding";
 import { messageGate, type PortierCall } from "./portier";
 import { summarizeRun } from "./run-summary";
@@ -96,6 +107,15 @@ export type RunnerDeps = {
   door?: SmallModelCall;
   /** How the machine is read (machine.ts). Default: the real reading, node:os and nvidia-smi. */
   machine?: MachineRead;
+  /**
+   * The start is the one of a pending task that the wake-ups take (wakeAgents, a proposal kept
+   * as a task, a chat request): when the veto command is asked, the task waits and the answer's
+   * wake-up starts it, so no retry is carried. Left out: a direct start (a routine, a run by hand,
+   * the chat's run, a relaunch), tried again once the command answered. Never passed on.
+   */
+  fromQueue?: boolean;
+  /** For a direct start the veto command deferred: told once it is tried again, with the run or why it did not start (routines.ts). Never passed on. */
+  onDeferredStart?: (outcome: { run: RunRow } | { error: unknown }) => void;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -202,6 +222,7 @@ function installExitHook(dbPath: string): void {
       if (run.mcpConfigPath) removeMcpConfig(run.mcpConfigPath);
     }
     releaseOrphanTasks(db);
+    closeStaleRunMachines(db);
   });
 }
 
@@ -230,14 +251,17 @@ export function releaseOrphanTasks(db: Db): { requeued: number; blocked: number 
 /**
  * At startup, in the one process that owns the home (see `app()`): the runs a
  * crash or a forced stop left `running` are closed as `cancelled`
- * (interrupted), and the tasks they held are given back. Returns the runs
- * closed and the tasks given back.
+ * (interrupted), the tasks they held are given back, and their machine
+ * records closed (closeStaleRunMachines). Returns the runs closed and the
+ * tasks given back.
  */
 export function recoverInterruptedRuns(db: Db): { runs: number; requeued: number; blocked: number } {
   const runs = db
     .prepare("UPDATE runs SET status = 'cancelled', ended_at = ?, summary = ? WHERE status = 'running'")
     .run(now(), INTERRUPTED_SUMMARY).changes;
-  return { runs, ...releaseOrphanTasks(db) };
+  const released = releaseOrphanTasks(db);
+  closeStaleRunMachines(db);
+  return { runs, ...released };
 }
 
 /** Whether the app was asked to stop: no run starts any more. */
@@ -357,7 +381,7 @@ export function benchLines(bench: Bench): string {
   ].join(" ");
 }
 
-/** The run instruction of an agent with `needs` or `resources` (machine.ts): one sentence, and none for the others. */
+/** The run instruction of a run the machine was checked for (needs declared, or a veto command asked; machine.ts): one sentence, and none for the others. */
 export const MACHINE_CHECKED =
   "MyHQ checked the machine before starting you (memory, shared resources); you still check it before a heavy step if your role tells you to.";
 
@@ -377,6 +401,8 @@ export function buildPrompt(params: {
   discussion?: string | null;
   /** The bench of the run's subject (benches.ts), left out or null: the agent's own working directory. */
   bench?: Bench | null;
+  /** MyHQ looked at the machine before this run (launchRun): its needs, or the home's veto command. */
+  machineChecked?: boolean;
 }) {
   const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
@@ -425,10 +451,7 @@ export function buildPrompt(params: {
   if (shared.length > 0) {
     lines.push(`Shared rooms you may order from with hq_message and "room" (hq_rooms lists their agents): ${shared.join(", ")}.`);
   }
-  // `?? []`: a prompt may be built for an agent given in part (tests, MyHQ's own agents).
-  if (declaresNeeds(params.agent) || (params.agent.resources ?? []).length > 0) {
-    lines.push(MACHINE_CHECKED);
-  }
+  if (params.machineChecked) lines.push(MACHINE_CHECKED);
   if (params.bench) lines.push(benchLines(params.bench));
   lines.push(
     "",
@@ -501,7 +524,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     briefing: true,
     roomFolders: true,
     subjectId: deps.subject,
-    prompt: (runId, mailbox, folders, subjectId) => {
+    prompt: (runId, mailbox, folders, subjectId, machineChecked) => {
       const db = getDbAt(config.dbPath);
       const scope = { room: room.name, agentId: agent.id, mailbox, upToQuestionId: deps.discussionUpTo, subjectId };
       // Read now, when the run starts: what was said since the revision was decided counts.
@@ -519,6 +542,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
         folders,
         discussion,
         bench: benchOf(agent, subjectId),
+        machineChecked,
       });
     },
   });
@@ -718,10 +742,12 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     done.add(slot);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
-      started.push(startRun(request, { ...deps, config, subject: candidate.subject_id ?? null }));
+      started.push(startRun(request, { ...deps, config, subject: candidate.subject_id ?? null, fromQueue: true }));
     } catch (error) {
-      // Waiting for a resource or the machine, it keeps everything scarce its agent needs for itself (queue.ts, "behind").
-      if (error instanceof HqError && SCARCE_WAITS.has(error.code)) for (const each of scarce) held.add(each);
+      // Waiting for a resource or the veto command, it keeps everything scarce its agent needs for itself (queue.ts, "behind");
+      // waiting for memory, only what fell short, and a need that can never fit keeps nothing.
+      if (error instanceof MachineBusy) for (const each of error.holds) held.add(each);
+      else if (error instanceof HqError && error.code === "RESOURCE_BUSY") for (const each of scarce) held.add(each);
       // A busy agent, a busy resource, the machine or the cap: the task waits, and the end of the run that holds them wakes it again.
       if (error instanceof HqError && WAITS.has(error.code)) continue;
       console.error(`[runner] could not wake ${key}`, error);
@@ -772,8 +798,23 @@ export function applyRunStops(db: Db): void {
 
 /** Errors that leave a woken task pending, to be taken by a later run. */
 export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "MACHINE_BUSY", "DAILY_CAP_REACHED", "SHUTTING_DOWN"]);
-/** The waits for something another agent's run may take: the task holds its place for it (no overtaking). */
-export const SCARCE_WAITS = new Set(["RESOURCE_BUSY", "MACHINE_BUSY"]);
+
+/**
+ * MACHINE_BUSY, with what the refused start keeps in the queue (no
+ * overtaking, wakeAgents): what fell short of memory, everything scarce its
+ * agent declares for the veto command, nothing for a need that can never fit.
+ * `deferred`: the veto command is being asked and this direct start is tried
+ * again once it answers (askVeto).
+ */
+export class MachineBusy extends HqError {
+  constructor(
+    message: string,
+    readonly holds: readonly string[],
+    readonly deferred: boolean,
+  ) {
+    super("MACHINE_BUSY", 409, message);
+  }
+}
 
 /**
  * Wakes the agents whose tasks wait for the daily cap, once the counter allows
@@ -834,7 +875,8 @@ export function launchRun(params: {
    * the subject of the oldest of those tasks still pending; without, the general one.
    */
   subjectId?: number | null;
-  prompt: (runId: number, mailbox: TaskRow[], folders: RunFolders, subjectId: number | null) => string;
+  /** `machineChecked`: the machine was looked at for this run (its needs, or the veto command). */
+  prompt: (runId: number, mailbox: TaskRow[], folders: RunFolders, subjectId: number | null, machineChecked: boolean) => string;
   /** The run reads the room folders (runFolders): the runs of room agents. MyHQ's own agents (the reception room is no room of the home) get none. */
   roomFolders?: boolean;
   /** 1 for the automatic retry of a run stopped for an MCP server not connected; there is no second one. */
@@ -846,15 +888,41 @@ export function launchRun(params: {
 }): RunRow {
   const { config, room, agent, task } = params;
   // The motive is this run's own: the runs it wakes get theirs.
-  const deps: RunnerDeps = { ...params.deps, motive: undefined, discussionUpTo: undefined, subject: undefined };
+  const deps: RunnerDeps = {
+    ...params.deps,
+    motive: undefined,
+    discussionUpTo: undefined,
+    subject: undefined,
+    fromQueue: undefined,
+    onDeferredStart: undefined,
+  };
   if (runnerState().stopping) {
     throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: the run of "${agent.id}" starts after the restart.`);
   }
   const db = getDbAt(config.dbPath);
   installExitHook(config.dbPath);
   const engine = deps.engine ?? new ClaudeEngine(config.claudeBin);
+  // Read before the transaction (machine.ts): only for an agent the machine is looked at for, and never waiting on a child process.
+  const reading = machineLooked(config, agent) ? (deps.machine ?? readMachine)() : undefined;
+  // A direct start that meets the veto command being asked is the same start again once it answered (askVeto).
+  const told = params.deps.onDeferredStart;
+  const retryAfterVeto = params.deps.fromQueue
+    ? undefined
+    : () => {
+        try {
+          const run = launchRun(params);
+          told?.({ run });
+        } catch (error) {
+          // Asked again (another start used the ok): this start waits for that answer in turn.
+          if (error instanceof MachineBusy && error.deferred) return;
+          told?.({ error });
+          const why = error instanceof Error ? error.message : String(error);
+          if (error instanceof HqError && WAITS.has(error.code)) console.log(`[runner] the run of ${room.name}/${agent.id} did not start after the veto command: ${why}`);
+          else console.error(`[runner] the run of ${room.name}/${agent.id} could not start after the veto command`, error);
+        }
+      };
 
-  const { run, mailbox } = db
+  const { run, mailbox, machineChecked } = db
     .transaction(() => {
       const only = params.claimIds;
       const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
@@ -902,17 +970,19 @@ export function launchRun(params: {
         room: room.name,
         agent,
         read: deps.machine,
-        ask: { env: agentEnv(process.env, {}), rewake: () => void wakeAgents(config, db, deps) },
+        reading,
+        ask: { env: agentEnv(process.env, {}), rewake: () => void wakeAgents(config, db, deps), retry: retryAfterVeto },
       });
-      if (machine.kind !== "free") {
-        throw new HqError(
-          "MACHINE_BUSY",
-          409,
-          machine.kind === "machine"
-            ? `The machine cannot take the run of "${agent.id}" now: ${shortfallText(machine.shortfall)}.`
-            : machine.reason === null
-              ? `The home's veto command is asked before the run of "${agent.id}": it starts once it answers.`
-              : `The home's veto command says to wait before the run of "${agent.id}": ${machine.reason}`,
+      if (machine.kind === "machine") {
+        throw new MachineBusy(`The machine cannot take the run of "${agent.id}" now: ${shortfallText(machine.shortfall)}.`, machine.holds, false);
+      }
+      if (machine.kind === "veto") {
+        throw new MachineBusy(
+          machine.reason === null
+            ? `The home's veto command is asked before the run of "${agent.id}": it starts once it answers.`
+            : `The home's veto command says to wait before the run of "${agent.id}": ${machine.reason}`,
+          scarceOf(agent),
+          machine.deferred,
         );
       }
       const at = now();
@@ -930,7 +1000,9 @@ export function launchRun(params: {
          VALUES (?, ?, 'manual', ?, 'in_progress', ?, ?, ?, ?)`,
       ).run(room.name, agent.id, task, runId, subject, at, at);
       // What it reserves from the machine until it has taken it (reservations, machine.ts).
-      if (machine.need && machine.reading) recordRunMachine(db, runId, room.name, agent.id, machine.need, machine.reading, at);
+      if (machine.need && machine.reading) {
+        recordRunMachine(db, runId, room.name, agent.id, machine.need, agent.needs ?? { ramGb: null, vramGb: null }, machine.reading, at);
+      }
       const claimed = db
         .prepare(
           `UPDATE tasks SET status = 'in_progress', run_id = ?, updated_at = ?
@@ -940,6 +1012,7 @@ export function launchRun(params: {
       return {
         run: db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as RunRow,
         mailbox: claimed.sort((a, b) => a.id - b.id),
+        machineChecked: machine.reading !== null,
       };
     })
     .immediate();
@@ -952,7 +1025,7 @@ export function launchRun(params: {
   // The room folders are read-only, like every --add-dir (write-guard.ts).
   const readDirs = [...(folders.own ? [folders.own] : []), ...folders.workedFor.map((each) => each.path)];
   const runAgent = readDirs.length > 0 ? { ...agent, addDirs: [...agent.addDirs, ...readDirs] } : agent;
-  const prompt = params.prompt(run.id, mailbox, folders, run.subject_id);
+  const prompt = params.prompt(run.id, mailbox, folders, run.subject_id, machineChecked);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
   // It keeps its subject, whatever task is oldest by then: for a parallel agent, only a run of that subject locks it out.
   const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, subjectId: run.subject_id, attempt: 1 }) : null;

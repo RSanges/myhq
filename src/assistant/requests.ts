@@ -112,7 +112,8 @@ export function processChatRequests(dir: string, deps: RequestsDeps): number {
   } catch {
     return 0;
   }
-  const start = deps.startRun ?? ((request: StartRunRequest) => defaultStartRun(request, { config: deps.config }));
+  // The task is created first and the wake-ups take it when the run waits: no retry of its own (fromQueue).
+  const start = deps.startRun ?? ((request: StartRunRequest) => defaultStartRun(request, { config: deps.config, fromQueue: true }));
   let created = 0;
   for (const name of names) {
     const file = path.join(dir, name);

@@ -1020,6 +1020,22 @@ CREATE TABLE IF NOT EXISTS benches (
 CREATE INDEX IF NOT EXISTS benches_open ON benches (closed_at, room, agent_id);
 `,
   },
+  {
+    version: 33,
+    // The machine, made robust (machine.ts). ram_declared_gb and
+    // vram_declared_gb, on run_machine: what the agent declared when the run
+    // started; the peaks count under the declaration in force only, so that
+    // the owner changing it starts the learning over (rows from before have
+    // none and no longer count). note_task_id, on machine_vetoes: the blocked
+    // task that tells the owner the veto command fails for that agent, null
+    // once it answers again. Idempotent, as the migrations after 14.
+    sql: "",
+    columns: [
+      { table: "run_machine", column: "ram_declared_gb", type: "REAL" },
+      { table: "run_machine", column: "vram_declared_gb", type: "REAL" },
+      { table: "machine_vetoes", column: "note_task_id", type: "INTEGER" },
+    ],
+  },
 ];
 
 function migrate(db: Db): void {
@@ -1094,11 +1110,14 @@ export const liveItem = (alias = ""): string =>
 
 /**
  * The order of the queue, the one place it is written: the tasks the owner
- * placed (`queue_rank`, smaller first) before the others, then the oldest
- * first. Without any rank it is `ORDER BY id`, the order of before the queue.
- * `alias` is the alias of the tasks table with its dot (`"t."`), or empty.
+ * placed ahead (`queue_rank` above 0, smaller first), then the others, the
+ * oldest first, then the ones the owner sent to the end (`queue_rank` below
+ * 0, moveInQueue), after every task without a place, the later ones
+ * included. Without any rank it is `ORDER BY id`, the order of before the
+ * queue. `alias` is the alias of the tasks table with its dot (`"t."`), or empty.
  */
-export const queueOrder = (alias = ""): string => `${alias}queue_rank IS NULL, ${alias}queue_rank, ${alias}id`;
+export const queueOrder = (alias = ""): string =>
+  `CASE WHEN ${alias}queue_rank > 0 THEN 0 WHEN ${alias}queue_rank IS NULL THEN 1 ELSE 2 END, ${alias}queue_rank, ${alias}id`;
 
 export function now(): string {
   return new Date().toISOString();

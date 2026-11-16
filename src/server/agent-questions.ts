@@ -1042,7 +1042,8 @@ export function decideProposal(
     try {
       run = startRun(
         { room: room.name, agent: agent.id, task: proposal.task },
-        { ...deps, config, discussionUpTo: question.id, subject: question.subject_id },
+        // A start refused for now is kept as a task (queueProposal), which the wake-ups start: no retry of its own.
+        { ...deps, config, discussionUpTo: question.id, subject: question.subject_id, fromQueue: true },
       );
     } catch (error) {
       if (!(error instanceof HqError && WAITS.has(error.code))) throw error;

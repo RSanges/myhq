@@ -141,7 +141,7 @@ test("the reading: RAM from the probe, the first GPU of nvidia-smi read strictly
 // --- An agent without needs, a home as before ------------------------------------------------
 
 test("a home with no needs, no rank and no veto command behaves as before: no reading, no record, the same prompt and order", async () => {
-  const { config, db } = home([agent("scout"), agent("writer")]);
+  const { config, db } = home([agent("scout"), agent("writer"), agent("painter", { resources: ["gpu"] })]);
   const read = () => {
     throw new Error("the machine must not be read for agents without needs");
   };
@@ -158,17 +158,45 @@ test("a home with no needs, no rank and no veto command behaves as before: no re
   const started = wakeAgents(config, db, { config, engine: holdingEngine([]).engine, send: async () => true, machine: read });
   assert.deepEqual(started.map((run) => run.agent_id), ["writer", "scout"]);
   for (const run of started) await waitForRun(db, run.id);
+  // An agent with resources and no veto command: the machine is not read, and its prompt has no new line either.
+  let painterPrompt = "";
+  const engine: Engine = {
+    name: "claude",
+    async *run(input) {
+      painterPrompt = input.prompt;
+      yield done;
+    },
+  };
+  await waitForRun(db, startRun({ room: "demo", agent: "painter" }, { config, engine, send: async () => true, machine: read }).id);
+  assert.ok(painterPrompt.length > 0 && !painterPrompt.includes(MACHINE_CHECKED));
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM run_machine").get() as { n: number }).n, 0);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM machine_vetoes").get() as { n: number }).n, 0);
 });
 
-test("the run instruction about the machine: one sentence, only for an agent with needs or resources", () => {
+test("the run instruction about the machine: one sentence, only when the machine was checked for the run", async () => {
   const room = { name: "demo", shared: false } as never;
-  const base = { id: "a", name: "A", resources: [] } as unknown as Agent;
-  const of = (agent: Agent) => buildPrompt({ room, agent, runId: 1, task: "T.", mailbox: [] });
-  assert.ok(!of(base).includes(MACHINE_CHECKED));
-  assert.equal(of({ ...base, resources: ["gpu"] }).split(MACHINE_CHECKED).length, 2);
-  assert.equal(of({ ...base, needs: { ramGb: 4, vramGb: null } }).split(MACHINE_CHECKED).length, 2);
+  const base = { id: "a", name: "A", resources: ["gpu"] } as unknown as Agent;
+  const of = (machineChecked?: boolean) => buildPrompt({ room, agent: base, runId: 1, task: "T.", mailbox: [], machineChecked });
+  assert.ok(!of().includes(MACHINE_CHECKED));
+  assert.equal(of(true).split(MACHINE_CHECKED).length, 2);
+  // In a real start: needs declared, or a veto command asked for an agent with resources; resources alone check nothing.
+  const prompts = new Map<string, string>();
+  const engine: Engine = {
+    name: "claude",
+    async *run(input) {
+      prompts.set(input.agentId, input.prompt);
+      yield done;
+    },
+  };
+  const plain = home([agent("painter", { resources: ["gpu"] }), agent("big", { needs: { ramGb: 1 } })]);
+  for (const id of ["painter", "big"]) await waitForRun(plain.db, startRun({ room: "demo", agent: id }, { config: plain.config, engine, send: async () => true, machine: () => reading() }).id);
+  assert.ok(!prompts.get("painter")!.includes(MACHINE_CHECKED), "resources and no veto command: the machine was not looked at");
+  assert.equal(prompts.get("big")!.split(MACHINE_CHECKED).length, 2);
+  const vetoed = vetoHome("ok", { resources: ["gpu"] });
+  assert.throws(() => startRun({ room: "demo", agent: "painter" }, { ...vetoed.deps, engine }));
+  await vetoesIdle();
+  await until(() => prompts.has("painter") && prompts.get("painter")!.includes(MACHINE_CHECKED));
+  await waitForRun(vetoed.db, runsOf(vetoed.db, "painter")[0]!.id);
 });
 
 test("room.json needs and myhq.json machine are checked by zod", () => {
@@ -393,14 +421,14 @@ test("GET /api/queue reasons: agent busy on run #n, a resource held, the daily c
 // --- The veto command ----------------------------------------------------------------------------
 
 /** A veto command of the home: a Node script that answers what `behaviour` says, and keeps what it read. */
-function vetoHome(behaviour: "wait" | "ok" | "crash" | "timeout") {
+function vetoHome(behaviour: "wait" | "ok" | "crash" | "timeout", painter: Record<string, unknown> = { needs: { ramGb: 1 } }) {
   const script = {
     wait: `process.stdout.write(JSON.stringify({ wait: true, reason: "Un jeu tourne" }));`,
     ok: `process.stdout.write(JSON.stringify({ wait: false }));`,
     crash: `process.exit(3);`,
     timeout: `setTimeout(() => {}, 60000);`,
   }[behaviour];
-  const s = home([agent("painter", { needs: { ramGb: 1 } })], { machine: { veto: { command: [process.execPath, "veto.cjs"], timeoutSeconds: 0.5 } } });
+  const s = home([agent("painter", painter)], { machine: { veto: { command: [process.execPath, "veto.cjs"], timeoutSeconds: 0.5 } } });
   fs.writeFileSync(
     path.join(s.config.home, "veto.cjs"),
     `let input = ""; process.stdin.on("data", (c) => (input += c)); process.stdin.on("end", () => { require("fs").writeFileSync("veto-input.json", input); ${script} });`,
@@ -432,12 +460,44 @@ for (const behaviour of ["ok", "crash", "timeout"] as const) {
     assert.deepEqual(wakeAgents(config, db, deps), []);
     await vetoesIdle();
     await until(() => runsOf(db, "painter").length === 1);
-    const row = db.prepare("SELECT verdict, error FROM machine_vetoes").get() as { verdict: string; error: string | null } | undefined;
-    // An ok is used once by the start; a failure's ok is used as well.
-    assert.equal(row, undefined);
+    // The answer stays, for the settings page; it was used by the start, so the next one asks again.
+    const row = db.prepare("SELECT verdict, error FROM machine_vetoes").get() as { verdict: string; error: string | null };
+    assert.equal(row.verdict, "ok");
+    assert.equal(row.error === null, behaviour === "ok");
+    const painter = loadHome(config.home).rooms[0]!.agents[0]!;
+    assert.deepEqual(machineCheck({ config, db, room: "demo", agent: painter, read: () => reading() }), { kind: "free", need: { ramGb: 1, vramGb: null }, reading: reading() });
+    // A command that fails is told to the owner on the Standard, as MyHQ's note, not only in the log.
+    const notes = listBlocked(db, loadHome(config.home), config).filter((entry) => entry.cause === "myhqNote");
+    assert.equal(notes.length, behaviour === "ok" ? 0 : 1);
     await waitForRun(db, runsOf(db, "painter")[0]!.id);
   });
 }
+
+test("the veto command: a command that cannot start is told on the Standard until it answers again; the settings page keeps its error", async () => {
+  const s = home([agent("painter", { resources: ["gpu"] })], { machine: { veto: { command: ["./missing-veto.cmd"], timeoutSeconds: 1 } } });
+  const deps = { config: s.config, engine: holdingEngine([]).engine, send: async () => true, machine: () => reading() };
+  addTask(s.db, "painter");
+  assert.deepEqual(wakeAgents(s.config, s.db, deps), []);
+  await vetoesIdle();
+  await until(() => runsOf(s.db, "painter").length === 1);
+  await waitForRun(s.db, runsOf(s.db, "painter")[0]!.id);
+  const [note] = listBlocked(s.db, loadHome(s.config.home), s.config).filter((entry) => entry.cause === "myhqNote");
+  assert.match(note!.reason, /commande de veto du home échoue/);
+  assert.match(note!.reason, /could not start/);
+  const view = machineView(s.db, s.config, [], () => reading());
+  assert.match(view.vetoes[0]!.error ?? "", /could not start/);
+  // Once the command answers again, the note is done.
+  fs.writeFileSync(path.join(s.config.home, "veto.cjs"), `process.stdout.write(JSON.stringify({ wait: false }));`);
+  fs.writeFileSync(path.join(s.config.home, "myhq.json"), JSON.stringify({ machine: { veto: { command: [process.execPath, "veto.cjs"] } } }));
+  assert.throws(() => startRun({ room: "demo", agent: "painter" }, deps));
+  await vetoesIdle();
+  await until(() => runsOf(s.db, "painter").length === 2);
+  await waitForRun(s.db, runsOf(s.db, "painter")[1]!.id);
+  assert.equal(listBlocked(s.db, loadHome(s.config.home), s.config).filter((entry) => entry.cause === "myhqNote").length, 0);
+  // An invalid machine block is shown with the other invalid settings, not taken silently for "no veto".
+  fs.writeFileSync(path.join(s.config.home, "myhq.json"), JSON.stringify({ machine: { veto: { command: [] } } }));
+  assert.match(machineView(s.db, s.config, [], () => reading()).error ?? "", /machine\.veto\.command/);
+});
 
 test("the veto command is asked only for an agent with needs or resources", () => {
   const { config, db } = home([agent("plain")], { machine: { veto: { command: [process.execPath, "missing.cjs"] } } });
@@ -467,7 +527,14 @@ test("peaks: sampled on the tick and at the end, stored with whether the run was
   const row = db.prepare("SELECT ram_peak_gb, vram_peak_gb, alone FROM run_machine WHERE run_id = ?").get(run.id);
   assert.deepEqual(row, { ram_peak_gb: 3, vram_peak_gb: 5, alone: 1 });
   const agentA = loadHome(config.home).rooms[0]!.agents[0]!;
-  // RAM: declared 2, measured 3: raised to 3. GPU: declared 8, measured 5: kept at 8 (never lowered).
+  // One run teaches nothing: a need is raised only when two runs measured it.
+  assert.deepEqual(effectiveNeeds(db, "demo", agentA), { ramGb: 2, vramGb: 8 });
+  const at = new Date().toISOString();
+  const past = Number(db.prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at, ended_at) VALUES ('demo', 'a', 'claude', 't', 'done', ?, ?)").run(at, at).lastInsertRowid);
+  db.prepare(
+    "INSERT INTO run_machine (run_id, room, agent_id, ram_need_gb, ram_declared_gb, ram_free_start_gb, ram_peak_gb, started_at, ended_at, alone) VALUES (?, 'demo', 'a', 2, 2, 20, 4, ?, ?, 1)",
+  ).run(past, at, at);
+  // RAM: declared 2, measured 3 and 4: raised to the second highest, 3. GPU: declared 8, measured 5: kept at 8 (never lowered).
   assert.deepEqual(effectiveNeeds(db, "demo", agentA), { ramGb: 3, vramGb: 8 });
 
   // Two runs that overlap are not alone: their peaks do not count.
@@ -493,7 +560,7 @@ test("peaks: sampled on the tick and at the end, stored with whether the run was
   assert.deepEqual(
     view.agents.map((each) => [each.agent, each.kind, each.declaredGb, each.runs, each.medianGb, each.maxGb, each.effectiveGb]),
     [
-      ["a", "ram", 2, 1, 3, 3, 3],
+      ["a", "ram", 2, 2, 3.5, 4, 3],
       ["a", "vram", 8, 1, 5, 5, 8],
       ["b", "ram", 1, 0, null, null, 1],
     ],
