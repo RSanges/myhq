@@ -5,6 +5,7 @@ import { blockedTargetSchema } from "../server/blocked";
 import { closeBySupervisor, closeReasonSchema } from "../server/closures";
 import { getConfig, type Env, type HqConfig } from "../server/config";
 import { decisionText, parseAnnotations } from "../server/annotations";
+import { hearOwner } from "../server/discussion-handoff";
 import {
   AttachmentError,
   attachmentInputSchema,
@@ -1176,19 +1177,25 @@ export function hqRunStop(db: Db, ctx: HqContext, args: Args<"hq_run_stop">) {
  * stream of the run, and the sheet lists the steps of the run. With `waiting`,
  * the status is also marked in `run_waits` (migration 22), in the same
  * transaction: the surveillance room shows the agent waiting, for that reason.
+ * It is also where the run hears the owner: the exchanges of its subject the
+ * owner had with the agent in question mode since the run was last given them
+ * come back as `fromOwner`, once (hearOwner); the result is as before when
+ * there is none.
  */
 export function hqStatus(db: Db, ctx: HqContext, args: Args<"hq_status">) {
   const parsed = z.object(inputs.hq_status).parse(args);
   const text = normalizeStatus(parsed.text)!;
   const waiting = parsed.waiting === true;
   const at = now();
-  db.transaction(() => {
+  const fromOwner = db.transaction(() => {
     const id = db
       .prepare("INSERT INTO run_statuses (run_id, room, agent_id, text, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(ctx.runId, ctx.room, ctx.agentId, text, at).lastInsertRowid;
     if (waiting) db.prepare("INSERT INTO run_waits (status_id) VALUES (?)").run(id);
+    return hearOwner(db, ctx.runId);
   }).immediate();
-  return { saved: true as const, text, at, waiting };
+  const saved = { saved: true as const, text, at, waiting };
+  return fromOwner === null ? saved : { ...saved, fromOwner };
 }
 
 /**

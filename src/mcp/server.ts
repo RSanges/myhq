@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       "hq_status",
       {
         description:
-          "Tell the owner, in a few words, what you are doing right now: at the start of your run, then at each notable step (\"lit les avis du jour\", \"rend le clip B, 2 sur 3\", \"prépare le brouillon\"). 60 characters at most, in the home's language, no technical detail (no path, command or tool name). It shows over your head on the floor and in your sheet; it writes nothing else and changes nothing, so call it freely but do not repeat the same text. When you have to wait (a shared resource, a long render, an answer), say it with `waiting: true` and the reason as the text (\"attend la carte graphique\"): you show as waiting until your next status.",
+          "Tell the owner, in a few words, what you are doing right now: at the start of your run, then at each notable step (\"lit les avis du jour\", \"rend le clip B, 2 sur 3\", \"prépare le brouillon\"). 60 characters at most, in the home's language, no technical detail (no path, command or tool name). It shows over your head on the floor and in your sheet; it writes nothing else and changes nothing, so call it freely but do not repeat the same text. Its result may carry `fromOwner`: new messages the owner exchanged with you in question mode while you work, part of your task from then on; say what you do with them in your next status. When you have to wait (a shared resource, a long render, an answer), say it with `waiting: true` and the reason as the text (\"attend la carte graphique\"): you show as waiting until your next status.",
         inputSchema: inputs.hq_status,
       },
       async (args) => respond(() => hqStatus(db, ctx, args)),

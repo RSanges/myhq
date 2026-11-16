@@ -11,7 +11,7 @@ import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
-import { discussionHandoff } from "./discussion-handoff";
+import { discussionHandoff, heardFrom } from "./discussion-handoff";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import {
@@ -358,11 +358,12 @@ export function buildPrompt(params: {
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_submit for anything to approve. Never publish anything yourself.",
-    "When a decision of the owner is truly needed to go on, ask with hq_ask (if you have it): concrete options, all your questions at once, then finish your turn; the answers wake you with a new task. Do not guess, and do not submit a deliverable at random hoping it is the right one. Do not overuse it: ask only what blocks you.",
+    "When a decision of the owner is truly needed to go on, ask with hq_ask (if you have it): concrete options, all your questions at once, then finish your turn; the answers wake you with a new task. Do not guess, and do not submit a deliverable at random hoping it is the right one. Do not overuse it: ask only what blocks you. A doubt that would change the deliverable is asked early in the run, before you build on it, not once it is built.",
     "When a deliverable offers variants to choose from (voices, seeds, titles...), attach the choice as `questions` to the hq_submit of that deliverable instead of a separate hq_ask: the owner sees both together, and the answers come back with the decision.",
     "A revision (a task of source revise) is about the item it names: keep that piece's subject and brief, and apply the note to it. If the note seems to ask for a different subject or a new piece, do not start one: ask with hq_ask (or, without it, say so in your report) whether the owner wants to change the subject.",
     "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
     `Tell the owner what you are doing with hq_status (if you have it): once at the start, then at each notable step, a few words in ${language} (60 characters at most, for example "rend le clip B, 2 sur 3"), never a technical detail (no file path, command or tool name). It shows over your head on the floor and changes nothing else.`,
+    "A result of hq_status may bring new messages from the owner, exchanged with you in question mode while you work: what was settled there is part of your task from that moment. If what it changes is not built yet, apply it now; otherwise finish the step in progress, then apply it. Either way, say what you do with it in your very next hq_status: the owner reads it in your thread, it is your acknowledgement.",
     "When a file you are working on is worth the owner's eye now (a render, a contact sheet that shows a problem), show it with hq_show (if you have it): its path relative to your working directory and one sentence saying why. It publishes nothing; use it for the file that matters, not for every file you write.",
     "The body of a submission starts with the readings and choices you made alone where the owner's words left a doubt (for example \"I read ±2.5 mm as a diameter\"), before anything else; nothing when there was none.",
     "Your new decisions and your memory are given at the end of this message: do not call hq_read_decisions or hq_memory_read for them, whatever your role says. A decision comes to you once. Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
@@ -461,8 +462,14 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     briefing: true,
     roomFolders: true,
     subjectId: deps.subject,
-    prompt: (runId, mailbox, folders, subjectId) =>
-      buildPrompt({
+    prompt: (runId, mailbox, folders, subjectId) => {
+      const db = getDbAt(config.dbPath);
+      const scope = { room: room.name, agentId: agent.id, mailbox, upToQuestionId: deps.discussionUpTo, subjectId };
+      // Read now, when the run starts: what was said since the revision was decided counts.
+      const discussion = discussionHandoff(db, scope);
+      // From here on, what the owner and the agent say in this subject reaches the run at its hq_status (hearOwner).
+      db.prepare("UPDATE runs SET heard_up_to = ? WHERE id = ?").run(heardFrom(db, scope), runId);
+      return buildPrompt({
         room,
         agent,
         runId,
@@ -471,15 +478,9 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
         sharedRooms,
         language: promptLanguage(config.home),
         folders,
-        // Read now, when the run starts: what was said since the revision was decided counts.
-        discussion: discussionHandoff(getDbAt(config.dbPath), {
-          room: room.name,
-          agentId: agent.id,
-          mailbox,
-          upToQuestionId: deps.discussionUpTo,
-          subjectId,
-        }),
-      }),
+        discussion,
+      });
+    },
   });
 }
 
@@ -573,7 +574,8 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
  * Starts a run, at once, for each agent that has a task to take: one from an
  * approved item (`onApproval: "task"`, reason `approval`), a message
  * (reason `message`), a revision (reason `revise`) or a request of the chat
- * (reason `chat`), created since the agent's last run started. A message or a
+ * or of a discussion, confirmed while the agent was busy (reason `chat`,
+ * decideProposal), created since the agent's last run started. A message or a
  * revision wakes the agent unless it opted out (`onMessage` or `onRevise` set
  * to `"queue"`), and the task then waits for its next run. A busy agent or the daily cap leaves the task pending: it
  * is taken by the agent's next run, and an agent still busy is woken again

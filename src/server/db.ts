@@ -899,6 +899,21 @@ CREATE INDEX IF NOT EXISTS subjects_agent ON subjects (room, agent_id, status);
       { table: "question_proposals", column: "revise_id", type: "INTEGER" },
     ],
   },
+  {
+    version: 30,
+    // The agent hears the owner while it works (discussion-handoff.ts,
+    // `hearOwner`). heard_up_to, on a run: the highest exchange of its subject
+    // it has been given, set when its prompt is built and advanced by each
+    // delivery at hq_status; null: a run that hears nothing (every run from
+    // before). task_id, on a proposal: the task that keeps a confirmed run
+    // while the agent cannot start it (busy, a shared resource, the daily
+    // cap), started by the wake-ups. Idempotent, as the migrations after 14.
+    sql: "",
+    columns: [
+      { table: "runs", column: "heard_up_to", type: "INTEGER" },
+      { table: "question_proposals", column: "task_id", type: "INTEGER" },
+    ],
+  },
 ];
 
 function migrate(db: Db): void {
