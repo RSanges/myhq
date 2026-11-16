@@ -129,7 +129,16 @@ export function activeRunOf(db: Db, room: string, agentId: string): ActiveRun | 
   const run = db
     .prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
     .get(room, agentId) as RunRow | undefined;
-  if (!run) return null;
+  return run ? toActiveRun(db, run) : null;
+}
+
+/** Every run of this agent in progress, the latest started first: a parallel agent has one per subject at most ("Several benches"). */
+export function activeRunsOf(db: Db, room: string, agentId: string): ActiveRun[] {
+  const runs = db.prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC").all(room, agentId) as RunRow[];
+  return runs.map((run) => toActiveRun(db, run));
+}
+
+function toActiveRun(db: Db, run: RunRow): ActiveRun {
   const statuses = (
     db
       .prepare("SELECT text, created_at FROM run_statuses WHERE run_id = ? ORDER BY id DESC LIMIT ?")
@@ -496,6 +505,59 @@ function runStateText(run: ActiveRun | null, checkedAt: string, subject: number 
   return lines.join("\n");
 }
 
+/** Where a run works, as the run state names it. */
+const subjectName = (run: ActiveRun): string =>
+  run.subjectId === null ? "your general discussion" : run.subjectTitle ? `your subject "${run.subjectTitle}"` : `your subject #${run.subjectId}`;
+
+/**
+ * The run state of a parallel agent ("Several benches"): its runs in progress,
+ * one per subject at most, each one with what it said; the one of this
+ * subject, if any, hears the exchange, the others do not, and a run proposed
+ * here waits only for a run of this very subject.
+ */
+function parallelRunStateText(runs: readonly ActiveRun[], checkedAt: string, subject: number | null): string {
+  const heading = `Your run state, read from the MyHQ database at ${checkedAt}: this is the source of truth, above your memory, your notes and the discussion so far.`;
+  if (runs.length === 0) return `${heading}\nYou have no run in progress.`;
+  const lines = [
+    heading,
+    `You work on several subjects at once, one run per subject, each on its own bench. You have ${runs.length} run(s) in progress:`,
+  ];
+  for (const run of runs) {
+    const task =
+      run.task.length > QUESTION_CONTEXT_RUN_TASK_CHARS ? `${run.task.slice(0, QUESTION_CONTEXT_RUN_TASK_CHARS)}... [cut]` : run.task;
+    lines.push(
+      "",
+      `Run #${run.id} on ${run.subjectId === subject ? "this very subject" : subjectName(run)}, started at ${run.startedAt} (${run.reason ? `reason: ${run.reason}` : "started by hand or by a routine"}).`,
+      `Its task: "${task}"`,
+    );
+    if (run.statuses.length > 0) {
+      lines.push("What you said last in this run (hq_status), oldest first:");
+      for (const status of run.statuses) lines.push(`- ${status.at}: ${status.text}`);
+    } else {
+      lines.push("You have said nothing yet in this run (no hq_status).");
+    }
+  }
+  lines.push(
+    "",
+    `These runs are still going: never say you have no run in progress or that one of them (${runs.map((run) => `#${run.id}`).join(", ")}) ended. When the owner asks where you stand, say what each one is doing or waiting for, as far as the lines above show, without inventing more.`,
+  );
+  const here = runs.find((run) => run.subjectId === subject);
+  if (here) {
+    lines.push(
+      `Run #${here.id} works on this very subject: what the owner says here now, and your answer, reach that run at its next step. So answer as the same agent at work, in one or two sentences, what will happen (for example "seen, it reaches my bench at the next step", or "good catch, I change it now"), and settle with the owner what is unclear. Do not propose a run nor a revision (no ${RUN_PROPOSAL_TAG} or ${REVISION_PROPOSAL_TAG} block) for something that amends the work in progress: the run hears it. A separate piece of work may still be proposed: it waits for the end of run #${here.id}.`,
+    );
+  } else {
+    lines.push("No run works on this very subject: a run or a revision proposed here can start at once, beside the others, when the machine allows.");
+  }
+  const elsewhere = runs.filter((run) => run.subjectId !== subject);
+  if (elsewhere.length > 0) {
+    lines.push(
+      `What the owner says here does not reach ${elsewhere.map((run) => `run #${run.id}`).join(" nor ")}: ${elsewhere.length > 1 ? "they work" : "it works"} on another subject.`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** The user message of a question: who the agent is, the discussion so far, the question, its run state, its memory and the date. */
 export function buildQuestionPrompt(params: {
   room: Room;
@@ -505,6 +567,8 @@ export function buildQuestionPrompt(params: {
   previous: readonly { question: string; answer: string; proposal?: ProposalDto | null }[];
   /** The agent's run in progress (null: none); undefined: not given. */
   run?: ActiveRun | null;
+  /** For a parallel agent, in place of `run`: its runs in progress, the latest started first ("Several benches"). */
+  parallelRuns?: readonly ActiveRun[];
   /** When the run state was read. */
   checkedAt?: string;
   /** The subject the question is asked in (subjects.ts); null or left out: the general one. */
@@ -541,7 +605,11 @@ export function buildQuestionPrompt(params: {
     }
   }
   lines.push("", "The owner's question:", params.question);
-  if (params.run !== undefined) lines.push("", runStateText(params.run, params.checkedAt ?? now(), params.subject?.id ?? null));
+  if (params.parallelRuns !== undefined) {
+    lines.push("", parallelRunStateText(params.parallelRuns, params.checkedAt ?? now(), params.subject?.id ?? null));
+  } else if (params.run !== undefined) {
+    lines.push("", runStateText(params.run, params.checkedAt ?? now(), params.subject?.id ?? null));
+  }
   if (params.items) {
     if (params.items.length === 0) {
       lines.push("", "You have delivered no item in this subject yet: there is nothing to revise here.");
@@ -719,7 +787,7 @@ async function answerQuestion(p: {
       agent,
       question: row.question,
       previous: p.previous,
-      run: activeRunOf(db, room.name, agent.id),
+      ...(agent.parallel ? { parallelRuns: activeRunsOf(db, room.name, agent.id) } : { run: activeRunOf(db, room.name, agent.id) }),
       checkedAt: now(),
       subject: subject === null ? null : readSubject(db, room.name, agent.id, subject),
       subjects: otherSubjects(db, room.name, agent.id, subject),

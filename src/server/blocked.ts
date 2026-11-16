@@ -171,14 +171,27 @@ export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, ag
   const cancelled = later.cancelled ?? 0;
   // What `wakeAgents` takes once the agent is free.
   const woken = overdue || (wakes && taken === 0 && cancelled <= 1);
+  // The run that holds the task's lock (lockHolder): any run of the agent, or for a parallel agent one of the task's subject.
   const running = db
-    .prepare("SELECT id, started_at, subject_id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
-    .get(task.room, task.agent_id) as { id: number; started_at: string; subject_id: number | null } | undefined;
+    .prepare(
+      `SELECT id, started_at, subject_id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running'${agent?.parallel ? " AND subject_id IS ?" : ""}
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(task.room, task.agent_id, ...(agent?.parallel ? [task.subject_id] : [])) as { id: number; started_at: string; subject_id: number | null } | undefined;
+  // A parallel agent's run of another subject, started since the task: its end, if done, makes the task overdue.
+  const other = agent?.parallel
+    ? (db
+        .prepare(
+          "SELECT id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' AND subject_id IS NOT ? AND started_at >= ? ORDER BY id DESC LIMIT 1",
+        )
+        .get(task.room, task.agent_id, task.subject_id, task.created_at) as { id: number } | undefined)
+    : undefined;
   if (running) {
     // The end of the run wakes the agent for it, or makes it overdue: a run of another subject since it was created.
-    if (woken || (running.subject_id !== task.subject_id && running.started_at >= task.created_at)) return waits("afterRun", r.afterRun(running.id));
+    if (woken || other || (running.subject_id !== task.subject_id && running.started_at >= task.created_at)) return waits("afterRun", r.afterRun(running.id));
     return why("busy", r.busy(running.id));
   }
+  if (other && !woken) return waits("afterRun", r.afterRun(other.id));
   if (woken) {
     // `wakeAgents` would take it: what holds it back is what holds back a run.
     if (isStopping()) return why("stopping", r.stopping);

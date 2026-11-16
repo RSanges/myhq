@@ -671,9 +671,11 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const held = new Set<string>();
   for (const candidate of candidates) {
     const key = `${candidate.room}/${candidate.agent_id}`;
-    if (done.has(key)) continue;
     const agent = home.rooms.find((r) => r.name === candidate.room)?.agents.find((a) => a.id === candidate.agent_id);
     if (!agent) continue;
+    // One start per agent and pass; for a parallel agent, one per subject (its lock, lockHolder).
+    const slot = agent.parallel ? `${key}#${candidate.subject_id ?? ""}` : key;
+    if (done.has(slot)) continue;
     // An overdue task waited for the agent's next run, which went to another subject: it wakes the agent itself.
     const overdue = candidate.overdue === 1;
     if (!overdue && !wakesAgent(agent, candidate.source)) continue;
@@ -699,7 +701,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     }
     const scarce = scarceOf(agent);
     if (scarce.some((each) => held.has(each))) continue;
-    done.add(key);
+    done.add(slot);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
       started.push(startRun(request, { ...deps, config, subject: candidate.subject_id ?? null }));
@@ -782,6 +784,20 @@ export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = 
 }
 
 /**
+ * The run in progress that a new run of this agent in this subject must wait
+ * for (AGENT_BUSY), null when it may start: any run of the agent, or for a
+ * parallel agent (room.json `parallel`, "Several benches") only a run of the
+ * same subject, the general one being one of them. The one place the agent
+ * lock is read: launchRun, the Standard's reasons and relaunchGuard ask it.
+ */
+export function lockHolder(db: Db, room: string, agent: Pick<Agent, "id" | "parallel">, subjectId: number | null): { id: number } | null {
+  const row = agent.parallel
+    ? db.prepare("SELECT id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' AND subject_id IS ? ORDER BY id DESC LIMIT 1").get(room, agent.id, subjectId)
+    : db.prepare("SELECT id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1").get(room, agent.id);
+  return (row as { id: number } | undefined) ?? null;
+}
+
+/**
  * Records and starts a run of any agent, room agent or MyHQ's own (onboarding),
  * after the agent lock, its shared resources (`RESOURCE_BUSY` while another
  * run holds one of them) and the daily cap. `prompt` receives the run id and
@@ -824,14 +840,23 @@ export function launchRun(params: {
 
   const { run, mailbox } = db
     .transaction(() => {
-      const busy = db
-        .prepare("SELECT id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running'")
-        .get(room.name, agent.id) as { id: number } | undefined;
+      const only = params.claimIds;
+      const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
+      // One subject per run: the one it is given, else the one of the oldest of the tasks it is started for, else the general one.
+      const oldest = only
+        ? (db
+            .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY ${queueOrder()} LIMIT 1`)
+            .get(room.name, agent.id, ...only) as { subject_id: number | null } | undefined)
+        : undefined;
+      const subject = params.subjectId !== undefined ? params.subjectId : (oldest?.subject_id ?? null);
+      const busy = lockHolder(db, room.name, agent, subject);
       if (busy) {
         throw new HqError(
           "AGENT_BUSY",
           409,
-          `Agent "${agent.id}" of room "${room.name}" already has a run in progress (#${busy.id}).`,
+          agent.parallel
+            ? `Agent "${agent.id}" of room "${room.name}" already has a run in progress in this subject (#${busy.id}).`
+            : `Agent "${agent.id}" of room "${room.name}" already has a run in progress (#${busy.id}).`,
         );
       }
       const holder = resourceHolder(db, agent.resources);
@@ -875,15 +900,6 @@ export function launchRun(params: {
         );
       }
       const at = now();
-      const only = params.claimIds;
-      const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
-      // One subject per run: the one it is given, else the one of the oldest of the tasks it is started for, else the general one.
-      const oldest = only
-        ? (db
-            .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY ${queueOrder()} LIMIT 1`)
-            .get(room.name, agent.id, ...only) as { subject_id: number | null } | undefined)
-        : undefined;
-      const subject = params.subjectId !== undefined ? params.subjectId : (oldest?.subject_id ?? null);
       const runId = Number(
         db
           .prepare(
@@ -922,7 +938,8 @@ export function launchRun(params: {
   const runAgent = readDirs.length > 0 ? { ...agent, addDirs: [...agent.addDirs, ...readDirs] } : agent;
   const prompt = params.prompt(run.id, mailbox, folders, run.subject_id);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
-  const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
+  // It keeps its subject, whatever task is oldest by then: for a parallel agent, only a run of that subject locks it out.
+  const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, subjectId: run.subject_id, attempt: 1 }) : null;
   const execution = execute({
     db,
     config,

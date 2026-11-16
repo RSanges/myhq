@@ -155,6 +155,12 @@ export const agentSchema = z.strictObject({
    * of every room. MyHQ wakes it when something new is stuck (docs/architecture.md, "The supervisor").
    */
   supervisor: z.boolean().optional(),
+  /**
+   * Several runs at once, one per subject (docs/architecture.md, "Several benches"): the lock is one run per
+   * subject, and an agent with a `worktree` gets one bench (a Git worktree on its own branch) per subject.
+   * Left out or false: one run of the agent at a time, as before.
+   */
+  parallel: z.boolean().optional(),
 
   // Run options: how each run of the agent is started (see "Run options" in docs/home-layout.md).
   /** Reasoning effort of its runs, passed as `--effort`. Default: the CLI's own. */
@@ -276,6 +282,8 @@ export type Agent = {
   needs?: { ramGb: number | null; vramGb: number | null } | null;
   /** The supervisor of the Standard (see supervisor.ts); false for most agents. */
   supervisor?: boolean;
+  /** Several runs at once, one per subject (room.json `parallel`, benches.ts); false or absent: one run at a time. */
+  parallel?: boolean;
   // Run options (room.json), absent for MyHQ's own agents.
   /** `--effort` of its runs, or null for the CLI's default. */
   effort?: Effort | null;
@@ -489,6 +497,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       resources: agent.resources ?? [],
       needs: agent.needs ? { ramGb: agent.needs.ramGb ?? null, vramGb: agent.needs.vramGb ?? null } : null,
       supervisor: agent.supervisor ?? false,
+      parallel: agent.parallel ?? false,
       effort: agent.effort ?? null,
       modelFor: agent.modelFor ?? {},
       prepare: agent.prepare

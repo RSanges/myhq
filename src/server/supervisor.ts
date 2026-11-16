@@ -8,10 +8,10 @@ import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
 import { recordExpects, type MessageExpects } from "./portier";
 import { answersLines, parseChoices } from "./questions";
-import { startRelaunchRequests } from "./relaunch-requests";
+import { relaunchSubject, startRelaunchRequests } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import { loadHome, type Home } from "./rooms";
-import { runsToday, startRun, WAITS, type RunnerDeps } from "./runner";
+import { lockHolder, runsToday, startRun, WAITS, type RunnerDeps } from "./runner";
 
 // The supervisor of the Standard: an agent with `supervisor: true` in its
 // room.json. It does for the owner what the owner did by hand: read what is
@@ -125,10 +125,18 @@ export function supervisedEntries(db: Db, home: Home, config: HqConfig, self: Su
  * (the HQ MCP server cannot know that the app is stopping: the app checks it
  * when it starts the run). Null when the run can start.
  */
-export function relaunchGuard(db: Db, config: HqConfig, home: Home, room: string, agentId: string): { code: string; message: string } | null {
+export function relaunchGuard(
+  db: Db,
+  config: HqConfig,
+  home: Home,
+  room: string,
+  agentId: string,
+  subjectId: number | null = null,
+): { code: string; message: string } | null {
   const agent = home.rooms.find((each) => each.name === room)?.agents.find((each) => each.id === agentId);
   if (!agent) return { code: "AGENT_NOT_FOUND", message: `No agent "${agentId}" in room "${room}" of the home: nobody would take the tasks.` };
-  const busy = db.prepare("SELECT id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running'").get(room, agentId) as { id: number } | undefined;
+  // The lock of the run the relaunch would start: of the subject of its tasks for a parallel agent (lockHolder).
+  const busy = lockHolder(db, room, agent, subjectId);
   if (busy) return { code: "AGENT_BUSY", message: `${room}/${agentId} already has a run in progress (#${busy.id}): wait for its end.` };
   const holder = resourceHolder(db, agent.resources);
   if (holder) {
@@ -281,7 +289,7 @@ export function requestRelaunch(
           `Already relaunched once by a supervisor (request #${earlier.id}${earlier.runId ? `, run #${earlier.runId}` : ""}): never relaunch it a second time. Hand the entry to the owner with hq_blocked_note and handOff: true.`,
         );
       }
-      const waiting = relaunchGuard(db, config, home, found.room, found.agentId);
+      const waiting = relaunchGuard(db, config, home, found.room, found.agentId, relaunchSubject(db, found.ids));
       if (waiting) return { relaunched: false, tasks: found.ids, waiting };
       const at = now();
       db.prepare(
