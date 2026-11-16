@@ -6,6 +6,7 @@ import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
 import { getConfig, liveConfig, type HqConfig } from "./config";
 import { getDbAt, now, type Db, type RunRow } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } from "./engine";
+import { strings } from "../ui/strings";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { languageName } from "./onboarding";
@@ -18,6 +19,7 @@ import {
   otherSubjects,
   readSubject,
   reopenSubject,
+  settleSubject,
   subjectItems,
   subjectTitleFrom,
   type SubjectContext,
@@ -867,13 +869,35 @@ export function decideProposal(
   }
   const proposal = toQuestion(question).proposal;
   if (!proposal) throw new HqError("PROPOSAL_NOT_FOUND", 404, `The answer to question #${question.id} proposes no run.`);
+  if (request.action === "dismiss" && proposal.state === "queued") {
+    cancelQueuedProposal(db, question);
+    settleSubject(db, question.subject_id);
+    return { question: readQuestion(db, room.name, agent.id, question.id)!, run: null };
+  }
   if (proposal.state !== "pending") {
     throw new HqError("PROPOSAL_DECIDED", 409, `The run proposed by question #${question.id} was already ${proposal.state}.`);
   }
   // Everything below is synchronous: no other request of this process decides it in between.
   let run: RunRow | null = null;
+  // A run or a revision confirmed in an archived subject opens it again: the work it starts lands in an open subject.
+  if (request.action === "launch") reopenSubject(db, question.subject_id);
   if (request.action === "launch" && proposal.reviseId !== null) {
-    decideApproval(db, proposal.reviseId, decisionSchema.parse({ decision: "revise", note: proposal.task }), config, deps);
+    try {
+      decideApproval(db, proposal.reviseId, decisionSchema.parse({ decision: "revise", note: proposal.task }), config, deps);
+    } catch (error) {
+      if (!(error instanceof HqError && error.code === "APPROVAL_ALREADY_DECIDED")) throw error;
+      // The item is already sent back with this very note (from the desk meanwhile): this proposal has nothing left to ask.
+      db.prepare("UPDATE question_proposals SET state = 'dismissed', decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
+        now(),
+        question.id,
+      );
+      settleSubject(db, question.subject_id);
+      throw new HqError(
+        "REVISION_ALREADY_ASKED",
+        409,
+        `Item #${proposal.reviseId} is already sent back for this revision: the proposal of question #${question.id} is set aside.`,
+      );
+    }
     run =
       (db
         .prepare(
@@ -909,6 +933,28 @@ export function decideProposal(
       now(),
       question.id,
     );
+    settleSubject(db, question.subject_id);
   }
   return { question: readQuestion(db, room.name, agent.id, question.id)!, run };
+}
+
+/**
+ * « Annuler ce tour » on a queued proposal: its task, still pending, is closed
+ * and the proposal is set aside. A run that took the task meanwhile already
+ * started: PROPOSAL_DECIDED, nothing changes.
+ */
+function cancelQueuedProposal(db: Db, question: QuestionRow): void {
+  db.transaction(() => {
+    const at = now();
+    const closed = db
+      .prepare(
+        `UPDATE tasks SET status = 'done', note = ?, updated_at = ?
+         WHERE id = (SELECT task_id FROM question_proposals WHERE question_id = ?) AND status = 'pending'`,
+      )
+      .run(strings.deskModules.standard.closedNote, at, question.id).changes;
+    if (closed === 0) {
+      throw new HqError("PROPOSAL_DECIDED", 409, `The run proposed by question #${question.id} already started.`);
+    }
+    db.prepare("UPDATE question_proposals SET state = 'dismissed', decided_at = ? WHERE question_id = ?").run(at, question.id);
+  }).immediate();
 }

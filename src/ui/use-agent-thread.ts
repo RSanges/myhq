@@ -98,10 +98,12 @@ export function useAgentThread(room: string, agentId: string, subject: number | 
         return run;
       } catch (failure) {
         setError(errorText(failure));
+        // The card then shows what became of the proposal meanwhile (a run took it, the revision was already asked).
+        reload();
         return null;
       }
     },
-    [room, agentId, update],
+    [room, agentId, update, reload],
   );
 
   const reset = useCallback(async () => {

@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { decideProposal, toQuestion, readDiscussion } from "../src/server/agent-questions";
 import { decideApproval } from "../src/server/approvals";
 import { listBlocked, relaunchBlocked } from "../src/server/blocked";
 import { getDbAt, type Db, type RunRow, type TaskRow } from "../src/server/db";
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
+import { HqError } from "../src/server/errors";
 import { startRelaunchRequests } from "../src/server/relaunch-requests";
 import { loadHome } from "../src/server/rooms";
 import { startRun, wakeAgents } from "../src/server/runner";
-import { createSubject } from "../src/server/subjects";
+import { createSubject, settleSubject, updateSubject } from "../src/server/subjects";
 import { makeHome, waitForRun } from "./helpers";
 
 // Which run takes which task once an agent has subjects (docs/architecture.md,
@@ -66,9 +68,39 @@ function item(db: Db, subject: number | null, status = "pending"): number {
   );
 }
 
+/** An answered question of a subject whose answer proposes `proposal` (a run, or a revision of `reviseId`). */
+function proposed(db: Db, subject: number | null, proposal: string, reviseId: number | null = null, at = new Date().toISOString()): number {
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO agent_questions (room, agent_id, question, answer, status, engine, started_at, ended_at, subject_id)
+         VALUES ('demo', 'scout', 'Can you?', 'Yes.', 'done', 'claude', ?, ?, ?)`,
+      )
+      .run(at, at, subject).lastInsertRowid,
+  );
+  db.prepare("INSERT INTO question_proposals (question_id, task, state, created_at, revise_id) VALUES (?, ?, 'pending', ?, ?)").run(
+    id,
+    proposal,
+    at,
+    reviseId,
+  );
+  return id;
+}
+
 const taskRow = (db: Db, id: number) => db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow;
 const runsAfter = (db: Db, id: number) => db.prepare("SELECT * FROM runs WHERE id > ? ORDER BY id").all(id) as RunRow[];
 const subjectStatus = (db: Db, id: number) => (db.prepare("SELECT status FROM subjects WHERE id = ?").get(id) as { status: string }).status;
+const proposalOf = (db: Db, subject: number | null, questionId: number) =>
+  toQuestion(readDiscussion(db, "demo", "scout", subject).find((row) => row.id === questionId)!).proposal;
+
+function expectHqError(code: string) {
+  return (error: unknown) => {
+    assert.ok(error instanceof HqError, String(error));
+    assert.equal(error.code, code);
+    return true;
+  };
+}
+
 test("a relaunch works on the subject of its tasks, whatever older task another subject holds; hq_relaunch too", async () => {
   const config = office();
   const db = getDbAt(config.dbPath);
@@ -235,4 +267,73 @@ test("the Standard counts the runs of the task's own subject: a run of another s
   // The cap of 1 held the wake-up back: that is the reason, not a run that took it.
   assert.equal(taskRow(db, revise).status, "pending");
   assert.equal(entryOf()?.cause, "cap");
+});
+
+test("a pending proposal keeps its subject open; a run or a revision confirmed in an archived subject opens it again", async () => {
+  const config = office();
+  const db = getDbAt(config.dbPath);
+  const sign = createSubject(db, "demo", "scout", "Sign");
+  const question = proposed(db, sign.id, "Draw a second sign.", null, "2026-11-10T09:00:00.000Z");
+  decideApproval(db, item(db, sign.id), { decision: "approved" }, config);
+  assert.equal(subjectStatus(db, sign.id), "open", "the proposal waits for the owner");
+  assert.equal(settleSubject(db, sign.id), false);
+  decideProposal({ room: "demo", agent: "scout", questionId: question, action: "dismiss" }, { config });
+  assert.equal(subjectStatus(db, sign.id), "archived", "set aside, nothing is left");
+
+  // Archived by the owner with a proposal pending: confirming it opens the subject, and its run lands there.
+  const poster = createSubject(db, "demo", "scout", "Poster");
+  const run = proposed(db, poster.id, "Draw the poster.");
+  updateSubject(db, "demo", "scout", poster.id, { status: "archived" });
+  const { run: started } = decideProposal({ room: "demo", agent: "scout", questionId: run, action: "launch" }, { config, engine: engine(), send: quiet });
+  assert.equal(started?.subject_id, poster.id);
+  assert.equal(subjectStatus(db, poster.id), "open");
+  await waitForRun(db, started!.id);
+});
+
+test("confirming a revision the item already has from the desk sets the proposal aside, once, with its own error", () => {
+  const config = office({ onRevise: "queue" });
+  const db = getDbAt(config.dbPath);
+  const piece = item(db, null);
+  decideApproval(db, piece, { decision: "revise", note: "Thicker border." }, config);
+  const question = proposed(db, null, "Thicker border.", piece);
+  assert.throws(
+    () => decideProposal({ room: "demo", agent: "scout", questionId: question, action: "launch" }, { config }),
+    expectHqError("REVISION_ALREADY_ASKED"),
+  );
+  assert.equal(proposalOf(db, null, question)?.state, "dismissed");
+  assert.throws(
+    () => decideProposal({ room: "demo", agent: "scout", questionId: question, action: "launch" }, { config }),
+    expectHqError("PROPOSAL_DECIDED"),
+  );
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE source = 'revise'").get() as { n: number }).n, 1, "no second revision");
+});
+
+test("a queued run can be cancelled while its task waits, never once its run started", async () => {
+  const config = office();
+  const db = getDbAt(config.dbPath);
+  const held = gate();
+  const busy = startRun({ room: "demo", agent: "scout", task: "Long." }, { config, engine: engine([], "done", held.promise), send: quiet });
+  const cancelled = proposed(db, null, "First task.");
+  const kept = proposed(db, null, "Second task.");
+  for (const id of [cancelled, kept]) {
+    const { run } = decideProposal({ room: "demo", agent: "scout", questionId: id, action: "launch" }, { config, engine: engine(), send: quiet });
+    assert.equal(run, null);
+    assert.equal(proposalOf(db, null, id)?.state, "queued");
+  }
+  const { question } = decideProposal({ room: "demo", agent: "scout", questionId: cancelled, action: "dismiss" }, { config });
+  assert.equal(toQuestion(question).proposal?.state, "dismissed");
+  const closed = db.prepare("SELECT t.* FROM tasks t JOIN question_proposals p ON p.task_id = t.id WHERE p.question_id = ?").get(cancelled) as TaskRow;
+  assert.equal(closed.status, "done");
+
+  held.open();
+  await waitForRun(db, busy.id);
+  const [next] = runsAfter(db, busy.id);
+  assert.ok(next, "the end of the run started the queued one left");
+  assert.equal(proposalOf(db, null, kept)?.state, "launched");
+  assert.equal(taskRow(db, closed.id).run_id, null, "the cancelled one was never taken");
+  assert.throws(
+    () => decideProposal({ room: "demo", agent: "scout", questionId: kept, action: "dismiss" }, { config }),
+    expectHqError("PROPOSAL_DECIDED"),
+  );
+  await waitForRun(db, next!.id);
 });

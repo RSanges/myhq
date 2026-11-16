@@ -119,7 +119,9 @@ export function reopenSubject(db: Db, id: number | null): void {
  * deliverable item (neither an item of questions nor an informational one) is
  * approved, the task that approval gave the agent, if any, is done (and the
  * approval command, if any, has ended), nothing of the subject is pending or
- * running (a task, a run, an item, a question), and the owner has written
+ * running (a task, a run, an item, a question, a run or a revision one of its
+ * answers proposes and the owner has not decided yet; a proposal queued
+ * waits as a pending task), and the owner has written
  * nothing in it since that approval (a message after it reopened the work).
  * The general subject never closes. Called where those states change: a
  * decision (decideApproval), the end of a run, the end of an approval
@@ -146,9 +148,11 @@ export function settleSubject(db: Db, subjectId: number | null): boolean {
            OR EXISTS (SELECT 1 FROM approval_commands WHERE approval_id = ? AND ended_at IS NULL)
            OR EXISTS (SELECT 1 FROM runs WHERE subject_id = ? AND status = 'running')
            OR EXISTS (SELECT 1 FROM approvals WHERE subject_id = ? AND status = 'pending')
-           OR EXISTS (SELECT 1 FROM agent_questions WHERE subject_id = ? AND (status = 'running' OR started_at > ?)) AS n`,
+           OR EXISTS (SELECT 1 FROM agent_questions WHERE subject_id = ? AND (status = 'running' OR started_at > ?))
+           OR EXISTS (SELECT 1 FROM question_proposals p JOIN agent_questions q ON q.id = p.question_id
+             WHERE q.subject_id = ? AND p.state = 'pending') AS n`,
       )
-      .get(subjectId, item.id, item.id, subjectId, subjectId, subjectId, item.decided_at ?? "") as { n: number };
+      .get(subjectId, item.id, item.id, subjectId, subjectId, subjectId, item.decided_at ?? "", subjectId) as { n: number };
     return unsettled.n === 0 && archive(db, subjectId);
   } catch (error) {
     console.error(`[subjects] subject #${subjectId} could not be settled`, error);

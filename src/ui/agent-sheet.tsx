@@ -182,7 +182,7 @@ type Decide = {
 /**
  * The card under an answer that proposes a run: the task, then « Lancer le
  * tour » or « On en parle d'abord ». Once decided it says what became of it,
- * after a reload too.
+ * after a reload too; a queued run can still be cancelled (« Annuler ce tour »).
  */
 function ProposalCard({
   questionId,
@@ -227,9 +227,16 @@ function ProposalCard({
           {waits && <p className="agent-proposal-note">{p.busy(name)}</p>}
         </>
       ) : proposal.state === "queued" ? (
-        <p className="agent-proposal-note" role="status">
-          {p.queued(name)}
-        </p>
+        <>
+          <p className="agent-proposal-note" role="status">
+            {p.queued(name)}
+          </p>
+          <div className="agent-proposal-actions">
+            <button type="button" className="chat-btn" disabled={busy} onClick={() => void decide.onDecide(questionId, "dismiss")}>
+              {busy ? p.cancelling : p.cancel}
+            </button>
+          </div>
+        </>
       ) : proposal.state === "launched" ? (
         <p className="agent-proposal-note" role="status">
           <span className="agent-proposal-done">{revision === null ? p.launched(proposal.runId) : p.revised}</span>
