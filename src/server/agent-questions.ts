@@ -980,8 +980,17 @@ export function decideProposal(
   deps: RunnerDeps = {},
 ): { question: QuestionRow; run: RunRow | null } {
   const config = deps.config ?? getConfig();
-  const { room, agent } = findAgent(config, request.room, request.agent);
   const db = getDbAt(config.dbPath);
+  // Setting a proposal aside needs no agent: the one of a removed agent (or room) is dismissed all the same.
+  let found: ReturnType<typeof findAgent> | null = null;
+  try {
+    found = findAgent(config, request.room, request.agent);
+  } catch (error) {
+    const gone = error instanceof HqError && ["AGENT_NOT_FOUND", "ROOM_NOT_FOUND", "ROOM_INVALID"].includes(error.code);
+    if (!(gone && request.action === "dismiss")) throw error;
+  }
+  const room = { name: found?.room.name ?? request.room };
+  const agent = { id: found?.agent.id ?? request.agent };
   const question = readQuestion(db, room.name, agent.id, request.questionId);
   if (!question) {
     throw new HqError("QUESTION_NOT_FOUND", 404, `No question #${request.questionId} to agent "${agent.id}" of room "${room.name}".`);
