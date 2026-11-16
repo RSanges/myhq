@@ -88,10 +88,12 @@ reaches the model) and its role memory (the values of `hq_memory_read`, up to
 closes its task with its final message (a run that ends well marks its tasks
 `done`), so that `hq_task_update` is only called to report `blocked`. An
 agent with a `prepare` command gets it run first, which may skip the turn or
-add context (`home-layout.md`, "Run options"). An agent with `needs` or
-`resources` is told, in one sentence, that MyHQ checked the machine before
-starting it and that it still checks it before a heavy step if its role says
-so (`MACHINE_CHECKED`); the others get no such line. The prompt of
+add context (`home-layout.md`, "Run options"). A run MyHQ looked at the
+machine for (its agent declares `needs`, or the home has a veto command and
+the agent `needs` or `resources`) is told, in one sentence, that MyHQ checked
+the machine before starting it and that it still checks it before a heavy
+step if its role says so (`MACHINE_CHECKED`); the others get no such line,
+an agent with `resources` alone and no veto command included. The prompt of
 every run ends with today's date, the weekday spelled out in the home's
 `language` and the time zone of `HQ_TIMEZONE`, so that no agent works the
 weekday out by itself. The Claude Code binary is not
@@ -1094,9 +1096,11 @@ can take it, and the owner may put something first.
 
 **One order** (`queueOrder`, `src/server/db.ts`, the one place it is written).
 The pending tasks of the whole home are served in one order: the tasks the
-owner placed (`tasks.queue_rank`, migration 31, smaller first), then every
-other one, oldest first (`id`). Without any rank it is `ORDER BY id`, the order
-of before. `wakeAgents` reads its candidates in that order, and so do the
+owner placed ahead (`tasks.queue_rank` above 0, migration 31, smaller first),
+then every other one, oldest first (`id`), then the tasks the owner sent to
+the end (`queue_rank` below 0, smaller first), after every task without a
+place, the ones that arrive later included. Without any rank it is `ORDER BY
+id`, the order of before. `wakeAgents` reads its candidates in that order, and so do the
 other places that pick "the next task": the subject of a run started for given
 tasks (`launchRun`'s `claimIds`), the subject of a relaunch
 (`relaunchSubject`), the revisions and needs of the onboarding agent
@@ -1105,26 +1109,34 @@ tasks (`launchRun`'s `claimIds`), the subject of a relaunch
 **No overtaking.** When a resource or the machine frees, the first task in the
 order that can use it gets it. The rule, in `wakeAgents` and in the queue's
 reasons alike: a task whose start is refused for a shared resource or for the
-machine (`RESOURCE_BUSY`, `MACHINE_BUSY`: memory, or the veto command) keeps,
-for the rest of the pass, everything scarce its agent declares: each of its
-`resources`, `ram` when it declares `needs.ramGb`, `vram` when it declares
-`needs.vramGb`. A later task of another agent that needs one of those does not
-start in that pass (its reason is `behind`, « Derrière la tâche #n »). A task
-that needs none of them still starts: a task with no `needs` and no
-`resources` never waits behind anyone, a RAM need does not wait behind a GPU
-need. A task that waits for its own agent (`AGENT_BUSY`) keeps nothing, so a
-busy agent never holds the others up; the daily cap and a stop of MyHQ hold
-every start anyway. Each pass starts from the head of the order again, so the
-rule holds across passes. The owner breaks a deadlock by order: a task that
-can never fit (its need above the machine) holds back only the tasks after it,
-and moving it down, or another one up, lets them go. What the rule binds is the
-wake-ups, which is what starts every waiting task when something frees. A
-start asked directly (a run by hand, the chat's `run`, a relaunch, a
-supervisor's `hq_relaunch`, a run confirmed in a discussion) is checked against
-the lock, the resources, the cap and the machine, not against the queue:
-when it cannot start, its task (if it has one) joins the queue at its place.
-Routines are never queued: a routine that meets a busy agent, a busy resource
-or the machine full is journaled `skipped_busy`, as before.
+veto command (`RESOURCE_BUSY`, `MACHINE_BUSY` of the veto) keeps, for the rest
+of the pass, everything scarce its agent declares: each of its `resources`,
+`ram` when it declares `needs.ramGb`, `vram` when it declares `needs.vramGb`.
+A task refused for memory (`MACHINE_BUSY` of the gate, `MachineBusy.holds`)
+keeps only the kinds that fell short: `ram` for a RAM shortfall, `vram` for a
+GPU one or an unreadable GPU. A later task of another agent that needs one of
+those does not start in that pass (its reason is `behind`, « Derrière la
+tâche #n »). A task that needs none of them still starts: a task with no
+`needs` and no `resources` never waits behind anyone, and a RAM need does not
+wait behind a task whose GPU need fell short (an agent that declares both and
+waits for the GPU holds the GPU only). A task that waits for its own agent
+(`AGENT_BUSY`) keeps nothing, so a busy agent never holds the others up; the
+daily cap and a stop of MyHQ hold every start anyway. Each pass starts from
+the head of the order again, so the rule holds across passes. A task whose
+need can never fit (below) keeps nothing. A task that waits for memory that
+may free keeps its place for it, before the tasks that arrive later, since
+they are newer; the owner moves it, or another one, to change that: `down`
+on the last task of the queue, or a `down` that makes it the last, sends it
+to the end for good, behind the tasks that arrive later too (`up`, `first`
+or `auto` brings it back). What the rule binds is the wake-ups, which is
+what starts every waiting task when something frees. A start asked directly
+(a run by hand, the chat's `run`, a relaunch, a supervisor's `hq_relaunch`, a
+run confirmed in a discussion, a routine) is checked against the lock, the
+resources, the cap and the machine, not against the queue: when it cannot
+start, its task (if it has one) joins the queue at its place. Routines are
+never queued: a routine that meets a busy agent, a busy resource or the
+machine full is journaled `skipped_busy`, as before (the veto command being
+asked is the one exception, below).
 
 **What the owner sees and does.** `GET /api/queue` (`src/server/queue.ts`,
 `listQueue`) gives every pending task in that order with its room, agent,
@@ -1134,7 +1146,8 @@ the same function), plus three that are not a block: `afterRun` (the end of
 its agent's run in progress takes it), `byDesign` (`"queue"`, a message its
 sender or the portier let wait) and `behind`. `POST /api/queue` moves a task
 first, up, down or back to automatic order (`moveInQueue`: the tasks from the
-head down to the ones moved get places, so the rest keeps its order; `updated_at`
+head down to the ones moved get places, so the rest keeps its order; a `down`
+that makes a task the last sends it to the end for good; `updated_at`
 is not touched, it tells the Standard which tasks a failed run gave back), then
 wakes the agents in the new order. The desk shows the panel « File d'attente »
 (`src/ui/queue-panel.tsx`) only when something waits; it reads the queue
@@ -1148,10 +1161,15 @@ the used and total memory of the first GPU from `nvidia-smi
 --query-gpu=memory.used,memory.total --format=csv,noheader,nounits` when it
 exists (2 s at most, the first line read strictly as two numbers, the used not
 above the total); anything else is unknown, never an error. A reading is reused
-5 s. `nvidia-smi` is run synchronously (a short call, only when an agent with
-`needs` is looked at and the cache is stale), so that the gate stays in the
-start's transaction. Every caller can be given its own reading (`deps.machine`),
-which is how the tests run without the real tool.
+5 s. Nothing waits on `nvidia-smi`: it runs in the background (`execFile`),
+started again when its latest answer is older than 5 s, and a reading takes the
+RAM at once and the GPU from that latest answer; until its first answer (just
+after a start of MyHQ) the GPU is unknown, so a GPU need waits for the next
+wake-up or tick. `launchRun` takes the reading before its transaction and
+passes it in; the arithmetic and the reservations stay inside it. No request
+handler (`GET /api/queue`, the Standard, the settings page) blocks on a child
+process. Every caller can be given its own reading (`deps.machine`), which is
+how the tests run without the real tool.
 
 **The gate**, in `launchRun`, in the same immediate transaction as the agent
 lock, the resources and the daily cap, after them (`machineCheck`, one place).
@@ -1161,24 +1179,37 @@ declares, a run starts only if
 
     free now - reserved >= need + margin
 
-where `reserved` is, over the runs in progress that have needs, what each one
-still has to take: `max(0, its need - what the machine gave up since it
-started)`, the RAM given up being `free at its start - free now` and the GPU
-memory `used now - used at its start`, never negative. A run that just
-started has taken nothing yet and reserves its whole need, so two tasks
-released in the same pass never count the same free memory (the second sees
-the first's whole need reserved). The need is the effective one (below), the
-margin `machine.keepFreeRamGb` or `keepFreeVramGb` of `myhq.json` (2 GB and 1
-GB by default). Otherwise the start throws `MACHINE_BUSY` (409, with the
-figures): it is one more of the waits (`WAITS`), so the task stays pending,
-shows in the queue with its figures, and is tried again by the usual
-wake-ups (the end of a run) and by the scheduler's tick every 15 s
-(`resumeWaitingTasks`), which is also what notices memory freed outside MyHQ.
-A run that starts records its need and what the machine had (`run_machine`,
-migration 31). The reservation of a run is computed from what the machine as a
-whole gave up: with several runs going, one run's share is not known, so the
-reservations are an estimate, and the gate only as good as the declarations
-and the margin.
+where `reserved` is, over the runs in progress that have a need of that kind,
+the sum of their needs minus what the machine gave up since the earliest of
+them started, never negative: the RAM given up being `free at that start -
+free now`, the GPU memory `used now - used at that start`. The memory given up
+is credited once to all of them, since with several runs going one run's
+share is not known (crediting it to each would count it several times). A run
+that just started has taken nothing yet and reserves its whole need, so two
+tasks released in the same pass never count the same free memory (the second
+sees the first's whole need reserved), and two runs of one parallel agent
+reserve twice. For example, A and B need 8 GB each and start with 20 GB free;
+A took 2 (18 free): 16 - 2 = 14 GB are still reserved, 4 are left, and C (4 GB,
+margin 2) waits. The need is the effective one (below), the margin
+`machine.keepFreeRamGb` or `keepFreeVramGb` of `myhq.json` (2 GB and 1 GB by
+default). Otherwise the start throws `MACHINE_BUSY` (409, with the figures):
+it is one more of the waits (`WAITS`), so the task stays pending, shows in the
+queue with its figures, and is tried again by the usual wake-ups (the end of a
+run) and by the scheduler's tick every 15 s (`resumeWaitingTasks`), which is
+also what notices memory freed outside MyHQ. A run that starts records its
+need, its declared need and what the machine had (`run_machine`, migrations
+31 and 33). The reservations are an estimate, and the gate only as good as the
+declarations and the margin.
+
+**A need that can never fit.** A need whose margin added takes it above the
+machine's total (RAM total from `node:os`, GPU total from `nvidia-smi`) can
+never start, whatever frees: the start throws `MACHINE_BUSY` with that reason,
+the task keeps no place in the queue (no task waits behind it), and its own
+reason says so and what to do (`neverFits`, « elle ne partira jamais avec ce
+besoin »: lower `needs` in `room.json`, or close the task). It is stuck like
+any other wait of the Standard: listed after 15 minutes, and handed to the
+supervisor, or to the owner without one (`entryRule` has no automatic rule for
+it), never taken for a wait that resolves itself.
 
 **An unknown GPU fails closed.** A `vramGb` need while the GPU cannot be read
 waits, with its own reason (« la carte graphique ne se lit pas »). A need is
@@ -1186,45 +1217,82 @@ declared because running without that memory breaks something (a render that
 crashes halfway, the owner's game that stutters); MyHQ cannot tell, and a wait
 is visible in the queue while a crash costs a run. On a machine without
 `nvidia-smi`, `vramGb` is not to be declared (`home-layout.md`, "What a run
-needs").
+needs"). Such a wait holds the GPU only: a RAM-only task still starts.
 
 **The home's veto command** (`machine.veto` of `myhq.json`), asked only for
 agents that declare `needs` or `resources`, once everything above passes. It
-runs like `prepare` and `approvalCommand` (cwd the home, a program given as a
-path relative to it, the agents' safe environment plus `MYHQ_HOME`, the reading
-and the run about to start on stdin, `timeoutSeconds`, 10 by default) and
-answers `{ "wait": false }` or `{ "wait": true, "reason": "..." }`. It runs in
-the background: the start throws `MACHINE_BUSY` while it is asked, its answer
-is stored (`machine_vetoes`, one row per agent) and wakes the agents again; a
-`wait` holds a minute and its reason is shown in the queue, an `ok` is used
-once by the start. It fails open: a crash, another exit code, a timeout or an
-unreadable answer is an `ok` with its error (logged, shown on `/reglages`).
-The memory gate is MyHQ's own and fails closed; the veto is an extra word of
-the home, and a broken script must not stop the heavy work.
+runs like `prepare` and `approvalCommand` (the program and its arguments,
+spawned without a shell; cwd the home, a program given as a path relative to
+it, the agents' safe environment plus `MYHQ_HOME`, the reading and the run
+about to start on stdin, `timeoutSeconds`, 10 by default) and answers `{
+"wait": false }` or `{ "wait": true, "reason": "..." }`. Without a shell, a
+`.cmd`, `.bat` or `.ps1` script cannot start by itself on Windows: the program
+is its interpreter (`["powershell", "-File", "veto.ps1"]`), as for the other
+home commands. It runs in the background: the start throws `MACHINE_BUSY`
+while it is asked, its answer is stored (`machine_vetoes`, one row per agent,
+kept for `/reglages`) and wakes the agents again; a `wait` holds a minute and
+its reason is shown in the queue, an `ok` is used once, by the first start
+after it (an `ok` is used once a run of the agent started after it). A start
+with a pending task behind it (a wake-up, a proposal confirmed in a
+discussion, which is then kept as a task, a chat request) waits as its task,
+which the answer's wake-up starts. A direct start with no task behind it (a
+routine, a run by hand, the chat's `run`, a relaunch, a supervisor's
+`hq_relaunch`) is tried again, once, as the same start, when the command
+answered (`ask.retry`, held in memory by the process that asked): with an
+`ok`, it starts; if another start used the `ok` first, it waits for the next
+answer in turn; with a `wait`, or when something else holds it by then, it is
+dropped and logged. A routine's firing is journaled `skipped_busy` at first,
+then becomes `started` with its run, or keeps why it did not start: one
+firing, one run at most. It fails open: a crash, another exit code, a timeout
+or an unreadable answer is an `ok` with its error, logged, kept on
+`/reglages`, and told on the Standard as MyHQ's note (one blocked task of the
+agent, cause `myhqNote`, refreshed while it keeps failing, done once the
+command answers again; one the owner closed stays closed until then). An
+invalid `machine` block means the defaults and no veto command, with the
+reason in the errors of `/reglages`, as every invalid key of `myhq.json`. The
+memory gate is MyHQ's own and fails closed; the veto is an extra word of the
+home, and a broken script must not stop the heavy work.
 
 **Measured, then estimated.** While a run with `needs` goes on, each tick
 samples the reading and keeps on its `run_machine` row the peak of what the
 machine gave up since the run started (RAM and GPU memory); its end takes a
 last sample and stores whether it was alone among the runs with needs (no
-other one overlapped it): only those measure the agent. The effective need of
-an agent is its declared need, raised to the max of the peaks of its last 5
-runs alone when that is higher; it is never lowered automatically, the owner
-lowers the declaration himself from what `/reglages` shows (per agent with
-needs: declared, median and max of its last runs alone, and the need in
-force). A peak is what the whole machine gave up, so something else started
-during a run alone (a game) raises it too; it ages out after 5 runs alone.
+other one overlapped it): only those measure the agent. A run that ended
+without the normal path (a crash, a forced stop) has its row closed, not
+alone, by the recovery at startup, the exit hook and each tick
+(`closeStaleRunMachines`), so that it never makes the later runs "not alone".
+The effective need of an agent is its declared need, raised to what its peaks
+teach when that is higher, by this rule:
+
+- only the peaks of its last 5 runs alone recorded under the declaration in
+  force count: when the owner changes `needs` in `room.json`, the learning
+  starts over;
+- a peak above what the machine can give at all (its total minus the margin)
+  is left out: it measured something else, and would lock the agent out;
+- the need is raised to the second highest of those peaks, so that it moves
+  only when two runs measured it: one outlier (a game opened during a run
+  alone) never counts.
+
+It is never lowered below the declaration; `/reglages` shows, per agent with
+needs, the declared need, the median and max of its last runs alone under that
+declaration, and the need in force. Since the learned need can never exceed
+what the machine can give, and one run cannot raise it, an agent cannot lock
+itself out by its own measures; a need declared above the machine is the
+`neverFits` case above.
 
 **A home without `needs`, without a rank and without a veto command behaves
 exactly as before**: the order is `ORDER BY id`, the machine is never read,
 no row is written in `run_machine` or `machine_vetoes`, the prompts have no
-new line, and the no-overtaking rule only ever concerns `resources`, where
-one holder at a time already meant that a later task could not take a
-resource an earlier one waited for (test/queue-machine.test.ts proves it, and
-the rest of the suite runs unchanged).
+new line (an agent with `resources` alone included), and the no-overtaking
+rule only ever concerns `resources`, where one holder at a time already meant
+that a later task could not take a resource an earlier one waited for
+(test/queue-machine.test.ts proves it, and the rest of the suite runs
+unchanged).
 
-The Standard and the supervisor know the two new waits: a task stuck behind
-the machine for more than 15 minutes is listed with the cause `machine` or
-`veto`, and both resolve themselves (`entryRule`: `wait`).
+The Standard and the supervisor know the new waits: a task stuck behind the
+machine for more than 15 minutes is listed with the cause `machine` or
+`veto`, and both resolve themselves (`entryRule`: `wait`); `neverFits` does
+not (above).
 
 ### Wake-ups
 
@@ -2000,6 +2068,8 @@ démarrera dès que <agent> sera libre. », then « Tour #N lancé. » once it
 started. `dismiss` sets it aside; on a queued one (« Annuler ce tour »
 under « En file ») it closes the task, still pending, and the proposal is
 set aside; once a run took the task, it is too late (`PROPOSAL_DECIDED`).
+Setting a proposal aside needs no agent: one of an agent (or a room) removed
+from the home is dismissed all the same, while launching it is refused.
 Confirming a run or a revision opens its subject again if it was archived,
 and a subject does not close itself while one of its proposals waits for the
 owner. A proposal is decided once
@@ -2019,10 +2089,15 @@ message whole, each answer cut to 6000 characters, 24000 characters at most
 in one result (always one exchange at least; the rest comes with the next
 status, and the result says so). The cursor is `runs.heard_up_to` (migration
 30), the highest exchange id the run has been given: set when its prompt is
-built, from the same reads as its discussion block (the proposing question
+built, with its discussion block (`runDiscussion`): the proposing question
 for a run proposed in the discussion, so what followed it reaches the run at
-its first step; else the latest answered exchange of the subject), then moved
-by each delivery in the transaction that stores the status. Within a subject
+its first step, else the latest answered exchange of the subject; and never
+below the highest exchange the block holds. When the block goes past that
+point (a run of the general subject that takes a revision and a proposal kept
+as a task: the revision brings the exchanges since its item's run), the
+exchanges in between join the block too, so that none is skipped and none
+comes twice. It is then moved by each delivery in the transaction that stores
+the status. Within a subject
 one question runs at a time and ids grow, so a question still running when
 the prompt is built is delivered once answered: no gap, no duplicate with the
 block. A run of the general subject hears the general discussion, a run of a

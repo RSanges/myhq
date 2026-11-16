@@ -39,7 +39,7 @@ Every error has the same shape and an HTTP status:
 | `DELETE_CONFIRM_MISMATCH` | 400 | The `confirm` of a deletion is not the room's name. |
 | `ROOM_PATH_REFUSED` | 409 | The folder of a room to delete, or `archives/rooms`, is a link or leads out of the home. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
-| `MACHINE_BUSY` | 409 | The machine cannot take the run now (`architecture.md`, "The queue and the machine"): an agent with `needs` whose memory is not free on top of the margin and of what the runs in progress still have to take (the message gives the figures), a GPU need while the GPU cannot be read, or the home's veto command says to wait (its reason) or is being asked. A woken task stays pending in the queue. |
+| `MACHINE_BUSY` | 409 | The machine cannot take the run now (`architecture.md`, "The queue and the machine"): an agent with `needs` whose memory is not free on top of the margin and of what the runs in progress still have to take (the message gives the figures), a GPU need while the GPU cannot be read, a need above the machine's total (it never starts), or the home's veto command says to wait (its reason) or is being asked (a start with no task behind it, such as a run by hand, is then tried again once it answers). A woken task stays pending in the queue. |
 | `NOT_IN_QUEUE` | 409 | `POST /api/queue` on a task that is no longer `pending` (taken by a run, done or blocked). Nothing is changed. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) or a deliverable that carries questions (`hq_submit` `questions`) without `answers`. |
@@ -92,7 +92,7 @@ French text per `code`.
 | Approval `status` | `pending`, `approved`, `rejected`, `revise` |
 | Event `type` | `start`, `text`, `tool_call`, `tool_result`, `end` |
 | Agent `state` (in `/api/state`) | `working` (a run is in progress), `failed` (its last run failed), `idle` |
-| Firing `outcome` | `started`, `skipped_busy` (agent lock, or a shared resource held by another run), `skipped_cap` (daily cap), `skipped_unarmed`, `error` |
+| Firing `outcome` | `started`, `skipped_busy` (agent lock, a shared resource held by another run, or the machine), `skipped_cap` (daily cap), `skipped_unarmed`, `error`; a firing that met the veto command being asked is `skipped_busy` until the command answers, then `started` with its run, or keeps why it did not start |
 
 A run is `cancelled` when it was interrupted because the app stopped during it
 (the grace of a stop was over, or the app crashed or was killed: summary
@@ -798,7 +798,7 @@ machine is not read).
 - `summary` is the task's text on one line (160 characters at most);
   `subject` the title of its subject, `null` for the general one.
 - `placed`: the owner gave it a place (`queue_rank`); `false`: automatic order.
-- `cause` is a cause of the Standard (`busy`, `resource`, `machine`, `veto`,
+- `cause` is a cause of the Standard (`busy`, `resource`, `machine`, `veto`, `neverFits`,
   `cap`, `stopping`, `pingPong`, `givenBack`, `interruptedTwice`, `noWake`,
   `notWoken`, `unknownAgent`) or one of the queue's own: `afterRun` (the end of
   its agent's run in progress takes it), `byDesign` (it waits for the agent's
@@ -1911,7 +1911,7 @@ Secrets are never part of it.
 - `machine` is the `machine` block of `myhq.json` in force (margins, the veto
   command as one line, `null` without one), the reading of the machine
   (`null` when no agent declares `needs`), one row per agent and kind of
-  memory it declares (`declaredGb`, the measured peaks of its last runs alone:
+  memory it declares (`declaredGb`, the measured peaks of its last runs alone under that declaration:
   `runs`, `medianGb`, `maxGb`, and `effectiveGb`, what a run reserves), and the
   latest answers of the veto command (`vetoes`: `verdict` `asking`, `ok`,
   `wait`, with its reason or its error).

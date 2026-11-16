@@ -434,19 +434,28 @@ itself as soon as the machine allows it (the end of a run, or the scheduler's
 tick every 15 s). A manual start gets `MACHINE_BUSY` (409), a routine is
 journaled `skipped_busy`.
 
-- **The need in force** is the declared one, raised to the highest peak
-  measured on the agent's last 5 runs that ran alone among the runs with
-  needs, when that is higher. It is never lowered by MyHQ: the settings page
-  shows the declared need and the measured median and max, and you lower the
+- **A need the machine can never give** (with the margin, above its total
+  RAM or GPU memory) never starts: its task says so in the queue and on the
+  Standard, and holds no other task back. Lower the declaration, or close the
+  task.
+- **The need in force** is the declared one, raised to the second highest
+  peak measured on the agent's last 5 runs that ran alone among the runs with
+  needs, under the declaration in force, when that is higher: one outlier run
+  (a game opened meanwhile) never raises it, a peak above what the machine can
+  give is left out, and changing the declaration starts the learning over. It
+  is never lowered below the declaration: the settings page shows the
+  declared need and the measured median and max, and you change the
   declaration yourself.
 - **A GPU need without a GPU reading** (no `nvidia-smi`, an AMD or Apple GPU,
   a failing driver) waits: MyHQ cannot tell whether the memory is there. Do
   not declare `vramGb` on such a machine; a `resources: ["gpu"]` lock and the
   veto command are the tools there.
 - Only the first GPU `nvidia-smi` lists is read.
-- An agent with `needs` or `resources` is told in its run instructions that
-  MyHQ checked the machine before starting it, and that it still checks it
-  before a heavy step if its role says so.
+- A run MyHQ looked at the machine for (`needs` declared, or a veto command
+  and `needs` or `resources`) is told in its run instructions that MyHQ
+  checked the machine before starting it, and that it still checks it before
+  a heavy step if its role says so. `resources` alone, without a veto
+  command, adds no line.
 
 #### The piece: `pieces`
 
@@ -1208,7 +1217,7 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item with its link, cut like a single one is, without « Vu » buttons (the whole is one message when it can be, several only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
 
 | `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone (the Standard). |
-| `machine` | no | `{ "keepFreeRamGb"?: number, "keepFreeVramGb"?: number, "veto"?: { "command": [...], "timeoutSeconds"?: number } }`: what the gate of the machine keeps free for you on top of what the runs need (defaults: 2 GB of RAM, 1 GB of GPU memory), and the home's veto command (see "The veto command" below). Only agents with `needs` (and, for the veto command, `resources`) are concerned. Read at each start, apart from the rest of the file: an invalid block keeps the defaults and no veto command, with the reason on `/reglages`. |
+| `machine` | no | `{ "keepFreeRamGb"?: number, "keepFreeVramGb"?: number, "veto"?: { "command": [...], "timeoutSeconds"?: number } }`: what the gate of the machine keeps free for you on top of what the runs need (defaults: 2 GB of RAM, 1 GB of GPU memory), and the home's veto command (see "The veto command" below). Only agents with `needs` (and, for the veto command, `resources`) are concerned. Read at each start, apart from the rest of the file: an invalid block keeps the defaults and no veto command, with the reason in the errors of `/reglages`. |
 | `portier` | no | `{ "enabled": true, "model": "haiku" }` (the default): the portier reads a message from another agent before MyHQ wakes its recipient for it, and lets an acknowledgement wait for the recipient's next run (see "The portier" above). `enabled: false` wakes the recipient at each message, as before; `model` is the alias given to `claude -p --model`. Read at each wake-up, apart from the rest of the file: an invalid block keeps the default, with the reason on `/reglages`. |
 
 The file is read when the export is checked (every ten minutes) and at each
@@ -1225,10 +1234,13 @@ A command of the home that MyHQ asks before a run of an agent that declares
 `needs` or `resources` starts, once the agent lock, the resources, the daily
 cap and the memory allow it: for what MyHQ cannot see (a game is running,
 another tool's own queue is busy). It runs like the other home commands
-(`prepare`, `approvalCommand`): the program and its arguments, a program given
-as a path relative to the home, cwd the home, the agents' safe environment
-plus `MYHQ_HOME`, at most `timeoutSeconds` (10 by default, 60 at most). It
-reads one JSON object on stdin:
+(`prepare`, `approvalCommand`): the program and its arguments, started
+without a shell, a program given as a path relative to the home, cwd the
+home, the agents' safe environment plus `MYHQ_HOME`, at most `timeoutSeconds`
+(10 by default, 60 at most). On Windows a `.cmd`, `.bat` or `.ps1` script does
+not start by itself: give its interpreter as the program (`["powershell",
+"-File", "veto.ps1"]`, `["node", "veto.mjs"]`). It reads one JSON object on
+stdin:
 
 ```json
 {
@@ -1243,11 +1255,15 @@ reads one JSON object on stdin:
 `{ "wait": false }` to let the run start, `{ "wait": true, "reason": "Un jeu
 tourne" }` to make it wait; the reason (500 characters at most) is shown in
 the queue. The run waits while the command is asked, and its answer wakes the
-agents again. A `wait` holds for a minute, then the command is asked again at
-the next wake-up or tick; an `ok` is used by the start it was asked for. **It
-fails open**: a command that cannot start, exits with another code, takes
-longer than its timeout or prints something else lets the run start, with the
-error in the log and on `/reglages`. Without `veto`, nothing is asked.
+agents again: a waiting task starts then, and a start with no task (a routine,
+a run by hand, a relaunch) is tried again once, so it is not lost; a routine's
+journal line says `started` once it did. A `wait` holds for a minute, then the
+command is asked again at the next wake-up or tick; an `ok` is used by the
+start it was asked for. **It fails open**: a command that cannot start, exits
+with another code, takes longer than its timeout or prints something else lets
+the run start, with the error in the log, on `/reglages` and on the Standard
+(MyHQ's note on the agent, closed once the command answers again). Without
+`veto`, nothing is asked.
 
 ### The owner of the floor (`floor.owner`)
 
