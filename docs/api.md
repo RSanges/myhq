@@ -39,6 +39,8 @@ Every error has the same shape and an HTTP status:
 | `DELETE_CONFIRM_MISMATCH` | 400 | The `confirm` of a deletion is not the room's name. |
 | `ROOM_PATH_REFUSED` | 409 | The folder of a room to delete, or `archives/rooms`, is a link or leads out of the home. |
 | `RESOURCE_BUSY` | 409 | The agent holds a shared resource (`resources` in `room.json`, for example `gpu`) that a run of another agent holds now. The message names the resource and that run. |
+| `MACHINE_BUSY` | 409 | The machine cannot take the run now (`architecture.md`, "The queue and the machine"): an agent with `needs` whose memory is not free on top of the margin and of what the runs in progress still have to take (the message gives the figures), a GPU need while the GPU cannot be read, or the home's veto command says to wait (its reason) or is being asked. A woken task stays pending in the queue. |
+| `NOT_IN_QUEUE` | 409 | `POST /api/queue` on a task that is no longer `pending` (taken by a run, done or blocked). Nothing is changed. |
 | `APPROVAL_ALREADY_DECIDED` | 409 | The approval is no longer `pending`, and the decision is not a `revise` (an approved or rejected item can be sent back; an item already in `revise` only with a new note or new remarks). |
 | `ANSWERS_REQUIRED` | 422 | Approving an item of questions (`type: "question"`, from `hq_ask`) or a deliverable that carries questions (`hq_submit` `questions`) without `answers`. |
 | `INVALID_ANSWERS` | 422 | The `answers` do not fit the questions: not one per question, an option that does not exist or is picked twice, nothing answered, or several answers to a single-select question. Nothing is decided. |
@@ -59,7 +61,7 @@ Every error has the same shape and an HTTP status:
 | `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `SETTINGS_FILE_INVALID` | 409 | A save of the settings page that writes `myhq.json` while the file is not valid JSON or not a JSON object. Nothing is written; the file is left for the user to fix. |
-| `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close` with a task id that does not exist. |
+| `TASK_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close`, or `POST /api/queue`, with a task id that does not exist. |
 | `RUN_NOT_FOUND` | 404 | `POST /api/blocked/relaunch` or `/close`, or `GET /api/live/runs/<id>`, with a run id that does not exist. |
 | `NOT_BLOCKED` | 409 | `POST /api/blocked/relaunch` or `/close` on a task that is neither `blocked` nor `pending`, or on a run that is not failed or interrupted, or has no task left blocked or given back. Nothing is changed. |
 | `CLOSURE_NOT_FOUND` | 404 | `POST /api/blocked/reopen` with a closure id that does not exist. |
@@ -467,9 +469,9 @@ Response `202`:
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `UNAUTHORIZED` (401),
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
-`RESOURCE_BUSY` (409), `DAILY_CAP_REACHED` (429), `SHUTTING_DOWN` (503). The
-token, the lock, the shared resources and the cap are checked before anything
-is started.
+`RESOURCE_BUSY` (409), `DAILY_CAP_REACHED` (429), `MACHINE_BUSY` (409),
+`SHUTTING_DOWN` (503). The token, the lock, the shared resources, the cap and
+the machine are checked before anything is started.
 
 ### `GET /api/runs/active`
 
@@ -521,7 +523,7 @@ data: {Run}
 | `approval` | Approval | an agent submits an item, and when the item is decided |
 | `chat` | `{ "type": "message", "message": ChatMessage }`, `{ "type": "cleared" }` or `{ "type": "turn", "turn": TurnState }` | a message is added to the conversation (from any channel: Telegram, the desk's panel, an alert of the bot), the conversation is emptied (`/new`), or a turn starts, queues or ends (see `GET /api/chat/history`) |
 | `roadmap` | `{ "at": string }` | `docs/roadmap.json` of the home was created, edited, replaced or removed (see `GET /api/roadmap`) |
-| `desk` | `{ "objects": [{ "id", "count", "status" }], "at": string }` | the count or the state (`ok`, `error`) of an object of the desk changed (see `GET /api/desk`) |
+| `desk` | `{ "objects": [{ "id", "count", "status" }], "queue": string, "at": string }` | the count or the state (`ok`, `error`) of an object of the desk changed (see `GET /api/desk`), or the queue did (`queue`, an opaque signature of the pending tasks in order, the runs in progress and the veto answers: see `GET /api/queue`) |
 
 `data` is the entity as it is when the message is sent, so an older change may
 already carry a later state (for example an approval created then approved
@@ -736,7 +738,7 @@ Response `200`:
 
 When the run cannot start, `run` is `null`, the tasks stay pending, and
 `waiting` says why: `{ "code": "RESOURCE_BUSY", "message": "..." }` (also
-`AGENT_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`, or `ROOM_NOT_FOUND`,
+`AGENT_BUSY`, `MACHINE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`, or `ROOM_NOT_FOUND`,
 `AGENT_NOT_FOUND`, `ROOM_INVALID` when the agent is no longer in the home).
 
 Errors: `INVALID_INPUT`, `TASK_NOT_FOUND` or `RUN_NOT_FOUND` (404), `NOT_BLOCKED` (409).
@@ -762,6 +764,56 @@ Response `200`: `{ "closure": 3, "tasks": [12, 13] }`.
 
 Errors: `INVALID_JSON`, `INVALID_INPUT` (400), `UNSUPPORTED_MEDIA_TYPE` (415),
 `CLOSURE_NOT_FOUND` (404), `ALREADY_REOPENED`, `STATE_CHANGED` (409).
+
+### `GET /api/queue`
+
+The queue (`architecture.md`, "The queue and the machine"): every `pending`
+task of the home, in the order the wake-ups serve it (the owner's places
+first, then the oldest first), each with why it waits, and the reading of the
+machine when an agent of the home declares `needs` (`null` otherwise: the
+machine is not read).
+
+```json
+{
+  "tasks": [
+    {
+      "taskId": 41, "room": "studio", "roomLabel": null, "roomColor": "#f5a524",
+      "agentId": "video", "agentName": "Video", "subject": "Clip de lancement",
+      "source": "chat", "summary": "Rends le clip B en 1080p.", "since": "2026-11-16T09:12:00.000Z",
+      "placed": true, "cause": "machine",
+      "reason": "Machine : il faut 10 Go de mémoire vidéo libres, plus 1 Go de marge, il en reste 6 (8 libres, 2 réservés par les tours en cours) : elle repart dès que la machine le permet."
+    }
+  ],
+  "machine": { "at": "2026-11-16T09:30:00.000Z", "ramFreeGb": 18.4, "ramTotalGb": 31.9, "vramUsedGb": 16, "vramTotalGb": 24 }
+}
+```
+
+- `summary` is the task's text on one line (160 characters at most);
+  `subject` the title of its subject, `null` for the general one.
+- `placed`: the owner gave it a place (`queue_rank`); `false`: automatic order.
+- `cause` is a cause of the Standard (`busy`, `resource`, `machine`, `veto`,
+  `cap`, `stopping`, `pingPong`, `givenBack`, `interruptedTwice`, `noWake`,
+  `notWoken`, `unknownAgent`) or one of the queue's own: `afterRun` (the end of
+  its agent's run in progress takes it), `byDesign` (it waits for the agent's
+  next run on purpose: `"queue"`, a message the portier or its sender let
+  wait), `behind` (it would start, but an earlier task waits for the same
+  resource or the same kind of memory: it passes after it). `reason` is the
+  French sentence.
+- `machine.vramUsedGb` and `vramTotalGb` are `null` when the GPU cannot be read.
+
+### `POST /api/queue`
+
+Moves a pending task in the queue, then wakes the agents in the new order.
+Body (zod, unknown fields refused): `{ "taskId": 41, "move": "first" | "up" |
+"down" | "auto" }`. `first`, `up` and `down` move it in the order as it is,
+and give places to the tasks from the head down to the ones moved (and to
+every task already placed); `auto` gives it back to the automatic order
+(after the placed tasks, oldest first). A move at an edge changes nothing.
+
+Response `200`: the queue as it is now, in the shape of `GET /api/queue`.
+
+Errors: `INVALID_JSON`, `INVALID_INPUT` (400), `TASK_NOT_FOUND` (404),
+`NOT_IN_QUEUE` (409).
 
 ### `GET /api/sprites/[room]/[agent]`
 
@@ -1823,6 +1875,12 @@ Secrets are never part of it.
     "summaries": { "enabled": true, "source": "default", "week": { "calls": 12, "costUsd": 0.0036 } },
     "secrets": [{ "name": "HQ_TELEGRAM_BOT_TOKEN", "set": true }],
     "attachmentMaxMb": 200,
+    "machine": {
+      "reading": { "at": "2026-11-16T09:30:00.000Z", "ramFreeGb": 18.4, "ramTotalGb": 31.9, "vramUsedGb": 16, "vramTotalGb": 24 },
+      "keepFreeRamGb": 2, "keepFreeVramGb": 1, "source": "default", "veto": null,
+      "agents": [{ "room": "studio", "agent": "video", "name": "Video", "kind": "vram", "declaredGb": 8, "effectiveGb": 9.5, "runs": 4, "medianGb": 7.8, "maxGb": 9.5 }],
+      "vetoes": []
+    },
     "errors": []
   }
 }
@@ -1841,6 +1899,13 @@ Secrets are never part of it.
 - `spend` is the cost of the runs since Monday, by room; `summaries.week` and
   `portier.week` count the small model calls of the last 7 days.
 - `secrets` says whether each secret is set, never its value.
+- `machine` is the `machine` block of `myhq.json` in force (margins, the veto
+  command as one line, `null` without one), the reading of the machine
+  (`null` when no agent declares `needs`), one row per agent and kind of
+  memory it declares (`declaredGb`, the measured peaks of its last runs alone:
+  `runs`, `medianGb`, `maxGb`, and `effectiveGb`, what a run reserves), and the
+  latest answers of the veto command (`vetoes`: `verdict` `asking`, `ok`,
+  `wait`, with its reason or its error).
 - `errors` lists the keys of `myhq.json` that are invalid, one line each; those
   keys are ignored (the environment or the default applies).
 

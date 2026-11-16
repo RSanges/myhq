@@ -121,6 +121,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram), or the answers of the owner to its questions (`hq_ask`), starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
 | `agents[].notifyRuns` | no | `"summary"`: when a run of this agent ends `done`, its summary (the agent's final text, at most about 4000 characters) is sent to Telegram as plain text. This is how a brief or a recap agent delivers its text. Default: nothing is sent for a run that ends well. |
 | `agents[].resources` | no | Shared resources the agent's runs hold, for example `["gpu"]` (lowercase letters, digits, `-` or `_`, each listed once). Two runs holding a common resource never run at once, in any room (see "Shared resources" below). Default: none. |
+| `agents[].needs` | no | What one run of the agent takes from the machine, in GB: `{ "ramGb"?: number, "vramGb"?: number }`, at least one, each more than 0. A run starts only when the machine has it free on top of the home's margin (`machine` of `myhq.json`) and of what the runs in progress still have to take (see "What a run needs" below). Default: none, the machine is not looked at for this agent and its runs start as before. |
 | `agents[].pieces` | no | What the agent works on, shown large on its tile of the surveillance room (`/surveillance`): 1 to 8 patterns relative to its working directory, written as the write rules take them (`renders/**/*.mp4`, `parts/*.3mf`, `drafts/*.md`; `**` any depth, `*` and `?` inside one name). MyHQ follows the matching files written during the run, newest first (see "The piece" below). Default: none, the tile shows the agent's words only. |
 | `agents[].supervisor` | no | `true`: the supervisor of the Standard. It reads what is stuck (`hq_blocked`), writes to any agent of any room, reads the items of every room, relaunches a stuck entry once (`hq_relaunch`), leaves a note for the owner on it (`hq_blocked_note`) and closes, with its reason, what it settled (`hq_blocked_close`, the owner may reopen it), never a request of the owner nor an entry handed to the owner; it submits nothing to approve. MyHQ wakes it when something new is stuck, and every 30 minutes at most while entries remain open (see "The supervisor" in `architecture.md`). It also checks a run that reaches `HQ_RUN_TIMEOUT_MINUTES` (`hq_run_status`), and extends it (`hq_run_extend`) or stops it (`hq_run_stop`) instead of letting MyHQ interrupt it (see "Long runs"). Give it only the hq tools. MyHQ wakes the first one of the home. Default: `false`. |
 | `agents[].skills` | no | Claude Code skills the agent follows: folders relative to the **room directory**, each holding a `SKILL.md` (see "Skills" below). Default: none. |
@@ -412,7 +413,39 @@ refuses to start another run that holds one of them while it runs:
 The agent sheet lists the resources and shows « En attente : gpu occupé »
 while the agent's work waits for one of them. The lock is MyHQ's: a process
 outside MyHQ that uses the same GPU is not seen, so a role can still check the
-card itself before starting heavy work.
+card itself before starting heavy work, or the home can say so through its
+veto command (below).
+
+#### What a run needs: `needs`
+
+```json
+{ "id": "video", "resources": ["gpu"], "needs": { "ramGb": 6, "vramGb": 10 } }
+```
+
+`needs` tells MyHQ what one run takes from the machine, so that it waits in
+the queue instead of starting and finding the machine full. Before such a run
+starts, MyHQ reads the machine (free RAM from the system, GPU memory from
+`nvidia-smi` when the machine has it) and starts it only when, for each need,
+what is free minus what the runs already started still have to take is at
+least the need plus the margin of `machine` in `myhq.json`. Otherwise the task
+stays pending, shows in the queue on the desk with the figures, and starts by
+itself as soon as the machine allows it (the end of a run, or the scheduler's
+tick every 15 s). A manual start gets `MACHINE_BUSY` (409), a routine is
+journaled `skipped_busy`.
+
+- **The need in force** is the declared one, raised to the highest peak
+  measured on the agent's last 5 runs that ran alone among the runs with
+  needs, when that is higher. It is never lowered by MyHQ: the settings page
+  shows the declared need and the measured median and max, and you lower the
+  declaration yourself.
+- **A GPU need without a GPU reading** (no `nvidia-smi`, an AMD or Apple GPU,
+  a failing driver) waits: MyHQ cannot tell whether the memory is there. Do
+  not declare `vramGb` on such a machine; a `resources: ["gpu"]` lock and the
+  veto command are the tools there.
+- Only the first GPU `nvidia-smi` lists is read.
+- An agent with `needs` or `resources` is told in its run instructions that
+  MyHQ checked the machine before starting it, and that it still checks it
+  before a heavy step if its role says so.
 
 #### The piece: `pieces`
 
@@ -844,7 +877,7 @@ assistant runs with its core commands only.
 | `chat.writeDirs` | no | Directories outside `chat.cwd` the chat may write (a notes vault, a data folder), relative to the home; each is also passed as `--add-dir` unless `chat.cwd` or `chat.addDirs` covers it. Each turn installs the write guard in `chat.cwd` (its `.claude/settings.local.json`, kept out of Git by a `.claude/.gitignore` of MyHQ's): the chat writes only in `chat.cwd`, these folders and `chat.requests.dir`, whatever `chat.permissionMode` says. Default: none. |
 | `chat.allowedTools` | no | Whitelist (`--allowedTools`). Only the built-in tools it names exist for the chat (`--tools`). Default: none, so the chat can only talk. May name MCP tools of `chat.mcpServers`: `mcp__<server>__*` or an exact `mcp__<server>__<tool>`. |
 | `chat.mcpServers` | no | Extra MCP servers for the chat, same shape and same `${NAME}` placeholders as `agents[].mcpServers` of `room.json` (see "Environment placeholders" above). Each turn writes a `--mcp-config` file with them (deleted when the turn ends), still with `--strict-mcp-config`. The name `hq` is refused: the chat is not an agent and has no HQ tools. A server may add `"untrusted": false` (MyHQ's own flag, never written to the MCP config): every server is untrusted by default (see "Chat actions"). Default: none. |
-| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`, `file_received`); default none. The directory must be inside `chat.cwd`, `chat.addDirs` or `chat.writeDirs`; the write guard lets the chat write there. |
+| `chat.requests` | no | `{ "dir": "<path relative to the home>", "actions"?: [...] }`: where the chat leaves requests for the agents and actions for the core (below). `actions` is the whitelist of chat actions (`approve`, `reject`, `revise`, `run`, `arm`, `disarm`, `propose_agent`, `file_received`, `queue`, `queue_first`); default none. The directory must be inside `chat.cwd`, `chat.addDirs` or `chat.writeDirs`; the write guard lets the chat write there. |
 | `chat.untrustedTools` | no | More tools whose results count as untrusted for chat actions, by exact name or with a final `*` (`mcp__mail__*`). The web tools and the tools of untrusted servers always count. Default: none. |
 | `chat.permissionMode` | no | `default` (default), `acceptEdits`, `plan`, `dontAsk` or `auto`. `bypassPermissions` is refused. |
 | `chat.timeoutMinutes` | no | A turn still going after this is killed. Default: 10. |
@@ -984,13 +1017,16 @@ with a button or a command, by writing a JSON file in the same
 { "action": "disarm", "agent": "watch" }
 { "action": "propose_agent", "need": "Draw the illustrations of the site.", "room": "demo" }
 { "action": "file_received", "file": "contract.pdf", "room": "shop", "order": "2026-11-acme-sign" }
+{ "action": "queue" }
+{ "action": "queue_first", "taskId": 41 }
 ```
 
 - Only the actions listed in `chat.requests.actions` are taken; an action
   outside it, or a file that does not match (an unknown action, `reject` or
   `revise` without a `note`, a decision without `id`, which `approvalId` may
   replace, a `run`, `arm` or `disarm` without `agent`, a `propose_agent`
-  without `need`, a `file_received` without `file` or `room`), is moved to
+  without `need`, a `file_received` without `file` or `room`, a `queue_first`
+  without `taskId`), is moved to
   `<dir>/rejected/`, logged, and a line of the reply says so.
 - `room` may be left out when exactly one room has an agent of that id.
 - After a reply that succeeds, the action files are taken in name order (before
@@ -1007,6 +1043,13 @@ with a button or a command, by writing a JSON file in the same
   core appends one French line per action to the chat's reply (« Item #14 :
   Approuvé. », « Tour #7 lancé pour demo / watch. », or the refusal). The
   chat's own text never decides anything.
+- **`queue`** lists the queue (`architecture.md`, "The queue and the
+  machine"): a line per waiting task, in order, with its number, room and
+  agent, its text and why it waits. **`queue_first`** `{ "action":
+  "queue_first", "taskId" }` puts a pending task at the head of the queue, as
+  « En tête » on the desk does, then wakes the agents in the new order; the
+  line says so, or why not (a task no longer pending). Both go through the
+  same confirmation guard as every action.
 - **`file_received`** `{ "action": "file_received", "file", "room", "order"? }`
   files a file the owner sent to the bot. It moves `file`, a plain file name
   (no separator, no drive prefix) of the `dropDir` of `assistant.json`, with
@@ -1164,11 +1207,46 @@ without a section, the feature is off. Other keys are ignored (and kept as they 
 | `quietHours` | no | A daily range, `start` and `end` as `HH:MM` on the wall clock of the home's time zone (`timeZone`, then `HQ_TIMEZONE`, then the machine's), during which the Telegram alerts of the informational items (`notifyTypes`) are held. An `end` earlier than `start` crosses midnight (`21:00` to `08:00`); `start` is inside the range, `end` is not. An item held stays on the desk under « À regarder » as usual, only its message waits: the first sweep after the end of the range (the app checks every minute) sends all the items held as one text, a heading « MyHQ : N alertes arrivées pendant les heures calmes (de 21:00 à 08:00) » then each item with its link, cut like a single one is, without « Vu » buttons (the whole is one message when it can be, several only past 4000 characters); a single item held is sent the usual way, with its button. An item whose agent puts `"urgent": true` in its `payload` (`hq_submit`) is sent at once, quiet hours or not. Pending approvals, failure alerts and run summaries are never held. Read apart from the rest of the file: an invalid value (`"8:00"`, the same start and end) holds nothing, with the reason in the log and on `/reglages`. Default: none, every alert goes at once. |
 
 | `desk` | no | The objects of the desk and where their data comes from (below). Default: a pile, a tray, a newspaper and a phone (the Standard). |
+| `machine` | no | `{ "keepFreeRamGb"?: number, "keepFreeVramGb"?: number, "veto"?: { "command": [...], "timeoutSeconds"?: number } }`: what the gate of the machine keeps free for you on top of what the runs need (defaults: 2 GB of RAM, 1 GB of GPU memory), and the home's veto command (see "The veto command" below). Only agents with `needs` (and, for the veto command, `resources`) are concerned. Read at each start, apart from the rest of the file: an invalid block keeps the defaults and no veto command, with the reason on `/reglages`. |
 | `portier` | no | `{ "enabled": true, "model": "haiku" }` (the default): the portier reads a message from another agent before MyHQ wakes its recipient for it, and lets an acknowledgement wait for the recipient's next run (see "The portier" above). `enabled: false` wakes the recipient at each message, as before; `model` is the alias given to `claude -p --model`. Read at each wake-up, apart from the rest of the file: an invalid block keeps the default, with the reason on `/reglages`. |
 
 The file is read when the export is checked (every ten minutes) and at each
 `hq_submit`, so a change needs no restart. An invalid file is reported in the
 log (and every item keeps the pending flow).
+
+### The veto command (`machine.veto`)
+
+```json
+{ "machine": { "keepFreeVramGb": 2, "veto": { "command": ["node", "tools/machine-veto.mjs"], "timeoutSeconds": 10 } } }
+```
+
+A command of the home that MyHQ asks before a run of an agent that declares
+`needs` or `resources` starts, once the agent lock, the resources, the daily
+cap and the memory allow it: for what MyHQ cannot see (a game is running,
+another tool's own queue is busy). It runs like the other home commands
+(`prepare`, `approvalCommand`): the program and its arguments, a program given
+as a path relative to the home, cwd the home, the agents' safe environment
+plus `MYHQ_HOME`, at most `timeoutSeconds` (10 by default, 60 at most). It
+reads one JSON object on stdin:
+
+```json
+{
+  "reading": { "at": "...", "ramFreeGb": 18.4, "ramTotalGb": 31.9, "vramUsedGb": 16, "vramTotalGb": 24 },
+  "run": { "room": "studio", "agent": "video", "needs": { "ramGb": 6, "vramGb": 10 }, "declaredNeeds": { "ramGb": 6, "vramGb": 8 }, "resources": ["gpu"] },
+  "now": "..."
+}
+```
+
+`needs` is the need in force, `declaredNeeds` the one of `room.json`
+(`null` for a kind not declared). It answers on stdout, exit code 0:
+`{ "wait": false }` to let the run start, `{ "wait": true, "reason": "Un jeu
+tourne" }` to make it wait; the reason (500 characters at most) is shown in
+the queue. The run waits while the command is asked, and its answer wakes the
+agents again. A `wait` holds for a minute, then the command is asked again at
+the next wake-up or tick; an `ok` is used by the start it was asked for. **It
+fails open**: a command that cannot start, exits with another code, takes
+longer than its timeout or prints something else lets the run start, with the
+error in the log and on `/reglages`. Without `veto`, nothing is asked.
 
 ### The owner of the floor (`floor.owner`)
 
