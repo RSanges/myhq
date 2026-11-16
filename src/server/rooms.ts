@@ -7,7 +7,7 @@ import { cronError } from "./cron";
 import { readArchivedRooms } from "./home-settings";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
-import { patternRegExp } from "./write-guard-lib.mjs";
+import { patternRegExp, resolveReal } from "./write-guard-lib.mjs";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
 export const idSchema = z
@@ -337,20 +337,36 @@ const overlaps = (a: string, b: string): boolean => isInside(a, b) || isInside(b
  * writable in a question too, where the working directory is not
  * (agent-questions.ts), so it may overlap no working directory (its agent's
  * or another's), no other notebook (`others`: those of the rooms already
- * loaded), nor the home's `rooms/` and `data/` folders (the roles, the
- * room.json files, the database).
+ * loaded), nor the home's `rooms/`, `data/` and `assistant/` folders (the
+ * roles, the room.json files, the database, the assistant's prompts), nor
+ * hold the home (its config files), nor overlap the application's repository
+ * (the working directory of the process, as config.ts takes it) unless it
+ * sits inside the home. Every path is compared by its real path (links and
+ * junctions resolved, the deepest existing part through realpath), as the
+ * write guard resolves the writes.
  */
 function notebookError(home: string, agents: readonly Agent[], others: readonly { owner: string; dir: string }[] = []): string | null {
   const taken = [...others];
+  const real = (dir: string): string => resolveReal(path.resolve(dir)) as string;
   for (const agent of agents) {
-    const dir = agent.notebook;
-    if (!dir) continue;
-    const workDir = agents.find((each) => overlaps(dir, each.workDir));
-    if (workDir) return `notebook of "${agent.id}" must not be, hold or sit inside the working directory of "${workDir.id}"`;
-    for (const folder of ["rooms", "data"]) {
-      if (overlaps(dir, path.join(home, folder))) return `notebook of "${agent.id}" must not overlap the ${folder}/ folder of the home`;
+    if (!agent.notebook) continue;
+    let dir: string;
+    try {
+      dir = real(agent.notebook);
+    } catch (error) {
+      return `notebook of "${agent.id}": ${(error as Error).message}`;
     }
-    const other = taken.find((each) => overlaps(dir, each.dir));
+    const workDir = agents.find((each) => overlaps(dir, real(each.workDir)));
+    if (workDir) return `notebook of "${agent.id}" must not be, hold or sit inside the working directory of "${workDir.id}"`;
+    const realHome = real(home);
+    for (const folder of ["rooms", "data", "assistant"]) {
+      if (overlaps(dir, real(path.join(home, folder)))) return `notebook of "${agent.id}" must not overlap the ${folder}/ folder of the home`;
+    }
+    if (isInside(dir, realHome)) return `notebook of "${agent.id}" must not be or hold the home`;
+    if (overlaps(dir, real(process.cwd())) && !isInside(realHome, dir)) {
+      return `notebook of "${agent.id}" must not overlap the repository of MyHQ`;
+    }
+    const other = taken.find((each) => overlaps(dir, real(each.dir)));
     if (other) return `notebook of "${agent.id}" overlaps the notebook of ${other.owner}`;
     taken.push({ owner: `"${agent.id}"`, dir });
   }

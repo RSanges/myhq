@@ -55,6 +55,12 @@ export const homeSettingsSchema = z.looseObject({
     })
     .optional(),
   notifyTypes: z.array(approvalTypeSchema).default([]),
+  /**
+   * Folders no agent reads directly (read-guard.ts), relative to the home or
+   * absolute: Read, Glob and Grep there are refused, but in the agent's own
+   * notebook and addDirs inside them. Absent: no read guard.
+   */
+  privateDirs: z.array(z.string().trim().min(1)).max(32).optional(),
 });
 
 export type HomeSettings = z.infer<typeof homeSettingsSchema>;

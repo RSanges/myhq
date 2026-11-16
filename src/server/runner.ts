@@ -12,7 +12,7 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine"
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
 import { discussionHandoff } from "./discussion-handoff";
-import { DOOR_TOOL, serveDoor } from "./door";
+import { DOOR_TOOL, DOOR_WAIT_MS, serveDoor } from "./door";
 import { notebookAccess, notebookText } from "./notebook";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
@@ -39,6 +39,7 @@ import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { skillTools, syncSkills } from "./skills";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
+import { agentReadGuard } from "./read-guard";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
@@ -414,6 +415,14 @@ const NESTED_SESSION_VAR =
   /^(CLAUDECODE|CLAUDE_CODE_.+|CLAUDE_AGENT_SDK_.+|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PREVIEW_.+|USE_LOCAL_OAUTH|USE_STAGING_OAUTH|ANTHROPIC_BASE_URL|MCP_CONNECTION_NONBLOCKING)$/;
 /** User settings that stay valid for a nested run. */
 const KEPT_CLAUDE_VARS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_GIT_BASH_PATH"]);
+/**
+ * The CLI's limits on one MCP tool call (CLI 2.1.325, a stdio server: a hard
+ * limit of 1e8 ms and an idle one of 30 minutes by default). hq_ask_assistant
+ * waits up to DOOR_WAIT_MS without a word: a shorter value inherited from the
+ * service's environment would cut it, so it is dropped and the default holds.
+ */
+const MCP_CALL_LIMIT_VARS = new Set(["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"]);
+const MCP_CALL_LIMIT_MIN_MS = DOOR_WAIT_MS + 30_000;
 
 /**
  * Environment of a `claude -p` process (agent run or assistant chat). The
@@ -429,6 +438,7 @@ export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
   for (const [key, value] of Object.entries(base)) {
     if (/^(HQ|MYHQ)_/i.test(key)) continue;
     if (nested && NESTED_SESSION_VAR.test(key) && !KEPT_CLAUDE_VARS.has(key)) continue;
+    if (MCP_CALL_LIMIT_VARS.has(key) && Number(value) < MCP_CALL_LIMIT_MIN_MS) continue;
     env[key] = value;
   }
   const token = base.HQ_CLAUDE_OAUTH_TOKEN?.trim();
@@ -1047,11 +1057,20 @@ async function execute(p: ExecuteParams): Promise<void> {
         workDir: agent.workDir,
         allowedTools: agent.allowedTools,
         disallowedTools: agent.disallowedTools,
-        writeDirs: notebook ? [notebook.dir] : [],
+        notebooks: notebook ? [notebook.dir] : [],
       });
-      if (guard.allow.length > 0 || guard.writeDirs.length > 0) {
+      if (guard.allow.length > 0 || guard.notebooks !== undefined) {
         installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
       }
+      const addDirs = notebook ? notebook.addDirs : agent.addDirs;
+      // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.
+      const reads = agentReadGuard({
+        home: config.home,
+        repoRoot: config.repoRoot,
+        workDir: agent.workDir,
+        readDirs: addDirs,
+        ignoreInGit: agent.worktree !== null,
+      });
       fs.mkdirSync(config.runsDir, { recursive: true });
       writeMcpConfig({
         file: mcpConfigPath,
@@ -1083,12 +1102,12 @@ async function execute(p: ExecuteParams): Promise<void> {
         rolePath: agent.rolePath,
         allowedTools: notebook ? notebook.allowedTools : agent.allowedTools,
         disallowedTools: agent.disallowedTools,
-        addDirs: notebook ? notebook.addDirs : agent.addDirs,
+        addDirs,
         tools: notebook ? notebook.tools : skillTools(agent),
         mcpConfigPath,
         maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
         workDir: agent.workDir,
-        env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard) },
+        env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard), ...reads },
         signal: active.controller.signal,
         onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
       };

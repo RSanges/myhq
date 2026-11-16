@@ -10,11 +10,33 @@ import type { Engine, RunInput } from "../src/server/engine";
 import { NOTEBOOK_LIST_MAX, notebookFiles, notebookText } from "../src/server/notebook";
 import { loadHome } from "../src/server/rooms";
 import { startRun } from "../src/server/runner";
-import { WRITE_GUARD_ENV } from "../src/server/write-guard";
-import { decide, readConfig } from "../src/server/write-guard-lib.mjs";
+import { decideRead, READ_GUARD_ENV, readReadConfig } from "../src/server/read-guard-lib.mjs";
+import { READ_GUARD_HOOK, WRITE_GUARD_ENV, WRITE_GUARD_HOOK } from "../src/server/write-guard";
+import { decide, NOTEBOOK_FILE_MAX, readConfig } from "../src/server/write-guard-lib.mjs";
 import { makeHome, waitForRun } from "./helpers";
 
 const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+
+/** The PreToolUse entries of a working directory's settings file. */
+function hookEntries(workDir: string): unknown[] {
+  return (JSON.parse(fs.readFileSync(path.join(workDir, ".claude", "settings.local.json"), "utf8")) as { hooks: { PreToolUse: unknown[] } }).hooks.PreToolUse;
+}
+
+/** The guards' entries as MyHQ writes them: exec form, the hook from the sources (no frozen build in the tests), blocking when it fails. */
+const entry = (matcher: string, hook: string) => ({
+  matcher,
+  hooks: [
+    {
+      type: "command",
+      command: process.execPath.replace(/\\/g, "/"),
+      args: [path.join(process.cwd(), "src", "server", hook).replace(/\\/g, "/")],
+      timeout: 30,
+      onFailure: "block",
+    },
+  ],
+});
+const writeGuardEntry = () => entry("Write|Edit|MultiEdit|NotebookEdit", WRITE_GUARD_HOOK);
+const readGuardEntry = () => entry("Read|Glob|Grep", READ_GUARD_HOOK);
 
 /** A notes vault outside the home, as the owner keeps one: each agent gets one folder of it. */
 function vault(): string {
@@ -106,11 +128,11 @@ test("a run with a notebook: the folder is created, readable and writable there 
   assert.ok(flagValues(args, "--add-dir").includes(notes), "readable: an --add-dir");
   assert.deepEqual(flagValues(args, "--tools"), ["Read", "Write", "Edit"], "Write and Edit exist even for an agent whose rules have none");
   assert.ok(flagValues(args, "--allowedTools").includes("Write"));
-  // Writable there only: the guard's one writeDirs entry, nothing of the working directory (the agent's rules allow no write there).
+  // Writable there only: the guard's one notebook, nothing of the working directory (the agent's rules allow no write there).
   const guard = readConfig({ [WRITE_GUARD_ENV]: input.env[WRITE_GUARD_ENV] });
-  assert.deepEqual(guard.writeDirs, [notes]);
-  assert.deepEqual(guard.allow, []);
-  assert.ok(fs.existsSync(path.join(input.workDir, ".claude", "settings.local.json")), "the hook is installed");
+  assert.deepEqual(guard, { workDir: path.resolve(input.workDir), allow: [], deny: [], writeDirs: [], notebooks: [notes] });
+  assert.deepEqual(hookEntries(input.workDir), [writeGuardEntry()], "the write guard's hook, and no other");
+  assert.equal(input.env[READ_GUARD_ENV], undefined, "no private folder in this home: no read guard");
   assert.match(input.prompt, /## Your notebook/);
   assert.match(input.prompt, /It holds no note yet\./);
   assert.match(input.prompt, /state of your bench .* stays in hq_memory/);
@@ -149,8 +171,8 @@ test("a question with a notebook: Write and Edit exist, the guard holds them to 
 
   // The guard, as the hook reads it from the environment of this question.
   const guard = readConfig({ [WRITE_GUARD_ENV]: input.env[WRITE_GUARD_ENV] });
-  assert.deepEqual(guard, { workDir: path.resolve(input.workDir), allow: [], deny: [], writeDirs: [notes] });
-  assert.ok(fs.existsSync(path.join(input.workDir, ".claude", "settings.local.json")), "the hook is installed in the question's working directory");
+  assert.deepEqual(guard, { workDir: path.resolve(input.workDir), allow: [], deny: [], writeDirs: [], notebooks: [notes] });
+  assert.deepEqual(hookEntries(input.workDir), [writeGuardEntry()], "the write guard's hook is installed in the question's working directory");
   const write = (file: string) => decide({ tool_name: "Write", tool_input: { file_path: file }, cwd: input.workDir }, guard);
   assert.deepEqual(write(path.join(notes, "2026-11-16 emoji.md")), { allow: true }, "inside the notebook: accepted");
   assert.deepEqual(decide({ tool_name: "Edit", tool_input: { file_path: path.join(notes, "2026-11-14 tone of the posts.md") }, cwd: input.workDir }, guard), { allow: true });
@@ -173,8 +195,72 @@ test("a question without a notebook stays as it was: three read tools, no guard,
   askAgent({ room: "demo", agent: "scout", question: "How are you?" }, { config, engine: recordingEngine(seen) });
   await questionsIdle();
   const input = seen[0]!;
-  assert.deepEqual(flagValues(buildClaudeArgs(input), "--tools"), ["Read", "Glob", "Grep"]);
+  // The whole argument list, as it was before notebooks and the read guard existed.
+  assert.deepEqual(buildClaudeArgs(input), [
+    "-p",
+    input.prompt,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--model",
+    "sonnet",
+    "--append-system-prompt-file",
+    input.rolePath,
+    "--mcp-config",
+    input.mcpConfigPath,
+    "--strict-mcp-config",
+    "--setting-sources",
+    "project,local",
+    "--exclude-dynamic-system-prompt-sections",
+    "--add-dir",
+    path.resolve(config.home, "../demo-project"),
+    "--tools",
+    "Read",
+    "Glob",
+    "Grep",
+    "--allowedTools",
+    "Read",
+    "Glob",
+    "Grep",
+    "mcp__hq__hq_memory_read",
+    "mcp__hq__hq_items",
+    "--disallowedTools",
+    "Bash(vercel *)",
+    "Bash(npx vercel *)",
+    "Bash(eas submit *)",
+    "Bash(npx eas submit *)",
+    "Bash(npm run db:push *)",
+    "Bash(pnpm db:push *)",
+    "Bash(npx drizzle-kit push *)",
+    "Bash(npx prisma db push *)",
+    "Bash",
+    "Edit",
+    "MultiEdit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "mcp__hq__hq_submit",
+    "mcp__hq__hq_message",
+    "mcp__hq__hq_ask",
+    "mcp__hq__hq_status",
+    "mcp__hq__hq_show",
+    "mcp__hq__hq_task_update",
+    "mcp__hq__hq_read_decisions",
+    "mcp__hq__hq_memory_write",
+    "mcp__hq__hq_order_open",
+    "mcp__hq__hq_suggest_agent",
+    "mcp__hq__hq_relaunch",
+    "mcp__hq__hq_blocked_note",
+    "mcp__hq__hq_run_extend",
+    "mcp__hq__hq_run_stop",
+    "--max-budget-usd",
+    "1",
+  ]);
   assert.equal(input.env[WRITE_GUARD_ENV], undefined);
+  assert.equal(input.env[READ_GUARD_ENV], undefined);
+  assert.ok(!fs.existsSync(path.join(input.workDir, ".claude", "settings.local.json")), "no guard installed");
   assert.deepEqual(input.addDirs, loadHome(config.home).rooms[0]!.agents[0]!.addDirs);
   assert.ok(!input.prompt.includes("## Your notebook"));
   assert.equal(questionSystemText("French"), questionSystemText("French", false, false));
@@ -200,4 +286,120 @@ test("the notebook listing: newest first, no hidden files, capped in the prompt"
   assert.match(text, new RegExp(`\\(${NOTEBOOK_LIST_MAX} of ${NOTEBOOK_LIST_MAX + 5}\\)`));
   assert.equal(text.split("\n").filter((line) => line.startsWith("- note-")).length, NOTEBOOK_LIST_MAX);
   assert.doesNotMatch(text, /write to it what you and the owner settle/, "that line is the question's");
+});
+
+// --- What a notebook holds ---------------------------------------------------------
+
+test("inside a notebook: Markdown notes only, nothing hidden, and a bounded size; the chat's writeDirs keep their full access", () => {
+  const notes = vault();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-work-"));
+  const guard = { workDir: work, allow: [], deny: [], writeDirs: [], notebooks: [notes] };
+  const write = (file: string, content = "x", tool = "Write") => decide({ tool_name: tool, tool_input: { file_path: path.join(notes, file), content }, cwd: work }, guard);
+  assert.deepEqual(write("2026-11-16 tone.md"), { allow: true });
+  assert.deepEqual(write("topics/deep/NOTE.MD"), { allow: true });
+  for (const hidden of [".hidden.md", ".obsidian/app.md", "topics/.trash/x.md", "a.md:stream", "dir:x/a.md", "trailing.md.", "trailing.md ", "folder./a.md"]) {
+    const decision = write(hidden);
+    assert.ok(!decision.allow && /no hidden file or folder/.test(decision.reason), hidden);
+  }
+  for (const other of ["script.js", "note.txt", "noextension", "note.md.js", "page.html"]) {
+    const decision = write(other);
+    assert.ok(!decision.allow && /Markdown notes only/.test(decision.reason), other);
+  }
+  for (const tool of ["MultiEdit", "NotebookEdit"]) {
+    const decision = decide({ tool_name: tool, tool_input: { file_path: path.join(notes, "a.md"), notebook_path: path.join(notes, "a.md") }, cwd: work }, guard);
+    assert.ok(!decision.allow && /Write and Edit only/.test(decision.reason), tool);
+  }
+  // The size, on what the file would hold once written.
+  assert.deepEqual(write("big.md", "é".repeat(NOTEBOOK_FILE_MAX / 2)), { allow: true }, "the bound is in bytes, and reached is allowed");
+  const big = write("big.md", "x".repeat(NOTEBOOK_FILE_MAX + 1));
+  assert.ok(!big.allow && /200000 bytes at most/.test(big.reason));
+  fs.writeFileSync(path.join(notes, "grow.md"), "a".repeat(NOTEBOOK_FILE_MAX - 10) + "MARK");
+  const edit = (old_string: string, new_string: string, replace_all = false) =>
+    decide({ tool_name: "Edit", tool_input: { file_path: path.join(notes, "grow.md"), old_string, new_string, replace_all }, cwd: work }, guard);
+  assert.deepEqual(edit("MARK", "MARK2"), { allow: true });
+  assert.equal(edit("MARK", "y".repeat(20)).allow, false, "an edit that would pass the bound is refused");
+  assert.equal(edit("a", "aa", true).allow, false, "replace_all counts every replacement");
+  assert.deepEqual(edit("a", "aa"), { allow: true }, "one replacement only");
+  // The same folder as a chat writeDir: written in full, as before.
+  const chat = { workDir: work, allow: [], deny: [], writeDirs: [notes] };
+  for (const file of [".hidden.md", "script.js", "big.md"]) {
+    const content = "x".repeat(NOTEBOOK_FILE_MAX + 1);
+    assert.deepEqual(decide({ tool_name: "Write", tool_input: { file_path: path.join(notes, file), content }, cwd: work }, chat), { allow: true }, file);
+  }
+  assert.throws(() => readConfig({ [WRITE_GUARD_ENV]: JSON.stringify({ ...guard, notebooks: [1] }) }), /not a valid guard configuration/);
+});
+
+test("the notebook's place is checked on its real path: a link into rooms/, the assistant's folder, the home and the repository are refused", (t) => {
+  const config = makeHome({}, room({}));
+  const invalid = (notebook: string) => {
+    fs.writeFileSync(path.join(config.home, "rooms", "demo", "room.json"), JSON.stringify(room({ notebook })));
+    return loadHome(config.home).invalid[0]?.error ?? "";
+  };
+  assert.match(invalid("assistant/notes"), /must not overlap the assistant\/ folder of the home/);
+  assert.match(invalid(path.dirname(config.home)), /notebook of "scout" must not/, "holding the home holds what it holds");
+  assert.match(invalid(path.join(process.cwd(), "docs", "notes")), /must not overlap the repository of MyHQ/);
+  assert.equal(invalid(path.join(vault(), "scout")), "", "a folder of a vault outside them loads");
+  const outside = vault();
+  try {
+    fs.symlinkSync(path.join(config.home, "rooms"), path.join(outside, "into-rooms"), "junction");
+  } catch (error) {
+    t.skip(`cannot create a directory link here: ${(error as Error).message}`);
+    return;
+  }
+  assert.match(invalid(path.join(outside, "into-rooms")), /must not overlap the rooms\/ folder/, "a junction to rooms/ is rooms/");
+  assert.match(invalid(path.join(outside, "into-rooms", "demo", "notes")), /must not overlap the rooms\/ folder/, "and so is a folder below it");
+});
+
+// --- The home's private folders ----------------------------------------------------
+
+/** A home whose myhq.json closes a vault, the agent's notebook inside it. */
+function privateHome(agent: Record<string, unknown> = {}) {
+  const closed = vault();
+  const notes = path.join(closed, "Agents", "scout");
+  fs.mkdirSync(path.join(closed, "Money"), { recursive: true });
+  const config = makeHome({}, room({ notebook: notes, ...agent }));
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ privateDirs: [closed] }));
+  return { config, closed, notes };
+}
+
+test("privateDirs: a run reads no private folder but its notebook, whatever the CLI would approve", async () => {
+  const { config, closed, notes } = privateHome();
+  const seen: RunInput[] = [];
+  const run = startRun({ room: "demo", agent: "scout", task: "Work." }, { config, engine: recordingEngine(seen) });
+  await waitForRun(getDbAt(config.dbPath), run.id);
+  const input = seen[0]!;
+  assert.deepEqual(hookEntries(input.workDir), [readGuardEntry(), writeGuardEntry()], "both guards, each its own entry");
+  const guard = readReadConfig({ [READ_GUARD_ENV]: input.env[READ_GUARD_ENV] });
+  assert.deepEqual(guard, { workDir: path.resolve(input.workDir), only: null, deny: [closed], except: input.addDirs });
+  assert.ok(guard.except.includes(notes));
+  const read = (file: string) => decideRead({ tool_name: "Read", tool_input: { file_path: file }, cwd: input.workDir }, guard);
+  assert.equal(read(path.join(closed, "Money", "bank.md")).allow, false);
+  assert.deepEqual(read(path.join(notes, "tone.md")), { allow: true });
+  assert.deepEqual(read(path.join(input.workDir, "a.md")), { allow: true }, "its own folders are untouched");
+});
+
+test("privateDirs: a question gets the same read guard; removing privateDirs takes it out again", async () => {
+  const { config, closed } = privateHome();
+  const seen: RunInput[] = [];
+  askAgent({ room: "demo", agent: "scout", question: "What did we settle?" }, { config, engine: recordingEngine(seen) });
+  await questionsIdle();
+  const guard = readReadConfig({ [READ_GUARD_ENV]: seen[0]!.env[READ_GUARD_ENV] });
+  assert.deepEqual(guard.deny, [closed]);
+  assert.deepEqual(hookEntries(seen[0]!.workDir)[0], readGuardEntry());
+
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({}));
+  askAgent({ room: "demo", agent: "scout", question: "And now?" }, { config, engine: recordingEngine(seen) });
+  await questionsIdle();
+  assert.equal(seen[1]!.env[READ_GUARD_ENV], undefined);
+  assert.deepEqual(hookEntries(seen[1]!.workDir), [writeGuardEntry()], "the read guard's entry is gone, the write guard's stays");
+});
+
+test("privateDirs: an invalid myhq.json fails the run rather than open the private folders", async () => {
+  const { config } = privateHome();
+  fs.writeFileSync(path.join(config.home, "myhq.json"), JSON.stringify({ privateDirs: "not a list" }));
+  const seen: RunInput[] = [];
+  const run = startRun({ room: "demo", agent: "scout", task: "Work." }, { config, engine: recordingEngine(seen) });
+  const ended = await waitForRun(getDbAt(config.dbPath), run.id);
+  assert.equal(ended.status, "failed");
+  assert.equal(seen.length, 0, "the CLI never started");
 });

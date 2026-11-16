@@ -13,6 +13,7 @@ import { languageName } from "./onboarding";
 import type { Agent, Room } from "./rooms";
 import { parseRunProposal, RUN_PROPOSAL_TAG } from "./run-proposal";
 import { agentEnv, findAgent, isStopping, startRun, todayLine, type RunnerDeps } from "./runner";
+import { agentReadGuard } from "./read-guard";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 // Questions of the owner to an agent (docs/architecture.md, "Questions to an
@@ -350,7 +351,7 @@ export function questionNotebook(p: { config: HqConfig; agent: Agent; workDir: s
   env: Record<string, string>;
 } {
   installWriteGuard(p.workDir, { script: writeGuardScript(p.config.repoRoot), ignoreInGit: p.agent.worktree !== null });
-  const guard = writeGuardConfig({ workDir: p.workDir, allowedTools: [], writeDirs: [p.notebook] });
+  const guard = writeGuardConfig({ workDir: p.workDir, allowedTools: [], notebooks: [p.notebook] });
   return { addDirs: [...new Set([...p.agent.addDirs, p.notebook])], env: writeGuardEnv(guard) };
 }
 
@@ -579,6 +580,14 @@ async function answerQuestion(p: {
     fs.mkdirSync(workDir, { recursive: true });
     // The notebook is the one place a question writes: the guard, not the prompt, holds it there (questionNotebook).
     const writes = notebook ? questionNotebook({ config, agent, workDir, notebook }) : null;
+    // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.
+    const reads = agentReadGuard({
+      home: config.home,
+      repoRoot: config.repoRoot,
+      workDir,
+      readDirs: writes ? writes.addDirs : agent.addDirs,
+      ignoreInGit: agent.worktree !== null,
+    });
     const input: RunInput = {
       runId: row.id,
       room: room.name,
@@ -595,7 +604,7 @@ async function answerQuestion(p: {
       mcpConfigPath,
       maxBudgetUsd: Math.min(QUESTION_MAX_BUDGET_USD, agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd),
       workDir,
-      env: { ...agentEnv(process.env, {}), ...(writes ? writes.env : {}) },
+      env: { ...agentEnv(process.env, {}), ...(writes ? writes.env : {}), ...reads },
       signal: controller.signal,
       onRawLine: (line) => {
         fs.appendFileSync(path.join(dir, `${row.id}.jsonl`), `${line}\n`);

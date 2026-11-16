@@ -9,8 +9,9 @@ import { skillTools } from "./skills";
 // the home, where it keeps what lasts (what was agreed with the owner, the
 // owner's preferences, the lessons of a piece of work), one Markdown note per
 // topic, which the owner opens and corrects. A run reads and writes it (an
-// `--add-dir` and the only `writeDirs` entry of its write guard), and so does
-// a question, where it is the only place a write may land. The state of the
+// `--add-dir` and the only `notebooks` entry of its write guard, which holds
+// it to Markdown notes), and so does a question, where it is the only place a
+// write may land. The state of the
 // bench (a commit, a step in progress) stays in hq_memory. This module only
 // lists the folder and writes the lines of the prompts: the confinement is the
 // write guard's (write-guard.ts).
@@ -23,7 +24,7 @@ export const NOTEBOOK_TOOLS = ["Write", "Edit"] as const;
  * the folder (created when missing) as an `--add-dir`, and Write and Edit
  * among its tools and its allowed rules. The guard's configuration is
  * still computed from the agent's own rules, with the notebook as its only
- * `writeDirs` entry (runner.ts): the added bare rules widen nothing in the
+ * `notebooks` entry (runner.ts): the added bare rules widen nothing in the
  * working directory.
  */
 export function notebookAccess(agent: Pick<Agent, "notebook" | "addDirs" | "allowedTools" | "tools" | "skills">): {

@@ -33,6 +33,10 @@ export const WRITE_GUARD_HOOK = "write-guard-hook.mjs";
 /** File name of the guard's decisions, which the hook imports: it always sits beside the hook. */
 export const WRITE_GUARD_LIB = "write-guard-lib.mjs";
 
+/** The read guard's hook and library (read-guard.ts), frozen beside the write guard's: the library imports write-guard-lib.mjs. */
+export const READ_GUARD_HOOK = "read-guard-hook.mjs";
+export const READ_GUARD_LIB = "read-guard-lib.mjs";
+
 const GITIGNORE_MARKER = "# Written by MyHQ: its per-run settings stay out of Git.";
 
 /** The hook's configuration (the GuardConfig of write-guard-lib.mjs). */
@@ -45,6 +49,8 @@ export type WriteGuardConfig = {
   deny: string[];
   /** Absolute folders outside workDir that are writable in full (the chat's `writeDirs`). */
   writeDirs: string[];
+  /** Absolute notebooks (notebook.ts): writable with Write and Edit only, Markdown notes only (write-guard-lib.mjs). Absent: none. */
+  notebooks?: string[];
 };
 
 function splitRule(rule: string): { name: string; pattern: string | null } {
@@ -67,6 +73,7 @@ export function writeGuardConfig(params: {
   allowedTools: readonly string[];
   disallowedTools?: readonly string[];
   writeDirs?: readonly string[];
+  notebooks?: readonly string[];
 }): WriteGuardConfig {
   const patterns = (rules: readonly string[], bare: string | null) => {
     const out: string[] = [];
@@ -84,6 +91,7 @@ export function writeGuardConfig(params: {
     // A bare write tool in disallowedTools removes the tool itself: the CLI handles it.
     deny: patterns(params.disallowedTools ?? [], null),
     writeDirs: (params.writeDirs ?? []).map((dir) => path.resolve(dir)),
+    ...(params.notebooks && params.notebooks.length > 0 ? { notebooks: params.notebooks.map((dir) => path.resolve(dir)) } : {}),
   };
 }
 
@@ -116,15 +124,21 @@ export function writeGuardScript(repoRoot: string): string {
   return fs.existsSync(frozen) ? frozen : path.join(repoRoot, "src", "server", WRITE_GUARD_HOOK);
 }
 
+/** The read guard's hook script, frozen or from the sources, as writeGuardScript. */
+export function readGuardScript(repoRoot: string): string {
+  const frozen = path.join(mcpBundleDir(repoRoot), READ_GUARD_HOOK);
+  return fs.existsSync(frozen) ? frozen : path.join(repoRoot, "src", "server", READ_GUARD_HOOK);
+}
+
 type HookGroup = { matcher?: unknown; hooks?: unknown };
 
-function isGuardGroup(group: unknown): boolean {
+function isGuardGroup(group: unknown, hookFile: string = WRITE_GUARD_HOOK): boolean {
   const hooks = (group as HookGroup | null)?.hooks;
   if (!Array.isArray(hooks)) return false;
   return hooks.some((hook) => {
     const h = hook as { command?: unknown; args?: unknown } | null;
     const parts = [h?.command, ...(Array.isArray(h?.args) ? h.args : [])];
-    return parts.some((part) => typeof part === "string" && part.replace(/\\/g, "/").endsWith(`/${WRITE_GUARD_HOOK}`));
+    return parts.some((part) => typeof part === "string" && part.replace(/\\/g, "/").endsWith(`/${hookFile}`));
   });
 }
 
@@ -189,6 +203,51 @@ export function installWriteGuard(
   workDir: string,
   opts: { script: string; node?: string; ignoreInGit?: boolean },
 ): void {
+  installGuardHook(workDir, { ...opts, guard: "write", hookFile: WRITE_GUARD_HOOK, matcher: WRITE_TOOL_NAMES.join("|") });
+}
+
+/** The read guard's tools, the matcher of its hook (read-guard-lib.mjs). */
+export const READ_TOOL_NAMES = ["Read", "Glob", "Grep"] as const;
+
+/**
+ * Installs the read guard's PreToolUse hook (read-guard-hook.mjs) in
+ * `<workDir>/.claude/settings.local.json`, the way installWriteGuard does
+ * (its entry first, every other setting and hook kept, exec form,
+ * `onFailure: "block"`), beside the write guard's entry when there is one.
+ * It changes no permission.
+ */
+export function installReadGuard(
+  workDir: string,
+  opts: { script: string; node?: string; ignoreInGit?: boolean },
+): void {
+  installGuardHook(workDir, { ...opts, guard: "read", hookFile: READ_GUARD_HOOK, matcher: READ_TOOL_NAMES.join("|") });
+}
+
+/**
+ * Takes the read guard's entry out of `<workDir>/.claude/settings.local.json`
+ * when one is there (a home that had `privateDirs` and no longer has them:
+ * the hook would refuse every read without its configuration). Leaves the
+ * file untouched otherwise, and an unreadable one too.
+ */
+export function removeReadGuard(workDir: string): void {
+  const file = path.join(workDir, ".claude", "settings.local.json");
+  let settings: Record<string, unknown>;
+  try {
+    settings = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const hooks = settings?.hooks as Record<string, unknown> | undefined;
+  const previous = hooks && Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
+  if (!previous.some((group) => isGuardGroup(group, READ_GUARD_HOOK))) return;
+  const next = { ...settings, hooks: { ...hooks, PreToolUse: previous.filter((group) => !isGuardGroup(group, READ_GUARD_HOOK)) } };
+  writeIfChanged(file, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+function installGuardHook(
+  workDir: string,
+  opts: { script: string; node?: string; ignoreInGit?: boolean; guard: "write" | "read"; hookFile: string; matcher: string },
+): void {
   const dir = path.join(workDir, ".claude");
   const file = path.join(dir, "settings.local.json");
   fs.mkdirSync(dir, { recursive: true });
@@ -198,10 +257,10 @@ export function installWriteGuard(
     try {
       parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch (error) {
-      throw new HqError("WRITE_GUARD_SETTINGS", 409, `Cannot install the write guard: ${file} is not valid JSON (${(error as Error).message}).`);
+      throw new HqError("WRITE_GUARD_SETTINGS", 409, `Cannot install the ${opts.guard} guard: ${file} is not valid JSON (${(error as Error).message}).`);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new HqError("WRITE_GUARD_SETTINGS", 409, `Cannot install the write guard: ${file} is not a JSON object.`);
+      throw new HqError("WRITE_GUARD_SETTINGS", 409, `Cannot install the ${opts.guard} guard: ${file} is not a JSON object.`);
     }
     settings = parsed as Record<string, unknown>;
   }
@@ -211,7 +270,7 @@ export function installWriteGuard(
       : {};
   const previous = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [];
   const entry = {
-    matcher: WRITE_TOOL_NAMES.join("|"),
+    matcher: opts.matcher,
     hooks: [
       {
         type: "command",
@@ -228,8 +287,8 @@ export function installWriteGuard(
       : {};
   const next = {
     ...settings,
-    permissions: { ...permissions, blockWritesOutsideWorkingDirectories: true },
-    hooks: { ...hooks, PreToolUse: [entry, ...previous.filter((group) => !isGuardGroup(group))] },
+    ...(opts.guard === "write" ? { permissions: { ...permissions, blockWritesOutsideWorkingDirectories: true } } : {}),
+    hooks: { ...hooks, PreToolUse: [entry, ...previous.filter((group) => !isGuardGroup(group, opts.hookFile))] },
   };
   // Out of Git first: a refusal must leave no settings file behind for an agent to commit.
   if (opts.ignoreInGit) keepOutOfGit(workDir);

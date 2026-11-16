@@ -16,12 +16,51 @@ export const WRITE_TOOLS = { Write: "file_path", Edit: "file_path", MultiEdit: "
 /** Files of the working directory no write may touch: they hold the hook itself. */
 const PROTECTED = [".claude/settings.json", ".claude/settings.local.json"];
 
+/** The write tools a notebook takes, and the largest note they may leave (bytes, UTF-8). */
+export const NOTEBOOK_WRITE_TOOLS = ["Write", "Edit"];
+export const NOTEBOOK_FILE_MAX = 200_000;
+
+/**
+ * Why a write to `relative` (inside a notebook, forward slashes) is refused,
+ * or null: a notebook holds Markdown notes the owner reads, nothing hidden.
+ * So no segment starting with a dot, none with a colon (a Windows stream) or
+ * ending in a dot or a space, a `.md` file, at most NOTEBOOK_FILE_MAX bytes
+ * once written (Write: its content; Edit: the file with the replacement).
+ */
+export function notebookRefusal(tool, input, target, relative) {
+  if (!NOTEBOOK_WRITE_TOOLS.includes(tool)) return `a notebook takes ${NOTEBOOK_WRITE_TOOLS.join(" and ")} only`;
+  const segments = relative.split("/");
+  if (relative === "" || segments.some((segment) => segment.startsWith(".") || segment.includes(":") || /[. ]$/.test(segment))) {
+    return "a notebook holds no hidden file or folder (no name starting with a dot, no colon, no name ending in a dot or a space)";
+  }
+  if (!/\.md$/i.test(segments[segments.length - 1])) return "a notebook holds Markdown notes only (.md files)";
+  let size;
+  if (tool === "Write") {
+    size = Buffer.byteLength(typeof input.content === "string" ? input.content : "", "utf8");
+  } else {
+    let current;
+    try {
+      current = fs.readFileSync(target, "utf8");
+    } catch {
+      // No file to edit: the CLI refuses the edit itself.
+      return null;
+    }
+    const before = typeof input.old_string === "string" ? input.old_string : "";
+    const after = typeof input.new_string === "string" ? input.new_string : "";
+    const edited = before === "" ? current : input.replace_all === true ? current.split(before).join(after) : current.replace(before, () => after);
+    size = Buffer.byteLength(edited, "utf8");
+  }
+  if (size > NOTEBOOK_FILE_MAX) return `a note of a notebook is ${NOTEBOOK_FILE_MAX} bytes at most (this one would be ${size}): keep notes short, one topic each`;
+  return null;
+}
+
 /**
  * @typedef {object} GuardConfig
  * @property {string} workDir Absolute working directory of the run.
  * @property {string[]} allow Patterns relative to workDir a write may match ("**": the whole folder).
  * @property {string[]} deny Patterns relative to workDir no write may match.
  * @property {string[]} writeDirs Absolute folders, outside workDir, writable in full.
+ * @property {string[]} [notebooks] Absolute notebooks, outside workDir, writable under notebookRefusal's rules.
  */
 
 /** Whether paths compare without case on this platform. */
@@ -148,7 +187,8 @@ export function decide(input, config, platform = process.platform) {
   const workDir = realRoot(config.workDir);
   const relative = relativeInside(workDir, target, platform);
   const scope = config.allow.includes("**") ? workDir : `${workDir} (only under: ${config.allow.join(", ")})`;
-  const where = [scope, ...config.writeDirs].join("; ");
+  const notebooks = config.notebooks ?? [];
+  const where = [scope, ...config.writeDirs, ...notebooks.map((dir) => `${dir} (Markdown notes)`)].join("; ");
   const refuse = (why) => ({
     allow: false,
     reason:
@@ -159,6 +199,12 @@ export function decide(input, config, platform = process.platform) {
     return refuse("this file holds MyHQ's settings for your runs");
   }
   if (relative === null) {
+    for (const dir of notebooks) {
+      const inNotebook = relativeInside(realRoot(dir), target, platform);
+      if (inNotebook === null) continue;
+      const why = notebookRefusal(tool, input.tool_input, target, inNotebook);
+      return why ? refuse(why) : { allow: true };
+    }
     if (config.writeDirs.some((dir) => relativeInside(realRoot(dir), target, platform) !== null)) return { allow: true };
     return refuse("it is outside your working directory");
   }
@@ -183,7 +229,8 @@ export function readConfig(env = process.env) {
     !path.isAbsolute(config.workDir) ||
     !strings(config.allow) ||
     !strings(config.deny) ||
-    !strings(config.writeDirs)
+    !strings(config.writeDirs) ||
+    !(config.notebooks === undefined || strings(config.notebooks))
   ) {
     throw new Error(`${GUARD_ENV} is not a valid guard configuration`);
   }
