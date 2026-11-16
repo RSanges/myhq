@@ -317,6 +317,10 @@ export function questionSystemText(language: string, web = false): string {
     `</${RUN_PROPOSAL_TAG}>`,
     "",
     "The owner reads your sentence and the task, and confirms before anything starts: nothing runs without them. One block at most, only for work, never for a plain question. When you cannot tell, answer and ask whether they want you to start a run.",
+    "",
+    "### What follows this discussion",
+    "",
+    "This discussion is handed to the run that revises an item you delivered, and to a run you propose here: what was agreed here is not lost. So never ask the owner to copy or repeat what was agreed into a task or a note. The task of a proposed run is still a self-contained recap of what was agreed.",
   ].join("\n");
 }
 
@@ -668,7 +672,7 @@ export function decideProposal(
   // Everything below is synchronous: no other request of this process decides it in between.
   let run: RunRow | null = null;
   if (request.action === "launch") {
-    run = startRun({ room: room.name, agent: agent.id, task: proposal.task }, { ...deps, config });
+    run = startRun({ room: room.name, agent: agent.id, task: proposal.task }, { ...deps, config, discussionUpTo: question.id });
     db.prepare("UPDATE question_proposals SET state = 'launched', run_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
       run.id,
       now(),

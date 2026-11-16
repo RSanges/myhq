@@ -381,6 +381,27 @@ approval's effects: when the agent already executed the item (`onApproval:
 "task"`, its task done), the desk says so (`actionDone`) and warns that the
 action, a sent mail for example, cannot be undone.
 
+**The discussion follows the revision.** A run never sees the owner's
+discussion with the agent (see "Questions to an agent"), yet what was agreed
+there is part of the revision: a note such as « as agreed » says nothing alone.
+So the prompt of a run that carries a `revise` task gets a block, « Your
+discussion with the owner » (`discussionHandoff`,
+`src/server/discussion-handoff.ts`), holding the exchanges between the owner
+and this agent (same room, same agent id) asked since the start of the run that
+produced the item (`approvals.run_id`; since the item was created when it has no
+run): answered, not cleared. It is built when the run starts, not when the
+revision is decided, so what was said in between counts. The block tells the
+agent that these are its own exchanges in question mode, that what was agreed is
+part of the task, that the owner's most recent statement wins where the note and
+the discussion differ, and that a doubt which would change the deliverable is
+asked with `hq_ask` (else its reading goes at the top of the submission). The
+owner's messages stay whole, each answer is cut to 6000 characters (with a
+visible mark), the block holds 24000 characters at most: the oldest exchanges go
+first and the block says how many were left out. No exchange, no block: the
+prompt is unchanged. Every run is also told that the body of a submission starts
+with the readings and choices it made alone where the owner's words left a
+doubt.
+
 **Informational items.** An item of a `notifyTypes` type (a mail alert, a brief)
 asks for no decision, but it must not vanish either, so it has its own
 life cycle: `hq_submit` stores it `unseen` (marked as read by its agent, no
@@ -1577,6 +1598,18 @@ as its steps show, proposes no run, and says the work can be started once that
 run ends. The server does not rely on it: a block in an answer that closes
 while the agent has a run in progress is dropped, and no proposal is recorded.
 The message is not queued for that run.
+
+**The discussion follows the task.** The question mode block tells the agent
+that its discussion is handed to the run that revises an item it delivered and
+to a run it proposes, so it never asks the owner to copy what was agreed into
+a task or a note; the task of a proposal stays a self-contained recap all the
+same. For a revision, the block is built from the approval's run (see "The
+approval cycle", revise). For a run launched from a proposal, `decideProposal`
+passes the id of the question whose answer proposed the run to `startRun`
+(`RunnerDeps.discussionUpTo`, never persisted and never passed on to the runs
+this one wakes): the prompt gets the exchanges of the current discussion, not
+cleared, up to and including that question; what was asked after the proposal
+is left out. Same bounds as for a revision.
 
 ### The write guard
 

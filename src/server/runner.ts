@@ -11,6 +11,7 @@ import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
+import { discussionHandoff } from "./discussion-handoff";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import {
@@ -73,6 +74,11 @@ export type RunnerDeps = {
   portier?: PortierCall;
   /** The run summary's model call (run-summary.ts). Default: the real `claude -p`. */
   summarize?: SmallModelCall;
+  /**
+   * The question whose answer proposed the run (decideProposal): its prompt gets the
+   * discussion up to it (discussion-handoff.ts). Never passed on to the runs this one wakes.
+   */
+  discussionUpTo?: number;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -337,6 +343,8 @@ export function buildPrompt(params: {
   language?: string;
   /** The read-only room folders the run was given (see runFolders), left out: none. */
   folders?: RunFolders;
+  /** The block of the owner's discussion with this agent (discussion-handoff.ts), left out: none. */
+  discussion?: string | null;
 }) {
   const language = languageName(params.language ?? DEFAULT_LANGUAGE);
   const lines = [
@@ -348,6 +356,7 @@ export function buildPrompt(params: {
     "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
     `Tell the owner what you are doing with hq_status (if you have it): once at the start, then at each notable step, a few words in ${language} (60 characters at most, for example "rend le clip B, 2 sur 3"), never a technical detail (no file path, command or tool name). It shows over your head on the floor and changes nothing else.`,
     "When a file you are working on is worth the owner's eye now (a render, a contact sheet that shows a problem), show it with hq_show (if you have it): its path relative to your working directory and one sentence saying why. It publishes nothing; use it for the file that matters, not for every file you write.",
+    "The body of a submission starts with the readings and choices you made alone where the owner's words left a doubt (for example \"I read ±2.5 mm as a diameter\"), before anything else; nothing when there was none.",
     "Your new decisions and your memory are given at the end of this message: do not call hq_read_decisions or hq_memory_read for them, whatever your role says. A decision comes to you once. Before you say that an item is not approved, or does not exist, check it with hq_items (by its number): never rely on memory. Read the content of an item (its body, its files) with hq_items and its id.",
     `Language of this home: ${language}. Write your final report, the last message of your run, in ${language}, whatever the language of the task, of your role or of the files you worked on. Tool names, ids and code stay as they are.`,
   ];
@@ -391,6 +400,7 @@ export function buildPrompt(params: {
     lines.push("", "Pending tasks from your mailbox:");
     for (const task of params.mailbox) lines.push(`- [task ${task.id}, ${task.source}] ${task.text}`);
   }
+  if (params.discussion) lines.push("", params.discussion);
   return lines.join("\n");
 }
 
@@ -443,7 +453,23 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     briefing: true,
     roomFolders: true,
     prompt: (runId, mailbox, folders) =>
-      buildPrompt({ room, agent, runId, task, mailbox, sharedRooms, language: promptLanguage(config.home), folders }),
+      buildPrompt({
+        room,
+        agent,
+        runId,
+        task,
+        mailbox,
+        sharedRooms,
+        language: promptLanguage(config.home),
+        folders,
+        // Read now, when the run starts: what was said since the revision was decided counts.
+        discussion: discussionHandoff(getDbAt(config.dbPath), {
+          room: room.name,
+          agentId: agent.id,
+          mailbox,
+          upToQuestionId: deps.discussionUpTo,
+        }),
+      }),
   });
 }
 
@@ -702,7 +728,7 @@ export function launchRun(params: {
 }): RunRow {
   const { config, room, agent, task } = params;
   // The motive is this run's own: the runs it wakes get theirs.
-  const deps: RunnerDeps = { ...params.deps, motive: undefined };
+  const deps: RunnerDeps = { ...params.deps, motive: undefined, discussionUpTo: undefined };
   if (runnerState().stopping) {
     throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: the run of "${agent.id}" starts after the restart.`);
   }
