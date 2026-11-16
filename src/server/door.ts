@@ -8,20 +8,23 @@ import { now, type Db } from "./db";
 import { DEFAULT_LANGUAGE, readHomeSettings } from "./home-settings";
 import { recordExpects, roleSummary } from "./portier";
 import { EFFORTS, loadHome, MODELS, type Agent, type Effort, type Model } from "./rooms";
+import { readGuardEnv } from "./read-guard";
 import { claudeSmallModelCall, type SmallModelAnswer, type SmallModelCall } from "./small-model";
+import { installReadGuard, readGuardScript } from "./write-guard";
 
 // The door to the assistant (docs/architecture.md, "The door to the
-// assistant"). An agent never reads the owner's notes vault: for a fact it
+// assistant"). An agent does not read the owner's notes vault: for a fact it
 // needs, it asks (hq_ask_assistant). The HQ MCP server only has SQLite, so the
 // tool records a request in `door_requests` (migration 29) and waits for the
 // app to fill it; the app picks it up on the run's tool_use event (runner.ts),
 // with the scheduler's tick as a safety net (routines.ts), and answers one
 // request at a time with one dedicated `claude -p` call: read tools only, no
-// MCP server, no web, no write, a low budget cap, a neutral scratch folder as
-// cwd, and only the door's readable folders mounted. Never a turn of the
-// owner's conversation. What the code guarantees, whatever the model says:
-// the question reaches the model as a quoted JSON string, the sensitive
-// folders are not mounted unless the owner approved that very question, the
+// MCP server, no web, no write, a low budget cap, a fresh private folder as
+// cwd, and the read guard (read-guard.ts) holding every read to the door's
+// readable folders. Never a turn of the owner's conversation. What the code
+// guarantees, whatever the model says: the question reaches the model as a
+// quoted JSON string, the sensitive folders cannot be read unless the owner
+// approved that very question (the one shown on the item), the
 // stored answer is one paragraph of DOOR_ANSWER_MAX characters at most, an
 // output that is not the strict JSON line is a refusal (fail closed), and
 // every request is stored. The rest (relevance to the role, no secrets, no
@@ -40,8 +43,17 @@ export const DOOR_TIMEOUT_MS = 90_000;
 export const DOOR_MAX_BUDGET_USD = 0.2;
 /** The built-in tools of the call: they read, nothing else exists. */
 export const DOOR_TOOLS = ["Read", "Glob", "Grep"] as const;
-/** The approval type of a question the owner must open (needs_owner). */
+/** The approval type of a question the owner must open (needs_owner); reserved: hq_submit refuses it. */
 export const DOOR_TYPE = "assistant_question";
+/**
+ * The caps of hq_ask_assistant, counted on the rows of `door_requests`
+ * whatever became of them, and checked before a request is written: at most
+ * this many per run, and per agent over the last 24 hours. An agent that
+ * loops costs at most DOOR_DAY_MAX calls a day, and the queue serves the
+ * agents in turn (drain), so it cannot hold the others back.
+ */
+export const DOOR_RUN_MAX = 5;
+export const DOOR_DAY_MAX = 20;
 /** After the run's tool_use event, how long the app looks for the request the HQ server is about to write. */
 const PICKUP_MS = 10_000;
 const PICKUP_POLL_MS = 200;
@@ -235,19 +247,29 @@ async function drain(p: DoorParams, state: DoorState): Promise<void> {
     // One read when nothing waits (the scheduler's tick calls this every 15 s): no write then.
     const any = p.db.prepare("SELECT 1 FROM door_requests WHERE status = 'pending' LIMIT 1").get() !== undefined;
     if (any) {
-      // A request nobody waits for any more (the tool gave up) costs nothing.
+      // A request nobody waits for any more costs nothing: the tool gave up (its deadline passed), or its run ended.
       p.db
-        .prepare("UPDATE door_requests SET status = 'expired', ended_at = ? WHERE status = 'pending' AND created_at < ?")
+        .prepare(
+          `UPDATE door_requests SET status = 'expired', ended_at = ? WHERE status = 'pending'
+             AND (created_at < ? OR (run_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.id = door_requests.run_id AND runs.status = 'running')))`,
+        )
         .run(now(), new Date(Date.now() - DOOR_WAIT_MS).toISOString());
     }
+    // The agents in turn: a request ranks by how many earlier ones its agent made within the wait (served or not), so
+    // that one agent's many requests never hold back another's first.
     const row = !any
       ? undefined
       : (p.db
           .prepare(
             `UPDATE door_requests SET status = 'answering'
-             WHERE id = (SELECT id FROM door_requests WHERE status = 'pending' ORDER BY id LIMIT 1) AND status = 'pending' RETURNING *`,
+             WHERE id = (
+               SELECT d.id FROM door_requests d WHERE d.status = 'pending'
+               ORDER BY (SELECT COUNT(*) FROM door_requests e
+                         WHERE e.room = d.room AND e.agent_id = d.agent_id AND e.id < d.id AND e.created_at >= ?), d.id
+               LIMIT 1
+             ) AND status = 'pending' RETURNING *`,
           )
-          .get() as DoorRow | undefined);
+          .get(new Date(Date.now() - DOOR_WAIT_MS).toISOString()) as DoorRow | undefined);
     if (row) {
       if (row.run_id !== null) state.expected.delete(row.run_id);
       await answerRequest(p, row);
@@ -277,9 +299,13 @@ async function consult(
   } catch {
     // An invalid myhq.json: the default language.
   }
-  const cwd = path.join(os.tmpdir(), "myhq-door");
+  // The folders the call reads: the hook refuses any other (read-guard.ts); not mounting one would not be enough.
+  const roots = granted ? [...door.dirs, ...door.sensitive] : door.dirs;
+  let cwd: string | null = null;
   try {
-    fs.mkdirSync(cwd, { recursive: true });
+    // A fresh private folder per call, removed after it: nothing another process left there can add a hook or a folder.
+    cwd = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-door-"));
+    installReadGuard(cwd, { script: readGuardScript(p.config.repoRoot) });
     const answer = await (p.call ?? claudeSmallModelCall)({
       claudeBin: p.config.claudeBin,
       model: door.model,
@@ -296,9 +322,9 @@ async function consult(
         language,
       }),
       tools: [...DOOR_TOOLS],
-      addDirs: granted ? [...door.dirs, ...door.sensitive] : door.dirs,
+      addDirs: roots,
       cwd,
-      env: p.env,
+      env: { ...p.env, ...readGuardEnv({ workDir: cwd, only: roots, deny: [], except: [] }) },
       timeoutMs: DOOR_TIMEOUT_MS,
       maxBudgetUsd: DOOR_MAX_BUDGET_USD,
     });
@@ -306,6 +332,12 @@ async function consult(
     return { outcome, answer, error: outcome ? null : `unreadable answer: ${oneParagraph(answer.text, 200)}` };
   } catch (failure) {
     return { outcome: null, answer: null, error: (failure as Error).message ?? String(failure) };
+  } finally {
+    try {
+      if (cwd) fs.rmSync(cwd, { recursive: true, force: true });
+    } catch {
+      // Still held (Windows): left to the system's cleaning of its temporary directory.
+    }
   }
 }
 
@@ -417,6 +449,27 @@ async function answerRequest(p: DoorParams, row: DoorRow): Promise<void> {
   }
 }
 
+/**
+ * The question the owner approved: the one stored in the item's payload, when
+ * the item is of DOOR_TYPE, names this request, is of its room and agent, and
+ * holds the request's question unchanged; null on any mismatch.
+ */
+function approvedQuestion(db: Db, approvalId: number, row: DoorRow): string | null {
+  const item = db.prepare("SELECT room, agent_id, type, payload FROM approvals WHERE id = ?").get(approvalId) as
+    | { room: string; agent_id: string; type: string; payload: string }
+    | undefined;
+  if (!item || item.type !== DOOR_TYPE || item.room !== row.room || item.agent_id !== row.agent_id) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(item.payload);
+  } catch {
+    return null;
+  }
+  const stored = payload as { doorRequest?: unknown; question?: unknown } | null;
+  if (stored?.doorRequest !== row.id || typeof stored.question !== "string" || stored.question !== row.question) return null;
+  return stored.question;
+}
+
 /** The request behind an item of DOOR_TYPE still waiting for the owner, or undefined. */
 function ownerRequest(db: Db, approvalId: number): DoorRow | undefined {
   return db.prepare("SELECT * FROM door_requests WHERE approval_id = ? AND status = 'owner'").get(approvalId) as DoorRow | undefined;
@@ -458,13 +511,27 @@ export async function grantDoorRequest(p: DoorParams & { approvalId: number; wak
   if (!row) return;
   try {
     if (p.db.prepare("UPDATE door_requests SET status = 'answering' WHERE id = ? AND status = 'owner'").run(row.id).changes === 0) return;
+    const t = strings.door;
+    // The call asks what the owner saw: the question of the item, which must still be the request's, for its room and agent.
+    const approved = approvedQuestion(p.db, p.approvalId, row);
+    if (approved === null) {
+      const reason = "the request no longer matches the item the owner approved: refused";
+      console.error(`[door] approved request #${row.id}: ${reason}`);
+      p.db
+        .transaction(() => {
+          close(p.db, row.id, { status: "done", verdict: "refused", reason, error: "mismatch between the request and its approved item" }, null, null);
+          deliver(p.db, row, t.grantedNoAnswer(row.id, row.question, reason));
+        })
+        .immediate();
+      p.wake();
+      return;
+    }
     let door: DoorConfig | null = null;
     try {
       door = readDoorConfig(p.config.home);
     } catch (error) {
       console.error(`[door] ${(error as Error).message}: the approved request #${row.id} gets no answer`);
     }
-    const t = strings.door;
     let consulted: Consulted | null = null;
     let text: string;
     let verdict: DoorVerdict = "refused";
@@ -474,7 +541,7 @@ export async function grantDoorRequest(p: DoorParams & { approvalId: number; wak
       reason = "no door";
       text = t.grantedNoAnswer(row.id, row.question, t.closedReason);
     } else {
-      consulted = await consult(p, door, agentOf(p.config, row), row, true);
+      consulted = await consult(p, door, agentOf(p.config, row), { ...row, question: approved }, true);
       const outcome = consulted.outcome;
       if (outcome?.verdict === "answer") {
         verdict = "granted";

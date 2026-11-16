@@ -27,7 +27,7 @@ export type SmallModelCallInput = {
   addDirs?: string[];
   /** `--effort`; default: low. */
   effort?: string;
-  /** The working directory; default: a scratch folder of the system's temporary directory. */
+  /** The working directory, the caller's to create and remove; default: a fresh private folder of the system's temporary directory, removed after the call. */
   cwd?: string;
 };
 
@@ -85,8 +85,10 @@ export function smallModelArgs(
     ...(tools.length > 0 ? ["--allowedTools", ...tools] : []),
     ...(input.addDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
     "--strict-mcp-config",
+    // `local` alone: the cwd's .claude/settings.local.json (the door's read guard). With `project`, a CLAUDE.md
+    // in any parent of the cwd (the system's temporary directory) reaches the call (measured on CLI 2.1.325).
     "--setting-sources",
-    "project,local",
+    "local",
     "--effort",
     input.effort ?? "low",
     "--max-budget-usd",
@@ -95,18 +97,27 @@ export function smallModelArgs(
 }
 
 /**
- * The real call: `claude -p` in a scratch folder of the system's temporary
- * directory (no CLAUDE.md of the home is read), its JSON result parsed.
+ * The real call: `claude -p` in a fresh private folder of the system's
+ * temporary directory (no CLAUDE.md of the home is read, and nothing another
+ * process left in a shared folder), its JSON result parsed.
  */
 export const claudeSmallModelCall: SmallModelCall = (input) =>
   new Promise((resolve, reject) => {
-    const cwd = input.cwd ?? path.join(os.tmpdir(), "myhq-portier");
+    let cwd: string;
     try {
-      fs.mkdirSync(cwd, { recursive: true });
+      cwd = input.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "myhq-small-"));
     } catch (error) {
       reject(error as Error);
       return;
     }
+    const scratch = input.cwd === undefined ? cwd : null;
+    const done = () => {
+      try {
+        if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+      } catch {
+        // Still held (Windows): left to the system's cleaning of its temporary directory.
+      }
+    };
     const started = Date.now();
     const child = spawn(input.claudeBin, smallModelArgs(input), {
       cwd,
@@ -126,10 +137,12 @@ export const claudeSmallModelCall: SmallModelCall = (input) =>
     }, input.timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timer);
+      done();
       reject(new Error(`could not start "${input.claudeBin}": ${error.message}`));
     });
     child.once("close", (code) => {
       clearTimeout(timer);
+      done();
       let raw: unknown;
       try {
         raw = JSON.parse(stdout.trim());

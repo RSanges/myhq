@@ -16,7 +16,7 @@ import {
   storeAttachments,
   type ResolvedAttachment,
 } from "../server/attachments";
-import { DOOR_QUESTION_MAX, DOOR_WAIT_MS, type DoorRow } from "../server/door";
+import { DOOR_DAY_MAX, DOOR_QUESTION_MAX, DOOR_RUN_MAX, DOOR_TYPE, DOOR_WAIT_MS, type DoorRow } from "../server/door";
 import { pieceKind } from "../server/live-room";
 import { APPROVAL_STATUSES, liveItem, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
@@ -619,6 +619,10 @@ export type SubmitResult = {
 
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): SubmitResult {
   const parsed = z.object(inputs.hq_submit).parse(args);
+  // The door's own item (door.ts): only the app puts one on the desk, for a request it holds.
+  if (parsed.type === DOOR_TYPE) {
+    throw new ToolError(`Type "${DOOR_TYPE}" is reserved to MyHQ: to ask the assistant for a fact, use hq_ask_assistant.`);
+  }
   let { body, payload } = parsed;
   // The supervisor of the Standard submits nothing to approve: only a note to the owner, informational.
   const supervisor = isSupervisor(db, ctx.room, ctx.agentId);
@@ -1275,11 +1279,36 @@ export async function hqAskAssistant(
   opts: { waitMs?: number; pollMs?: number } = {},
 ): Promise<AskAssistantResult> {
   const parsed = z.object(inputs.hq_ask_assistant).parse(args);
-  const requestId = Number(
-    db
-      .prepare("INSERT INTO door_requests (room, agent_id, run_id, question, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)")
-      .run(ctx.room, ctx.agentId, ctx.runId || null, parsed.question, now()).lastInsertRowid,
-  );
+  // The caps count every request, whatever became of it, and refuse before anything is written (one transaction).
+  const requestId = db
+    .transaction((): number => {
+      const runId = ctx.runId || null;
+      if (runId !== null) {
+        const inRun = (db.prepare("SELECT COUNT(*) AS n FROM door_requests WHERE run_id = ?").get(runId) as { n: number }).n;
+        if (inRun >= DOOR_RUN_MAX) {
+          throw new ToolError(
+            `You already asked the assistant ${inRun} times in this run, the most a run may (${DOOR_RUN_MAX}): go on without this fact, and say in your report that it is missing.`,
+          );
+        }
+      }
+      const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const inDay = (
+        db.prepare("SELECT COUNT(*) AS n FROM door_requests WHERE room = ? AND agent_id = ? AND created_at >= ?").get(ctx.room, ctx.agentId, since) as {
+          n: number;
+        }
+      ).n;
+      if (inDay >= DOOR_DAY_MAX) {
+        throw new ToolError(
+          `You already asked the assistant ${inDay} times in the last 24 hours, the most an agent may (${DOOR_DAY_MAX}): go on without this fact, and say in your report that it is missing.`,
+        );
+      }
+      return Number(
+        db
+          .prepare("INSERT INTO door_requests (room, agent_id, run_id, question, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)")
+          .run(ctx.room, ctx.agentId, runId, parsed.question, now()).lastInsertRowid,
+      );
+    })
+    .immediate();
   const deadline = Date.now() + (opts.waitMs ?? DOOR_WAIT_MS);
   const read = db.prepare("SELECT * FROM door_requests WHERE id = ?");
   const noAnswer = {
