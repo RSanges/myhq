@@ -28,6 +28,7 @@ Every error has the same shape and an HTTP status:
 | `QUESTION_NOT_FOUND` | 404 | A decision on a proposed run for a question that is not one of this agent's. |
 | `PROPOSAL_NOT_FOUND` | 404 | A decision on a proposed run for a question whose answer proposes none. |
 | `PROPOSAL_DECIDED` | 409 | A decision on a proposed run already launched or set aside: each proposal is decided once. |
+| `REVISION_ALREADY_ASKED` | 409 | Confirming a proposed revision of an item already sent back with that very note: the proposal is set aside (`dismissed`). |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | A room gesture (`POST /api/rooms/[room]/pause`, `resume`, `archive`, `restore`) sent without `content-type: application/json`. |
 | `ROOM_BUSY` | 409 | Archiving a room while a run of it is in progress. |
 | `ROOM_ARCHIVED` | 409 | A gesture on an archived room other than restoring or deleting it, or a decision on an item of an archived room (`PATCH /api/approvals/[id]`: restore the room first). |
@@ -1564,7 +1565,8 @@ with the proposal's task as `POST /api/runs` does from the desk (no
 the agent cannot start now (a run in progress, a shared resource held, the
 daily cap, the app stopping), the run is queued instead: the answer is `200`
 with `run` null and the proposal `queued`, and the wake-ups start it once the
-agent is free. `dismiss` answers `200`. For a proposed revision (`reviseId`), `launch` is the
+agent is free. `dismiss` answers `200`; on a `queued` proposal it cancels the run
+before it starts: its task is closed (`done`) and the proposal is `dismissed`. For a proposed revision (`reviseId`), `launch` is the
 `revise` decision on that item with the proposal's note, as
 `PATCH /api/approvals/[id]` takes it: the revision run is returned when the
 agent was woken at once, null when it waits (a run in progress,
@@ -1579,9 +1581,11 @@ Errors: `INVALID_JSON`, `INVALID_INPUT` (no `action`, another value, a
 `question` that is not a positive integer), `ROOM_NOT_FOUND`,
 `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_NOT_FOUND`,
 `PROPOSAL_NOT_FOUND` (the answer proposes no run), `PROPOSAL_DECIDED`
-(already queued, launched or set aside), and for a revision the refusals of
-a decision (`ROOM_ARCHIVED`, `APPROVAL_ALREADY_DECIDED`...): the proposal
-then stays `pending`.
+(`launch` on a queued one, any decision on one launched or set aside,
+`dismiss` on a queued one whose run already started), and for a revision the
+refusals of a decision (`ROOM_ARCHIVED`...): the proposal then stays
+`pending`, except `REVISION_ALREADY_ASKED` (the item is already sent back
+with that note: the proposal is set aside).
 
 ### Subjects
 

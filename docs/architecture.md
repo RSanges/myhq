@@ -65,13 +65,16 @@ retry that cannot start) is alerted, like any other failed run.
 **One subject per run.** A run works on one subject of its agent
 (`runs.subject_id`, see "The sheet of an agent"; null is the general subject)
 and claims the pending tasks of that subject only (`launchRun`): the subject
-it is given (the proposal that started it, the task that woke it), else the
-subject of the oldest pending task it would claim (among `claimIds` when it
-has them), else the general one. Its own instruction is a task of that
+it is given (the proposal that started it, the task that woke it, the tasks a
+relaunch is about), else, for a run started for given tasks (`claimIds`), the
+subject of the oldest of them, else the general one. A routine, a run started
+by hand (`POST /api/runs`), a chat request are general, whatever task another
+subject holds. Its own instruction is a task of that
 subject, and what it submits or asks (`hq_submit`, `hq_ask`: the HQ server
 reads the subject of `HQ_RUN_ID`) belongs to it. The agent lock does not
 change: one run per agent at a time, whatever its subject; the tasks of the
-other subjects wait for the next run (see "Wake-ups").
+other subjects wait for their own run (see "Wake-ups"). The automatic retry
+of a run stopped for an MCP server keeps its subject.
 
 The prompt of
 a room agent's run gives what MyHQ already knows, so that the agent spends no
@@ -408,7 +411,8 @@ once its work is definitively validated (`settleSubject`,
 `src/server/subjects.ts`): its latest deliverable (neither an item of
 questions nor an informational one) is approved, the task that approval gave
 the agent, if any, is done (and its approval command has ended), nothing of
-the subject is pending or running (a task, a run, an item, a question), and
+the subject is pending or running (a task, a run, an item, a question, a run
+or a revision one of its answers proposes that the owner has not decided), and
 the owner has written nothing in it since the approval. It is checked where
 those states change: after an approval, at the end of a run of the subject,
 at the end of an approval command. A rejected latest deliverable keeps it
@@ -1100,6 +1104,16 @@ each run. Consequences:
   its own subject only. The tasks of another subject it left pending wake the
   agent once it ends, and a failing subject is not woken in a loop, while the
   other subjects still are.
+- **No task is left behind** (`OVERDUE_TASK`). A run claims the pending
+  tasks of its own subject only. A task that waits for the agent's next run
+  (`"queue"`, a message the portier or `expects: "none"` let wait, a
+  `manual` task, a task a failed run of its subject gave back) is overdue
+  once a run of another subject of the agent started after it and ended
+  `done`, with no run of its own subject since: it then wakes the agent
+  itself, for its subject, past `"queue"`, the portier and the pair window,
+  since its next run came. A failed run makes nothing overdue, so failing
+  subjects never wake each other in a loop; and a home without subjects never
+  has an overdue task, all its runs being of the general subject.
 - A run interrupted because MyHQ stopped (`cancelled`, see "Stopping and
   restarting") does not count, once: the tasks it gives back wake the agent
   again after the restart. A task whose resumed run is interrupted again (two
@@ -1234,9 +1248,11 @@ room, so that nothing waits in silence:
   run is not listed here but with its run.
 - **Pending tasks nothing takes**: a task `pending` for more than 15 minutes
   (since it was created) that no wake-up will take on its own. A task newer
-  than the run of its agent in progress is not listed (the end of that run
-  wakes the agent); a task that waits by design is not either (`onMessage`,
-  `onRevise` or `onApproval` set to `"queue"`). The reason is the probable
+  than the run of its agent in progress, or one that run's end makes overdue,
+  is not listed (the end of that run wakes the agent); a task that waits by
+  design is not either (`onMessage`, `onRevise` or `onApproval` set to
+  `"queue"`) until it is overdue. Like the wake-ups, the reason counts the
+  runs of the task's own subject only. The reason is the probable
   one MyHQ knows, in this order: the agent is busy with a run whose end will
   not take it, MyHQ is stopping, the daily cap is reached, a shared resource
   (the GPU) is held by another run, the anti ping-pong window of the pair, a
@@ -1246,8 +1262,9 @@ room, so that nothing waits in silence:
   tasks were not taken again: the run's own instruction, still blocked, and
   the mailbox tasks it gave back, still pending (recognized as the pending
   tasks of the agent without a run that were given back at the instant the run
-  ended). A later run of the agent with the same instruction that ended done
-  (or runs) means the work was taken again: the run is not listed. A run
+  ended). A later run of the agent in the same subject with the same
+  instruction that ended done (or runs) means the work was taken again: the
+  run is not listed. A run
   whose closure by the supervisor the owner reopened is listed at any age,
   whatever later run, while its tasks are open (see "The supervisor").
 
@@ -1258,12 +1275,15 @@ back). The count of the object is the number of agents
 stuck, not of entries. Two actions, with a light confirmation on the page:
 
 - **Relancer** (`POST /api/blocked/relaunch`): the tasks of the entry go back
-  to `pending` (without a run) and the agent is woken at once by a run that
-  takes its mailbox, reason `relaunch`, under the usual rules (agent lock,
-  shared resources, daily cap). When the run cannot start, the tasks stay
+  to `pending` (without a run) and the agent is woken at once by a run of
+  their subject (the oldest task's, `relaunchSubject`) that takes that
+  subject's mailbox, reason `relaunch`, under the usual rules (agent lock,
+  shared resources, daily cap); a supervisor's `hq_relaunch` the same, from
+  the task ids of its request. When the run cannot start, the tasks stay
   pending, the answer says why (`waiting`), and the entry stays on the
   Standard with its reason. A relaunched task is older than the agent's runs,
-  so the automatic wake-ups do not take it: the next run of the agent, or
+  so the automatic wake-ups do not take it: the next run of its subject, the
+  end of a run of another subject (it is then overdue, see "Wake-ups"), or
   another relaunch, does.
 - **Clore** (`POST /api/blocked/close`): the tasks of the entry are `done`
   with the note « Close par le propriétaire. ». Nothing wakes.
@@ -1656,7 +1676,12 @@ it once the agent is free (see "Wake-ups"); its run claims the task, so the
 proposal's run is the task's (`COALESCE(run_id, task.run_id)`), and while the
 task waits the proposal reads `queued`: the card says « En file : le tour
 démarrera dès que <agent> sera libre. », then « Tour #N lancé. » once it
-started. `dismiss` sets it aside. A proposal is decided once
+started. `dismiss` sets it aside; on a queued one (« Annuler ce tour »
+under « En file ») it closes the task, still pending, and the proposal is
+set aside; once a run took the task, it is too late (`PROPOSAL_DECIDED`).
+Confirming a run or a revision opens its subject again if it was archived,
+and a subject does not close itself while one of its proposals waits for the
+owner. A proposal is decided once
 (`PROPOSAL_DECIDED`), and the card keeps what became of it after a reload
 (the run launched, with a button that shows its line in the thread, or set
 aside). The context of the next questions says it too, after the answer
@@ -1723,7 +1748,9 @@ questions, no informational one): `question_proposals.revise_id` (migration
 with « Demander la retouche »; the owner's yes is the `revise` decision on
 that item with that note (`decideApproval`, the same checks and the same
 wake-up as the desk's button, which keeps working as before), and the run
-that revises it works on the subject and gets its discussion. The owner no
+that revises it works on the subject and gets its discussion. When the item
+is already sent back with that very note (from the desk meanwhile), the
+proposal is set aside and the answer says so (`REVISION_ALREADY_ASKED`). The owner no
 longer writes a separate revision note: they write in the tab, the agent
 rewords, they say yes.
 
