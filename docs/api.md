@@ -1871,7 +1871,7 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `SETTINGS_GROUP_NOT_FOUND`,
 ## Not in the API
 
 The HQ MCP server is not reached over HTTP: `claude -p` starts it over stdio
-for each run (see `architecture.md`). Its twenty-two tools write to the same
+for each run (see `architecture.md`). Its twenty-three tools write to the same
 database, and their effects reach the interface through `/api/events`.
 
 `hq_items` is the one that reads an item's state for an agent, as the
