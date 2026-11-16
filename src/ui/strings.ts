@@ -7,8 +7,13 @@ function frenchList(items: readonly string[]): string {
   return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} et ${items[items.length - 1]}`;
 }
 
+const LOCALE = "fr-FR";
+const gigabytes = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 });
+/** A memory figure in gigabytes, with the decimal comma of the locale: « 9,12 ». */
+const gb = (value: number): string => gigabytes.format(value);
+
 export const strings = {
-  locale: "fr-FR",
+  locale: LOCALE,
   app: {
     title: "MyHQ",
     description: "Le bureau local de vos agents IA.",
@@ -395,17 +400,17 @@ export const strings = {
     machine: {
       title: "Machine",
       hint: "Ce que MyHQ lit de la machine avant de lancer un tour d'un agent qui déclare needs (room.json), et ce qu'il garde libre. Se règle dans le bloc machine de myhq.json.",
-      reading: (p: { ramFree: number; ramTotal: number; vram: string }) => `Maintenant : ${p.ramFree} Go de mémoire vive libres sur ${p.ramTotal}, ${p.vram}.`,
-      vram: (free: number, total: number) => `${free} Go de mémoire vidéo libres sur ${total}`,
+      reading: (p: { ramFree: number; ramTotal: number; vram: string }) => `Maintenant : ${gb(p.ramFree)} Go de mémoire vive libres sur ${gb(p.ramTotal)}, ${p.vram}.`,
+      vram: (free: number, total: number) => `${gb(free)} Go de mémoire vidéo libres sur ${gb(total)}`,
       vramUnknown: "mémoire vidéo illisible (nvidia-smi absent ou en échec)",
-      margins: (ram: number, vram: number) => `Marge gardée libre : ${ram} Go de mémoire vive, ${vram} Go de mémoire vidéo.`,
+      margins: (ram: number, vram: number) => `Marge gardée libre : ${gb(ram)} Go de mémoire vive, ${gb(vram)} Go de mémoire vidéo.`,
       veto: (command: string, seconds: number) => `Commande de veto : ${command} (${seconds} s au plus, une panne la laisse passer).`,
       noVeto: "Pas de commande de veto.",
       agentsEmpty: "Aucun agent ne déclare needs : la machine n'est regardée pour aucun tour.",
       agentsCaption: "Besoin par agent : déclaré, mesuré sur ses derniers tours seuls, et celui que MyHQ réserve.",
       columns: { agent: "Agent", kind: "Mémoire", declared: "Déclaré", median: "Médiane mesurée", max: "Max mesuré", effective: "Réservé" },
       kinds: { ram: "vive", vram: "vidéo" },
-      gb: (value: number | null) => (value === null ? "non" : `${value} Go`),
+      gb: (value: number | null) => (value === null ? "aucune" : `${gb(value)} Go`),
       runs: (n: number) => (n === 0 ? "aucun tour seul mesuré" : `${n} ${n === 1 ? "tour seul" : "tours seuls"}`),
       lastVeto: (p: { verdict: string; reason: string | null; error: string | null; at: string }) =>
         `Dernier avis du veto : ${p.verdict}${p.reason ? ` (${p.reason})` : ""}${p.error ? `, en panne : ${p.error}` : ""}, ${p.at}.`,
@@ -1420,8 +1425,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
   queue: {
     title: (n: number) => `File d'attente (${n})`,
     hint: "Ce qui attend un tour, dans l'ordre où MyHQ le servira. Mets une tâche en tête, déplace-la, ou rends-la à l'ordre automatique (la plus ancienne d'abord).",
-    machine: (p: { ramFree: number; vram: string }) => `Machine : ${p.ramFree} Go de mémoire vive libres, ${p.vram}.`,
-    vram: (free: number) => `${free} Go de mémoire vidéo libres`,
+    machine: (p: { ramFree: number; vram: string }) => `Machine : ${gb(p.ramFree)} Go de mémoire vive libres, ${p.vram}.`,
+    vram: (free: number) => `${gb(free)} Go de mémoire vidéo libres`,
     vramUnknown: "mémoire vidéo illisible",
     since: (age: string) => `en attente ${age}`,
     placed: "placée par toi",
@@ -1657,13 +1662,13 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         notWoken: "Elle aurait dû réveiller l'agent, sans raison connue : le journal du serveur peut le dire.",
         unknownAgent: "Son agent n'est plus dans les salles du home.",
         machine: (p: { kind: "ram" | "vram"; needGb: number; keepGb: number; freeGb: number; reservedGb: number; leftGb: number }) =>
-          `Machine : il faut ${p.needGb} Go de ${p.kind === "ram" ? "mémoire vive" : "mémoire vidéo"} libres, plus ${p.keepGb} Go de marge, il en reste ${p.leftGb} (${p.freeGb} libres, ${p.reservedGb} réservés par les tours en cours) : elle repart dès que la machine le permet.`,
+          `Machine : il faut ${gb(p.needGb)} Go de ${p.kind === "ram" ? "mémoire vive" : "mémoire vidéo"} libres, plus ${gb(p.keepGb)} Go de marge, il en reste ${gb(p.leftGb)} (${gb(p.freeGb)} libres, ${gb(p.reservedGb)} réservés par les tours en cours) : elle repart dès que la machine le permet.`,
         vramUnknown: (needGb: number) =>
-          `Machine : il faut ${needGb} Go de mémoire vidéo et la carte graphique ne se lit pas (nvidia-smi absent ou en échec) : elle attend une lecture.`,
+          `Machine : il faut ${gb(needGb)} Go de mémoire vidéo et la carte graphique ne se lit pas (nvidia-smi absent ou en échec) : elle attend une lecture.`,
         veto: (reason: string) => `La commande de veto du home dit d'attendre : ${reason}`,
         vetoAsking: "La commande de veto du home est consultée : elle part dès sa réponse.",
         neverFits: (p: { what: "ram" | "vram"; needGb: number; keepGb: number; totalGb: number }) =>
-          `Machine : il faut ${p.needGb} Go de ${p.what === "ram" ? "mémoire vive" : "mémoire vidéo"}, plus ${p.keepGb} Go de marge, et la machine n'en a que ${p.totalGb} en tout : elle ne partira jamais avec ce besoin. Baisse-le dans room.json (needs), ou clos la tâche.`,
+          `Machine : il faut ${gb(p.needGb)} Go de ${p.what === "ram" ? "mémoire vive" : "mémoire vidéo"}, plus ${gb(p.keepGb)} Go de marge, et la machine n'en a que ${gb(p.totalGb)} en tout : elle ne partira jamais avec ce besoin. Baisse-le dans room.json (needs), ou clos la tâche.`,
         /** The reasons of the queue only (queue.ts): a task that is not stuck. */
         byDesign: "Elle attend le prochain tour de l'agent, comme prévu (réglage de l'agent, ou message sans réveil).",
         afterRun: (runId: number) => `Agent occupé sur le tour #${runId} : elle part à la fin de ce tour.`,
