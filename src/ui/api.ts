@@ -30,6 +30,7 @@ import {
   liveRunSchema,
   orderOpenedSchema,
   proposalResponseSchema,
+  queueSchema,
   receivedSchema,
   relaunchResponseSchema,
   reopenResponseSchema,
@@ -49,6 +50,7 @@ import {
   type FolderListing,
   type LiveRoom,
   type LiveRun,
+  type Queue,
   type Run,
   type State,
   type Subject,
@@ -153,6 +155,12 @@ export const markDeskSeen = (id: string) => request(`/api/desk/${encodeURICompon
 /** `keepalive`: the request outlives the page (an action sent as the owner leaves). */
 export const runDeskAction = (id: string, action: "add" | "done", body: { text: string } | { id: string }, keepalive = false) =>
   request(`/api/desk/${encodeURIComponent(id)}/actions/${action}`, deskActionResponseSchema, { ...jsonInit("POST", body), keepalive });
+
+export const fetchQueue = (): Promise<Queue> => request("/api/queue", queueSchema);
+
+/** Moves a pending task in the queue; returns the queue as it is now. */
+export const moveQueued = (taskId: number, move: "first" | "up" | "down" | "auto"): Promise<Queue> =>
+  request("/api/queue", queueSchema, jsonInit("POST", { taskId, move }));
 
 /** What the actions of the Standard act on: a task, or a failed or interrupted run and its tasks. */
 export type BlockedTarget = { kind: "task" | "run"; id: number };

@@ -7,6 +7,7 @@ import { formatSmallUsd, formatUsd } from "./settings-format";
 import { isDirty, limitsErrors, limitsForm, limitsInput, type LimitsForm } from "./settings-model";
 import { Card, Field, FieldError, sourceText, Switch, TabForm, useSavedForm } from "./settings-parts";
 import { DoorCard } from "./settings-door";
+import { MachineCard } from "./settings-machine";
 import { PortierVerdicts } from "./settings-portier";
 import { strings } from "./strings";
 import { fieldClass } from "./ui";
@@ -271,6 +272,8 @@ export function LimitsTab({ settings, onSaved, onDirtyChange }: Props) {
           <DoorCard door={settings.door} />
         </div>
       </Card>
+
+      <MachineCard machine={settings.machine} />
     </TabForm>
   );
 }

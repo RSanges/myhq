@@ -536,6 +536,31 @@ export const relaunchResponseSchema = z.object({
   waiting: z.object({ code: z.string(), message: z.string() }).nullable(),
 });
 export const closeResponseSchema = z.object({ tasks: z.array(z.number().int()) });
+/** GET and POST /api/queue: the pending tasks in order, with why they wait, and the reading of the machine. */
+export const queueSchema = z.object({
+  tasks: z.array(
+    z.object({
+      taskId: z.number().int(),
+      room: z.string(),
+      roomLabel: z.string().nullable(),
+      roomColor: z.string().nullable(),
+      agentId: z.string(),
+      agentName: z.string(),
+      subject: z.string().nullable(),
+      source: z.string(),
+      summary: z.string(),
+      since: z.string(),
+      placed: z.boolean(),
+      cause: z.string(),
+      reason: z.string(),
+    }),
+  ),
+  machine: z
+    .object({ at: z.string(), ramFreeGb: z.number(), ramTotalGb: z.number(), vramUsedGb: z.number().nullable(), vramTotalGb: z.number().nullable() })
+    .nullable(),
+});
+export type Queue = z.infer<typeof queueSchema>;
+
 /** POST /api/blocked/reopen. */
 export const reopenResponseSchema = z.object({ closure: z.number().int(), tasks: z.array(z.number().int()) });
 

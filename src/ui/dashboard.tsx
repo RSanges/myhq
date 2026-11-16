@@ -6,6 +6,7 @@ import { Desk } from "./desk";
 import { Feed } from "./feed";
 import { DeskHub } from "./hub";
 import { Meter } from "./meter";
+import { QueuePanel } from "./queue-panel";
 import { RoutineJournal } from "./routine-journal";
 import { SiteNav } from "./site-nav";
 import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
@@ -52,6 +53,8 @@ export function Dashboard() {
       </header>
 
       <DeskHub desk={desk.desk} narrow={!wide} />
+
+      <QueuePanel subscribe={subscribeDesk} />
 
       {loadError && (
         <div className="space-y-3">
