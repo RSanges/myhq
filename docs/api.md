@@ -332,6 +332,7 @@ restart.
           "state": "idle",
           "resources": [],
           "waitingFor": [],
+          "parallel": false,
           "lastRun": null,
           "activity": null
         }
@@ -368,7 +369,13 @@ restart.
 - `sprite`: `/api/sprites/<room>/<agent>` when the agent declares an old
   top-down sheet (`sprite`) and the file exists, `null` otherwise. The floor
   no longer draws it.
-- `lastRun` is a Run or `null`.
+- `lastRun` is a Run or `null`: the agent's run in progress when it has one
+  (for an agent with `parallel`, the latest started of them), else its latest
+  run. `parallel`: `true` for an agent with `parallel` in `room.json` (one run
+  per subject at once, see "Several benches" in `architecture.md`). When a
+  run of such an agent ends while another one of it still runs, the stream
+  sends a `run` event for the one still running right after the end, so that
+  a page shows the agent at work on it.
 - `resources`: the shared resources the agent's runs hold (`resources` in
   `room.json`, for example `["gpu"]`), empty for most agents. `waitingFor`:
   those of them that a run of another agent holds while a task waits in this
@@ -1080,8 +1087,10 @@ Errors: `INVALID_INPUT` (an id that is not a positive integer), `FILE_NOT_FOUND`
 
 The surveillance room (`/surveillance`): one tile per agent, for every run in
 progress (oldest first), then the runs ended under 5 minutes ago (newest
-first); an agent with a run in progress shows that one. Agents merely queued
-behind a shared resource have no run and no tile.
+first); an agent with a run in progress shows that one, and an agent with
+several (`parallel`) the latest started of them, its other runs in progress
+named in `alsoRunning` (run ids, latest started first; absent when there is
+none). Agents merely queued behind a shared resource have no run and no tile.
 
 ```json
 {

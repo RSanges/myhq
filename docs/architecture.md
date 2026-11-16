@@ -71,10 +71,13 @@ subject of the oldest of them, else the general one. A routine, a run started
 by hand (`POST /api/runs`), a chat request are general, whatever task another
 subject holds. Its own instruction is a task of that
 subject, and what it submits or asks (`hq_submit`, `hq_ask`: the HQ server
-reads the subject of `HQ_RUN_ID`) belongs to it. The agent lock does not
-change: one run per agent at a time, whatever its subject; the tasks of the
-other subjects wait for their own run (see "Wake-ups"). The automatic retry
-of a run stopped for an MCP server keeps its subject.
+reads the subject of `HQ_RUN_ID`) belongs to it. The agent lock is one run
+per agent at a time, whatever its subject; the tasks of the other subjects
+wait for their own run (see "Wake-ups"). An agent with `parallel` is the
+exception: its lock is one run per subject (`lockHolder`, the one place the
+lock is read), so its subjects advance at the same time (see "Several
+benches"). The automatic retry of a run stopped for an MCP server keeps its
+subject.
 
 The prompt of
 a room agent's run gives what MyHQ already knows, so that the agent spends no
@@ -273,7 +276,8 @@ this minute match" and "when is the next one", not a scheduling library.
   stored in the database (`agents.armed`) wins. A disarmed routine that comes
   due is journaled as `skipped_unarmed` and starts nothing.
 - **Guards.** A firing goes through the same code as any run: one run at a
-  time per agent (lock) and the daily cap on the total number of runs
+  time per agent (lock; a routine is general, so for an agent with `parallel`
+  it is skipped only while the general subject runs) and the daily cap on the total number of runs
   (`HQ_MAX_RUNS_PER_DAY`, conservative default). Start with a few armed
   agents and raise the cap after a week of measurements.
 - **No catch-up.** The scheduler re-reads the home every 15 seconds (a room
@@ -329,7 +333,7 @@ manages the rooms of the home in its « Salles » tab
   as the proposals (`writeRoomFile` of `agent-proposal.ts`) and loaded again
   with `loadRoom` (the file is put back when the room would no longer load).
   Its role file, its working directory and its history stay. Refused while it
-  runs (`AGENT_BUSY`), while one of its items waits for a decision
+  runs (`AGENT_BUSY`, any run of it, whatever its subject), while one of its items waits for a decision
   (`AGENT_HAS_PENDING`), and for the last agent of a room (`ROOM_LAST_AGENT`).
 - **Delete.** The rare gesture, and still nothing is erased: the room's
   configuration folder `rooms/<name>/` (its `room.json`, roles, skills, logo)
@@ -378,6 +382,8 @@ stays its identifier for the API, the database, the paths and the commands.
 - `resources`: shared resources its runs hold, such as `gpu` (see "Shared
   resources" below).
 - `supervisor`: the supervisor of the Standard (see "The supervisor" below).
+- `parallel`: one run per subject at once, each subject on its own bench
+  when the agent has a `worktree` (see "Several benches" below).
 
 ### The approval cycle
 
@@ -424,7 +430,8 @@ those states change: after an approval, at the end of a run of the subject,
 at the end of an approval command. A rejected latest deliverable keeps it
 open. A new message of the owner in it, or a revise of one of its items,
 opens it again. It is the one place where a subject ends, so what else goes
-with that end belongs there.
+with that end belongs there: the bench of the subject of a parallel agent
+closes there, and when the owner archives it (see "Several benches").
 
 **The discussion follows the revision.** A run never sees the owner's
 discussion with the agent (see "Questions to an agent"), yet what was agreed
@@ -1248,7 +1255,9 @@ each run. Consequences:
   for the end of a run or the next tick.
 - The candidates are taken in the order of the queue, and a task that waits
   for a resource or the machine holds back the later tasks that need the same
-  (see "The queue and the machine").
+  (see "The queue and the machine"). A pass starts one run per agent at most;
+  for an agent with `parallel`, one per subject (see "Several benches"), each
+  under its own lock, the resources, the cap and the machine.
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.
 - A run takes the tasks of one subject (see "A run"): the run woken works on
@@ -1265,7 +1274,13 @@ each run. Consequences:
   itself, for its subject, past `"queue"`, the portier and the pair window,
   since its next run came. A failed run makes nothing overdue, so failing
   subjects never wake each other in a loop; and a home without subjects never
-  has an overdue task, all its runs being of the general subject.
+  has an overdue task, all its runs being of the general subject. The rule is
+  the same for an agent with `parallel`: a run of another subject that ended
+  done is the agent's next run, and it did not take the task, so without the
+  rule a waiting task of a subject nobody runs would wait for ever. When a run
+  of the task's own subject is still in progress, the wake-up meets that
+  subject's lock and starts nothing; that run's end wakes it, once. No run
+  starts for a subject that has nothing pending.
 - A run interrupted because MyHQ stopped (`cancelled`, see "Stopping and
   restarting") does not count, once: the tasks it gives back wake the agent
   again after the restart. A task whose resumed run is interrupted again (two
@@ -1405,7 +1420,9 @@ room, so that nothing waits in silence:
   is not listed (the end of that run wakes the agent); a task that waits by
   design is not either (`onMessage`, `onRevise` or `onApproval` set to
   `"queue"`) until it is overdue. Like the wake-ups, the reason counts the
-  runs of the task's own subject only. The reason is the probable
+  runs of the task's own subject only; for an agent with `parallel`, "the run
+  in progress" is the one of the task's subject (its lock), and a run of
+  another subject started since the task is one whose end takes it. The reason is the probable
   one MyHQ knows, in this order: the agent is busy with a run whose end will
   not take it, MyHQ is stopping, the daily cap is reached, a shared resource
   (the GPU) is held by another run, the machine cannot take it (with the
@@ -1672,6 +1689,144 @@ export) and on the start event, so the feed shows « Début du tour (sonnet),
 motif : mail ». When `HQ_TRIGGER_TOKEN` is set, a request with a reason must
 carry it as a bearer token (`api.md`); the desk sends no reason.
 
+### Several benches
+
+The owner may work on several unrelated pieces with the same agent (two parts
+with the CAD agent) and want them to advance at the same time, each in its
+own tab (subject). `parallel: true` on the agent (`room.json`,
+`home-layout.md`) allows it. There is no fixed cap: the queue, the shared
+resources, the daily cap and the machine are the limit, per run as always.
+Without `parallel`, nothing of this section applies: one run of the agent at
+a time, one working directory, exactly as before (test/parallel-runs.test.ts
+and test/benches.test.ts check it, and the rest of the suite runs unchanged:
+its agents have no `parallel`).
+
+**The lock** (`lockHolder`, `src/server/runner.ts`) is one run per room,
+agent and subject, the general subject (null) being one of them. What reads
+it:
+
+- `launchRun`: `AGENT_BUSY` only for a run of the same subject (the subject
+  is worked out before the lock: the one given, else the one of the oldest
+  of `claimIds`, else the general one).
+- `wakeAgents`: one start per agent and pass, per subject for a parallel
+  agent; a task of a busy subject waits for that subject's run.
+- `relaunchGuard` (`hq_relaunch`) and the owner's « Relancer »: the lock of
+  the subject of the tasks relaunched (`relaunchSubject`).
+- The Standard and the queue (`taskWait`): the run in progress is the one of
+  the task's subject; a run of another subject started since the task is one
+  whose end takes it (`afterRun`).
+- A routine, a run started by hand, a chat request (and its request file),
+  onboarding: general runs, so they wait only for the general subject.
+- The automatic retry of a run stopped for an MCP server keeps its subject:
+  another subject's run never locks it out, and a run of its own subject
+  started meanwhile (which took its mailbox back) makes it refused, never
+  doubled.
+- Removing an agent is refused while any run of it is in progress; stopping
+  MyHQ, its exit hook and the recovery at startup already handle every run in
+  progress, several of one agent included.
+- A question's run state lists every run in progress of the agent (above).
+- The floor, the desk and the sheet show one run per agent: its run in
+  progress, the latest started of them (`getState`, `lastRun`). When that one
+  ends while another runs, the end announces the other again in the stream,
+  and the pages take it over (a run in progress wins over one that ended).
+  The surveillance room keeps one tile per agent, its latest started run,
+  and names the others (`alsoRunning`). On the sheet, the card of a proposed
+  run says it waits only when a run of its own subject goes on.
+
+**The overdue rule** is unchanged (see "Wake-ups"): the end of another
+subject's run, done, is the agent's next run, so a waiting task of a subject
+is not left behind; the subject's own lock keeps it from starting twice.
+
+**Without a worktree** the subjects share the agent's single working
+directory: the home's decision, MyHQ does not prevent it. What MyHQ itself
+writes there is safe with two runs: the guards' settings file is the same for
+every run of the agent (its hook names a script, the configuration of each
+run travels in its environment) and is written only when it changes; the MCP
+configuration, the journal and the other files of a run are per run, in
+`data/runs/`. The skills are copied again at each start (removed then
+copied), so a run in progress could miss a skill file for the instant of
+another run's start.
+
+**With a worktree**, each subject other than the general one gets its own
+bench (`src/server/benches.ts`): a Git worktree beside the agent's,
+`<worktree>--subject-<id>`, on its own branch `hq/<agent>--subject-<id>`,
+created by `git worktree add -b <branch> <dir> hq/<agent>` (the tip of the
+agent's own branch, not the repository's HEAD) when the subject's first run
+starts, and recorded (`benches`, migration 32: its paths, its branches, the
+state of its closing). The general subject keeps the agent's worktree. The
+run's working directory, `HQ_WORK_DIR` (so the attachment roots of
+`hq_submit` and `hq_show`), the write and read guards, the skills copy, a
+question asked in the subject (once the bench exists) and the pieces of the
+surveillance room follow the bench. The run's prompt says, in a few lines,
+that this is the bench of its subject, a copy of the agent's branch; to
+commit its work on the bench's branch before it finishes (uncommitted work
+blocks the closing); to write only what belongs to the subject; and that a
+change in files its other subjects share (a common model, a library, a tool)
+is said first in its submission, or asked, never made silently, because it
+can conflict with its other benches.
+
+**Closing a bench** (`closeBench`): when the subject is archived, by itself
+once its work is validated (`settleSubject`) or by the owner, and again at
+each tick of the scheduler and at the end of each run of the agent while it
+is not closed (`closeArchivedBenches`):
+
+1. It waits, silently, while a run, a question or a task (pending or in
+   progress) of the subject goes on.
+2. Never lose work: a bench with changes Git does not ignore, tracked or not
+   (`git status --porcelain`), is kept and the owner told.
+3. Its branch is merged into the agent's, inside the agent's own worktree,
+   only when that worktree is on its branch, has no change and no run works
+   in it (a run of the general subject, or of a subject without a bench). A
+   busy worktree waits silently; one with changes, or on another branch, is
+   told to the owner and waited for. A branch with nothing new
+   (`git merge-base --is-ancestor`) needs no merge.
+4. A conflict: the merge is aborted (`git merge --abort`), the bench kept,
+   and the owner told once, with the two branch names. It is tried again
+   only once one of the two tips moved. This is how MyHQ learns that two
+   subjects touched the same files.
+5. After a clean merge, or nothing to merge: `git worktree remove <bench>`
+   and `git branch -d <branch>`, never by force (no `--force`, no `-D`); a
+   branch Git refuses to delete after a merge is kept and logged, and the
+   bench is closed all the same.
+6. A reopened subject whose bench was closed gets a fresh one from the
+   agent's branch at its next run (the same row starts afresh).
+
+Telling the owner is a blocked task of the agent on the Standard, MyHQ's
+note said as written (as for a long run), one per hold: the same hold again
+only refreshes the note of a task still blocked (closed by the owner, it
+stays closed), another hold closes the previous task. Its text is what the
+agent would do if relaunched: commit on the bench's branch, merge the
+agent's branch into the bench and resolve the conflict, or tidy its own
+worktree (that one on the general subject, so the relaunched run works
+there). The task is done by MyHQ once the bench closes. Every Git call runs
+with an argument array (no shell), a timeout of 60 s, no hooks (an empty
+hooks folder of MyHQ's) and no fsmonitor; an error is caught, told to the
+owner and never thrown into the callers of `settleSubject`. The calls are
+synchronous, like the creation of a worktree.
+
+**Before turning `parallel` on**, the home owner should know:
+
+- A fresh bench holds what Git tracks on the agent's branch, nothing else:
+  ignored files (a virtual environment, `node_modules`, generated outputs,
+  a local configuration) are not there, and whatever such files a run makes
+  in a bench are deleted with it when it closes.
+- The agent should commit its work on the bench: uncommitted work keeps the
+  bench open, and nothing merges it.
+- Two subjects that change the same files conflict at the closing, and the
+  owner settles it (or relaunches the agent to). Shared files are the agent's
+  to announce, as its prompt says.
+- The general subject works in the agent's worktree, and a bench waits to be
+  merged while a general run goes on there, or while that worktree has
+  uncommitted changes or is on another branch (a pull request branch, say).
+- A repository whose configuration declares filters or merge drivers runs
+  them during a merge: MyHQ turns off hooks and fsmonitor, not those.
+- The benches lie beside the agent's worktree in the home; deleting a room
+  leaves them, as it leaves every working directory. The paths recorded are
+  absolute: a home moved to another machine with benches open needs them
+  closed first (a missing bench is told to the owner, never removed).
+- Without a worktree, the runs of the subjects share one folder: what one
+  writes, the other sees.
+
 ### Questions to an agent
 
 A run is how an agent works: it costs a full turn, takes the agent's lock,
@@ -1683,7 +1838,8 @@ itself, in the background, and the answer shows in the thread in Markdown.
 
 `askAgent` (`src/server/agent-questions.ts`) starts one `claude -p` through the
 same engine as a run (`ClaudeEngine`, `buildClaudeArgs`), with the agent's own
-model, effort and prompt cache duration, its working directory as cwd (a
+model, effort and prompt cache duration, its working directory as cwd (the
+bench of the subject asked in, once it exists, see "Several benches"; a
 scratch folder of `data/runs/questions/` when it does not exist yet: a
 question never creates it) and its `addDirs`. The system prompt is the agent's
 role followed by a « Question mode » block: the owner asks, this is not a task;
@@ -1699,8 +1855,11 @@ with what became of the run it proposed), the question
 (4000 characters at most, zod), the agent's run state read from `runs` when
 the question is asked (`activeRunOf`: no run in progress, or the run that
 holds the agent lock with its id, reason, start, task cut to 1000 characters
-and its last 3 `hq_status` steps), given as the source of truth above the
-memory, which may say a run ended while it still runs, the deliverable items
+and its last 3 `hq_status` steps; for an agent with `parallel`,
+`activeRunsOf`: each of its runs in progress, latest started first, which
+one works on this subject and hears the exchange, and that a run proposed
+here waits only for a run of this very subject), given as the source of
+truth above the memory, which may say a run ended while it still runs, the deliverable items
 of the subject (the latest 10, with their number, type and status: what a
 revision may name), the agent's other open subjects (each with its title,
 whether a run goes on it, and its latest item with its status) with the rule
