@@ -18,7 +18,8 @@ import { ZERO_USAGE } from "../server/engine";
 import { HqError } from "../server/errors";
 import type { ApprovalDto } from "../server/feed";
 import { proposeAgent } from "../server/agent-need";
-import { findAgent, startRun as defaultStartRun, type RunnerDeps, type StartRunRequest } from "../server/runner";
+import { listQueue, moveInQueue } from "../server/queue";
+import { findAgent, startRun as defaultStartRun, wakeAgents, type RunnerDeps, type StartRunRequest } from "../server/runner";
 import { loadHome } from "../server/rooms";
 import { DroppedFileError, moveDroppedIntoReceived, RoomFolderError, roomFoldersRoot } from "../server/room-folders";
 import { lastChatTurnEnd, recordChatTurn } from "../server/usage";
@@ -85,6 +86,8 @@ export type ChatServiceDeps = {
   startRun?: (request: StartRunRequest) => RunRow;
   /** The engine of the receptionist's runs started by `propose_agent` (tests). */
   agentNeed?: Pick<RunnerDeps, "engine" | "send">;
+  /** The engine and machine reading of the queue actions (`queue`, `queue_first`) and the wake-ups they start (tests). */
+  queue?: Pick<RunnerDeps, "engine" | "send" | "machine">;
   log?: (message: string) => void;
   questions?: PendingQuestions;
 };
@@ -99,6 +102,7 @@ export function requestWaitLine(waiting: WaitingRequest): string {
   const base = { taskId: waiting.taskId, agent: waiting.agentName };
   if (waiting.cause === "cap") return t.cap({ ...base, cap: waiting.cap ?? 0 });
   if (waiting.cause === "resource") return t.resource({ ...base, ...(waiting.resource ? { resource: waiting.resource } : {}) });
+  if (waiting.cause === "machine") return t.machine(base);
   return t.busy(base);
 }
 
@@ -486,6 +490,17 @@ export class ChatService {
             lines.push(this.fileReceived(action, what));
             break;
           }
+          case "queue": {
+            lines.push(this.queueLines());
+            break;
+          }
+          case "queue_first": {
+            // As the desk's « En tête »: the place is the owner's, then the wake-ups serve the queue in its new order.
+            moveInQueue(this.deps.db, { taskId: action.taskId!, move: "first" });
+            wakeAgents(this.deps.config, this.deps.db, { ...this.deps.queue, config: this.deps.config });
+            lines.push(t.actions.queue.first(action.taskId!));
+            break;
+          }
           case "run":
           case "arm":
           case "disarm": {
@@ -548,6 +563,25 @@ export class ChatService {
       }
       throw error;
     }
+  }
+
+  /** The queue (queue.ts) as lines of the reply: each waiting task, in order, with why it waits. */
+  private queueLines(): string {
+    const q = strings.assistant.actions.queue;
+    const entries = listQueue(this.deps.db, this.deps.config, loadHome(this.deps.config.home), this.deps.queue?.machine);
+    if (entries.length === 0) return q.empty;
+    return [
+      q.title(entries.length),
+      ...entries.map((entry, index) =>
+        q.entry({
+          position: index + 1,
+          taskId: entry.taskId,
+          who: `${entry.room} / ${entry.agentName}`,
+          summary: entry.summary,
+          reason: entry.reason,
+        }),
+      ),
+    ].join("\n");
   }
 
   /** The room of an action on an agent: the one given, or the only room that has that agent. */

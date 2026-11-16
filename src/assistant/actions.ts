@@ -11,7 +11,7 @@ import { REJECTED_DIR } from "./requests";
  * the directory of `chat.requests` (whitelisted by `chat.requests.actions`).
  * The core executes them with the code of the buttons and of the commands.
  */
-export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm", "propose_agent", "file_received"] as const;
+export const CHAT_ACTIONS = ["approve", "reject", "revise", "run", "arm", "disarm", "propose_agent", "file_received", "queue", "queue_first"] as const;
 export type ChatActionName = (typeof CHAT_ACTIONS)[number];
 
 const DECISIONS: readonly ChatActionName[] = ["approve", "reject", "revise"];
@@ -41,6 +41,8 @@ const actionFileSchema = z
     /** file_received: the name of a file in the drop folder (the room, required, and the order, optional, say where it goes). */
     file: dropFileName.optional(),
     order: orderNameSchema.optional(),
+    /** queue_first: the pending task to put at the head of the queue. */
+    taskId: z.number().int().positive().optional(),
   })
   .superRefine((file, ctx) => {
     if (file.id !== undefined && file.approvalId !== undefined && file.id !== file.approvalId) {
@@ -58,6 +60,10 @@ const actionFileSchema = z
     } else if (file.action === "file_received") {
       if (!file.file) ctx.addIssue({ code: "custom", message: "file_received needs a file", path: ["file"] });
       if (!file.room) ctx.addIssue({ code: "custom", message: "file_received needs a room", path: ["room"] });
+    } else if (file.action === "queue_first") {
+      if (file.taskId === undefined) ctx.addIssue({ code: "custom", message: "queue_first needs a taskId", path: ["taskId"] });
+    } else if (file.action === "queue") {
+      // Nothing to give: it lists the queue.
     } else if (!file.agent) {
       ctx.addIssue({ code: "custom", message: `${file.action} needs an agent`, path: ["agent"] });
     }
@@ -73,6 +79,7 @@ export type ChatAction = {
   need?: string;
   file?: string;
   order?: string;
+  taskId?: number;
 };
 
 function describe(error: unknown): string {
@@ -163,6 +170,7 @@ export function takeChatActions(
       ...(file.need ? { need: file.need } : {}),
       ...(file.file ? { file: file.file } : {}),
       ...(file.order ? { order: file.order } : {}),
+      ...(file.taskId !== undefined ? { taskId: file.taskId } : {}),
     });
   }
   return { actions, refused };
@@ -210,6 +218,10 @@ export function describeAction(action: ChatAction): string {
       return strings.agentProposal.describe(action.need ?? "", action.room ?? null);
     case "file_received":
       return strings.assistant.actions.fileReceived(action.file ?? "", action.room ?? "", action.order ?? null);
+    case "queue":
+      return t.queue;
+    case "queue_first":
+      return t.queueFirst(action.taskId!);
   }
 }
 
