@@ -2,7 +2,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { RECEPTION_ROOM } from "../ui/reception";
 import { liveConfig, type HqConfig } from "./config";
-import { isBenchNote } from "./benches";
+import { isBenchNote, retryBenchNote } from "./benches";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
@@ -66,7 +66,7 @@ export type BlockedEntry = {
   /**
    * What MyHQ knows of why, as a code: the rules of the Standard read it (supervisor.ts, `entryRule`).
    * A run: `failed`, `cancelled`, `stopped`, `hardLimit`. A task: `blocked` (an agent's note), `blockedNoNote`,
-   * `myhqNote`. A pending task: the key of its reason (`busy`, `cap`, `resource`, `pingPong`, `stopping`,
+   * `myhqNote`, `bench` (MyHQ's note on a bench it keeps, benches.ts). A pending task: the key of its reason (`busy`, `cap`, `resource`, `pingPong`, `stopping`,
    * `givenBack`, `interruptedTwice`, `noWake`, `notWoken`, `unknownAgent`, `machine`, `veto`, `neverFits`).
    */
   cause: string;
@@ -316,7 +316,8 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
     if (listed.has(task.id)) continue;
     const note = oneLine(task.note);
     // MyHQ's own note on a long run the supervisor did not answer about (long-runs.ts), on a bench it could not close (benches.ts), or on a veto command that fails (machine.ts): said as written.
-    const myhqNote = db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined || isBenchNote(db, task.id) || isVetoNote(db, task.id);
+    const benchNote = isBenchNote(db, task.id);
+    const myhqNote = benchNote || db.prepare("SELECT 1 FROM run_deadlines WHERE note_task_id = ?").get(task.id) !== undefined || isVetoNote(db, task.id);
     entries.push({
       entry: "task",
       id: task.id,
@@ -330,7 +331,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
       taskIds: [task.id],
       note: null,
       handedOff: false,
-      cause: myhqNote ? "myhqNote" : note ? "blocked" : "blockedNoNote",
+      cause: benchNote ? "bench" : myhqNote ? "myhqNote" : note ? "blocked" : "blockedNoNote",
       detail: task.note,
     });
   }
@@ -390,12 +391,18 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
  * Whether the tasks of an entry were handed to the owner: once a note with
  * `handed_off` exists on one of them, by a supervisor, by MyHQ or by a
  * reopening, the entry is the owner's, whatever note follows. A later note
- * adds its sentence and takes nothing back.
+ * adds its sentence and takes nothing back. MyHQ's note on a bench
+ * (benches.ts) is the owner's from the start: it never wakes the supervisor.
  */
 export function handedOff(db: Db, taskIds: readonly number[]): boolean {
+  const ids = JSON.stringify(taskIds);
   return (
-    db.prepare("SELECT 1 FROM blocked_notes WHERE handed_off = 1 AND task_id IN (SELECT value FROM json_each(?)) LIMIT 1").get(JSON.stringify(taskIds)) !==
-    undefined
+    db
+      .prepare(
+        `SELECT 1 FROM blocked_notes WHERE handed_off = 1 AND task_id IN (SELECT value FROM json_each(?))
+         UNION ALL SELECT 1 FROM benches WHERE note_task_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
+      )
+      .get(ids, ids) !== undefined
   );
 }
 
@@ -452,9 +459,18 @@ const relaunchWaits = () => new Set([...WAITS, "ROOM_NOT_FOUND", "AGENT_NOT_FOUN
  * woken at once by a run of their subject that takes that subject's mailbox
  * (reason `relaunch`, `relaunchSubject`), under the
  * usual rules: the agent lock, the shared resources, the daily cap. When the
- * run cannot start, the tasks stay pending and the result says why.
+ * run cannot start, the tasks stay pending and the result says why. On
+ * MyHQ's note on a bench (benches.ts) the closing is tried again first: a
+ * bench that closes, or that holds for a reason only the owner settles,
+ * starts no run and its note stays as it is.
  */
 export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget, deps: RunnerDeps = {}): RelaunchResult {
+  const bench = retryBenchNote(db, targetTasks(db, target).ids);
+  if (bench) {
+    const message =
+      bench === "BENCH_CLOSED" ? "The bench closed: nothing to relaunch." : "The bench is still held for what its note says, which no run of the agent settles.";
+    return { tasks: [], run: null, waiting: { code: bench, message } };
+  }
   const { room, agentId, ids } = db
     .transaction(() => {
       const found = targetTasks(db, target);

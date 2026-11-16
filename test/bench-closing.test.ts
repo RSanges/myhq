@@ -96,7 +96,8 @@ test("closing: uncommitted work keeps the bench and tells the owner once; commit
   assert.equal(note.subject_id, one.id);
   assert.equal(note.note, b.dirty({ subject: "« One »", dir: bench.dir, branch: bench.branch }));
   const entry = listBlocked(db, loadHome(config.home), config).find((each) => each.id === note.id);
-  assert.equal(entry?.cause, "myhqNote");
+  assert.equal(entry?.cause, "bench");
+  assert.equal(entry?.handedOff, true, "the owner's from the start: it never wakes the supervisor");
   assert.equal(entry?.reason, note.note, "said as written");
   // Again and again: no second note.
   closeArchivedBenches(db);
@@ -106,6 +107,8 @@ test("closing: uncommitted work keeps the bench and tells the owner once; commit
   git(bench.dir, "add", "draft.txt");
   git(bench.dir, "commit", "-q", "-m", "Keep the draft");
   closeArchivedBenches(db);
+  assert.equal(benchRow(db, one.id)?.closed_at, null, "the tick tries a held bench again only once its wait is over");
+  closeArchivedBenches(db, { force: true });
   assert.ok(benchRow(db, one.id)?.closed_at);
   assert.ok(fs.existsSync(path.join(base, "draft.txt")));
   assert.equal(taskRow(db, note.id).status, "done", "MyHQ's note is settled with it");
@@ -133,8 +136,8 @@ test("closing: a conflict aborts the merge, keeps the bench, says the two branch
   assert.equal(read(path.join(base, "README.md")), "# One's way\n");
   const row = benchRow(db, two.id)!;
   assert.equal(taskRow(db, row.note_task_id!).note, b.conflict({ subject: "« Two »", branch: bench.branch, base: "hq/dev" }));
-  // The same tips: not tried again, not told again.
-  assert.equal(closeBench(db, two.id, recordingGit(calls)), "unchanged");
+  // The same tips: not tried again, not told again, even when asked.
+  assert.equal(closeBench(db, two.id, recordingGit(calls), { force: true }), "unchanged");
   assert.equal(calls.filter((args) => args[0] === "merge" && args[1] !== "--abort").length, 1);
   assert.ok(calls.some((args) => args.join(" ") === "merge --abort"));
 
@@ -147,7 +150,7 @@ test("closing: a conflict aborts the merge, keeps the bench, says the two branch
   fs.writeFileSync(path.join(bench.dir, "README.md"), "# Both ways\n");
   git(bench.dir, "add", "README.md");
   git(bench.dir, "commit", "-q", "--no-edit");
-  assert.equal(closeBench(db, two.id, recordingGit(calls)), "closed");
+  assert.equal(closeBench(db, two.id, recordingGit(calls), { force: true }), "closed");
   assert.equal(read(path.join(base, "README.md")), "# Both ways\n");
   assert.equal(taskRow(db, row.note_task_id!).status, "done");
   for (const args of calls) for (const flag of ["--force", "-f", "-D", "--hard"]) assert.ok(!args.includes(flag));
@@ -195,7 +198,7 @@ test("closing waits while the agent's worktree is busy or dirty, then closes; a 
   assert.equal(taskRow(db, row.note_task_id!).subject_id, null, "settled in the agent's worktree: a relaunch works on the general subject");
   assert.ok(fs.existsSync(bench.dir));
   fs.rmSync(path.join(base, "stray.txt"));
-  closeArchivedBenches(db);
+  closeArchivedBenches(db, { force: true });
   assert.ok(benchRow(db, one.id)?.closed_at);
   assert.ok(fs.existsSync(path.join(base, "again.txt")));
   assert.equal(taskRow(db, row.note_task_id!).status, "done");

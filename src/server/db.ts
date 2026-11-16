@@ -996,7 +996,7 @@ CREATE TABLE IF NOT EXISTS machine_vetoes (
     // from the agent's own branch. dir and base_dir are the absolute paths
     // of the bench and of the agent's worktree it merges into. Once the
     // subject is archived MyHQ closes it: state is what held the closing
-    // back and was told to the owner (dirty, conflict, base, error), tried
+    // back and was told to the owner (BenchHold in benches.ts), tried
     // the tips of the two branches it was last tried at, note_task_id the
     // blocked task that tells the owner, closed_at when the worktree was
     // removed and its branch deleted. A reopened subject gets a fresh bench

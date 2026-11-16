@@ -426,6 +426,8 @@ export function entryRule(entry: Pick<BlockedEntry, "cause" | "detail">): EntryR
     case "veto":
     case "pingPong":
     case "stopping":
+    // MyHQ's note on a bench is the owner's (blocked.ts, handedOff), and MyHQ tries the closing again itself (benches.ts).
+    case "bench":
       return { kind: "wait" };
     case "failed":
     case "blocked": {

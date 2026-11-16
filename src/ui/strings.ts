@@ -1554,6 +1554,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         ROOM_NOT_FOUND: "La tâche est repartie, mais son agent n'est dans aucune salle du home : personne ne la prendra.",
         AGENT_NOT_FOUND: "La tâche est repartie, mais son agent n'existe plus dans sa salle : personne ne la prendra.",
         ROOM_INVALID: "La tâche est repartie, mais la salle de son agent est invalide : corrige son room.json.",
+        /** « Relancer » on MyHQ's note on a bench (benches.ts): MyHQ tried the closing again first. */
+        BENCH_CLOSED: "MyHQ a réessayé de fermer le banc, et il est fermé : aucun tour à lancer.",
+        BENCH_HELD: "MyHQ a réessayé de fermer le banc : il est toujours retenu, pour ce que dit la note. Aucun tour lancé, c'est à toi d'agir.",
       } as Record<string, string>,
       waitingOther: "La tâche est repartie, mais l'agent n'a pas pu être réveillé.",
       /** The note of a task the owner closed from the Standard (stored on the task). */
@@ -1607,10 +1610,26 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         conflict: (p: { subject: string; branch: string; base: string }) =>
           `Le banc du sujet ${p.subject} ne se fusionne pas : ${p.branch} entre en conflit avec ${p.base}, deux sujets ont touché les mêmes fichiers. MyHQ a annulé la fusion et garde le banc. Relancer demande à l'agent de fusionner ${p.base} dans ${p.branch} et de résoudre le conflit.`,
         base: (p: { subject: string; dir: string; base: string }) =>
-          `Le banc du sujet ${p.subject} attend : le dossier de travail principal de l'agent (${p.dir}) a des changements non validés, ou n'est pas sur sa branche ${p.base}. Le banc se fermera dès qu'il sera propre.`,
-        error: (p: { subject: string; error: string }) => `Le banc du sujet ${p.subject} n'a pas pu être fermé : ${p.error}. MyHQ le garde.`,
-        /** The note of MyHQ's task once the bench closed, or once what held it back changed. */
-        solved: "Réglé : MyHQ a fermé le banc, ou ce qui le retenait a changé.",
+          `Le banc du sujet ${p.subject} attend : le dossier de travail principal de l'agent (${p.dir}) a des changements non validés. Qu'ils soient validés sur la branche ${p.base} (Relancer le demande à l'agent) ou écartés, et le banc se fermera tout seul.`,
+        baseBranch: (p: { subject: string; dir: string; base: string }) =>
+          `Le banc du sujet ${p.subject} attend : le dossier de travail principal de l'agent (${p.dir}) n'est pas sur sa branche ${p.base}. Remets-le sur ${p.base} et le banc se fermera tout seul.`,
+        baseOperation: (p: { subject: string; dir: string }) =>
+          `Le banc du sujet ${p.subject} attend : une fusion, un rebase, un cherry-pick ou un revert est en cours dans le dossier de travail principal de l'agent (${p.dir}). MyHQ n'y touche pas : termine-le ou annule-le, et le banc se fermera tout seul.`,
+        baseMissing: (p: { subject: string; dir: string }) =>
+          `Le banc du sujet ${p.subject} attend : le dossier de travail principal de l'agent (${p.dir}) est introuvable, ou n'est pas un worktree Git. Remets-le (ou corrige le réglage worktree de l'agent) : MyHQ garde le banc.`,
+        overwrite: (p: { subject: string; dir: string; error: string }) =>
+          `Le banc du sujet ${p.subject} ne se fusionne pas : la fusion écraserait, dans le dossier de travail principal de l'agent (${p.dir}), des fichiers que Git ne suit pas. MyHQ n'a rien touché et garde le banc ; mets ces fichiers de côté. Git a répondu : ${p.error}`,
+        carryBudget: (p: { subject: string; dir: string; base: string; entries: number; seconds: number }) =>
+          `Le banc du sujet ${p.subject} est fusionné, mais les fichiers que Git y ignore sont trop nombreux pour être reportés dans ${p.base} (plus de ${p.entries} éléments ou de ${p.seconds} s) : MyHQ garde le banc (${p.dir}). Retire du banc ce qui n'est pas à garder (des dépendances, un cache).`,
+        carryFailed: (p: { subject: string; dir: string; base: string; path: string; error: string }) =>
+          `Le banc du sujet ${p.subject} est fusionné, mais MyHQ n'a pas pu reporter ${p.path} (que Git ignore) dans ${p.base} : ${p.error}. Il garde le banc (${p.dir}) avec ce qui reste à reporter.`,
+        /** Why a file could not be carried: it would land through a link out of the agent's worktree. */
+        carryOutside: "son dossier passe par un lien qui sort du dossier de travail de l'agent",
+        error: (p: { subject: string; error: string }) => `Le banc du sujet ${p.subject} n'a pas pu être fermé, MyHQ le garde. Git a répondu : ${p.error}`,
+        /** After the note of a hold only the owner settles: what « Relancer » does, and when MyHQ tries again by itself. */
+        retry: "Relancer fait réessayer MyHQ tout de suite, sans lancer de tour ; sinon il réessaie de lui-même, de plus en plus espacé.",
+        /** The note of MyHQ's task once the bench closed. */
+        solved: "Réglé : MyHQ a fermé le banc.",
       },
       vetoNote: {
         failed: (error: string) =>

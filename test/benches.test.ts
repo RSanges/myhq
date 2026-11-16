@@ -31,14 +31,14 @@ test("a subject's bench is a worktree made from the tip of the agent's branch; i
   const one = createSubject(db, "demo", "dev", "One");
   const two = createSubject(db, "demo", "dev", "Two");
   const bench = benchOf(agent, one.id)!;
-  assert.equal(bench.dir, `${base}--subject-${one.id}`);
+  assert.equal(bench.dir, `${base}.subject-${one.id}`);
   assert.equal((await run(config, db, engine, "Work on one.", one.id)).status, "done");
   const input = seen[1]!;
   assert.equal(input.workDir, bench.dir);
   assert.equal(input.env?.HQ_WORK_DIR, bench.dir);
   assert.ok(input.prompt.includes(benchLines(bench)), "the run is told about its bench");
   assert.match(input.prompt, /uncommitted work blocks that closing/);
-  assert.equal(git(bench.dir, "branch", "--show-current"), `hq/dev--subject-${one.id}`);
+  assert.equal(git(bench.dir, "branch", "--show-current"), `hq/dev.subject-${one.id}`);
   assert.ok(fs.existsSync(path.join(bench.dir, "base.txt")), "made from the tip of the agent's branch");
   assert.ok(!fs.existsSync(path.join(repo, "base.txt")), "not from the repository's HEAD");
   // The write guard and its settings are in the bench, out of Git.
@@ -80,6 +80,6 @@ test("without parallel an agent with a worktree works in it for every subject, a
   assert.equal(seen[0]!.env?.HQ_WORK_DIR, base);
   assert.doesNotMatch(seen[0]!.prompt, /bench of this subject/);
   assert.equal(benchRow(db, one.id), undefined);
-  assert.ok(!fs.existsSync(`${base}--subject-${one.id}`));
+  assert.ok(!fs.existsSync(`${base}.subject-${one.id}`));
 });
 

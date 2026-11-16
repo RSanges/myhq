@@ -104,8 +104,8 @@ export function updateSubject(db: Db, room: string, agentId: string, id: number,
       return readSubject(db, room, agentId, id);
     })
     .immediate();
-  // Archived by the owner: its bench closes (benches.ts), out of the transaction since it runs Git.
-  if (patch.status === "archived" && row.status === "archived") closeBench(db, id);
+  // Archived by the owner: its bench closes (benches.ts), out of the transaction since it runs Git; a held one is tried again at once.
+  if (patch.status === "archived" && row.status === "archived") closeBench(db, id, undefined, { force: true });
   return row;
 }
 

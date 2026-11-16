@@ -377,6 +377,7 @@ export function benchLines(bench: Bench): string {
   return [
     `This run works on the bench of this subject: ${bench.dir}, a Git worktree on branch ${bench.branch}, a copy of your branch ${bench.baseBranch}; your other subjects have benches of their own.`,
     `Commit your work on ${bench.branch} before you finish: MyHQ merges it into ${bench.baseBranch} once the subject is validated, and uncommitted work blocks that closing.`,
+    `Outputs you leave in folders Git ignores are carried to your own worktree ${bench.baseDir} when the subject closes, unless a file of the same path is already there.`,
     "Write only what belongs to this subject. If it needs a change in files your other subjects share (a common model, a library, a tool), do not make it silently: say it first in your submission, or ask, because it can conflict with your other benches.",
   ].join(" ");
 }
@@ -830,7 +831,7 @@ export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = 
     applyRunStops(db);
     // What the runs with needs take from the machine, measured on this tick (machine.ts).
     sampleMachine(db, deps.machine);
-    // The benches of archived subjects that waited (benches.ts): closed once nothing holds them back.
+    // The benches of archived subjects that waited (benches.ts): closed once nothing holds them back; a held one only once its wait is over.
     closeArchivedBenches(db);
     if (runsToday(db) >= liveConfig(config).maxRunsPerDay) return [];
     return wakeAgents(config, db, deps);
@@ -1453,8 +1454,8 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   // The end of a run may be what closes a subject whose work is validated.
   settleSubject(db, run.subject_id);
-  // It may also free what a bench of an archived subject waited for: the agent's worktree, the subject itself (benches.ts).
-  closeArchivedBenches(db, { room: room.name, agentId: agent.id });
+  // It may also free what a bench of an archived subject waited for, or settle what held it: the agent's worktree, the subject itself (benches.ts).
+  closeArchivedBenches(db, { of: { room: room.name, agentId: agent.id }, force: true });
   // What the machine gave it, stored with whether it ran alone (machine.ts); nothing for an agent without needs.
   closeRunMachine(db, run.id, p.deps.machine);
   wake(p);
