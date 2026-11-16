@@ -102,6 +102,8 @@ export type TaskRow = {
   from_agent: string | null;
   /** The subject of the agent the task belongs to (subjects.ts), null: the general subject. */
   subject_id: number | null;
+  /** The owner's place for it in the queue (queueOrder), null: automatic order. Absent from rows built by hand. */
+  queue_rank?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -948,6 +950,45 @@ CREATE INDEX IF NOT EXISTS door_requests_approval ON door_requests (approval_id)
       { table: "question_proposals", column: "task_id", type: "INTEGER" },
     ],
   },
+  {
+    version: 31,
+    // The queue and the machine (queue.ts, machine.ts). queue_rank, on a
+    // task: the owner's place for it in the queue (smaller first, before
+    // every task without one); null: automatic order, oldest first.
+    // run_machine: one row per run of an agent with `needs`, written at its
+    // start with the need it reserves and what the machine had free, then the
+    // peak of what the machine gave up since (sampled on the tick) and, at its
+    // end, whether it was alone among such runs. machine_vetoes: the latest
+    // answer of the home's veto command per agent (asking, ok, wait).
+    // Idempotent, as the migrations after 14.
+    sql: `
+CREATE TABLE IF NOT EXISTS run_machine (
+  run_id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  ram_need_gb REAL,
+  vram_need_gb REAL,
+  ram_free_start_gb REAL NOT NULL,
+  vram_used_start_gb REAL,
+  ram_peak_gb REAL NOT NULL DEFAULT 0,
+  vram_peak_gb REAL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  alone INTEGER
+);
+CREATE INDEX IF NOT EXISTS run_machine_agent ON run_machine (room, agent_id, ended_at);
+CREATE TABLE IF NOT EXISTS machine_vetoes (
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('asking', 'ok', 'wait')),
+  reason TEXT,
+  error TEXT,
+  at TEXT NOT NULL,
+  PRIMARY KEY (room, agent_id)
+);
+`,
+    columns: [{ table: "tasks", column: "queue_rank", type: "REAL" }],
+  },
 ];
 
 function migrate(db: Db): void {
@@ -1019,6 +1060,14 @@ export function getDbAt(dbPath: string): Db {
  */
 export const liveItem = (alias = ""): string =>
   `NOT EXISTS (SELECT 1 FROM archived_rooms ar WHERE ar.name = ${alias}room OR ar.name = ${alias}for_room)`;
+
+/**
+ * The order of the queue, the one place it is written: the tasks the owner
+ * placed (`queue_rank`, smaller first) before the others, then the oldest
+ * first. Without any rank it is `ORDER BY id`, the order of before the queue.
+ * `alias` is the alias of the tasks table with its dot (`"t."`), or empty.
+ */
+export const queueOrder = (alias = ""): string => `${alias}queue_rank IS NULL, ${alias}queue_rank, ${alias}id`;
 
 export function now(): string {
   return new Date().toISOString();

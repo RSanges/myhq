@@ -176,6 +176,45 @@ export const settingsViewSchema = z.object({
       }),
     ),
   }),
+  /** The machine (myhq.json `machine`, machine.ts): the reading (null when no agent declares needs), the margins, the veto command, the needs per agent. */
+  machine: z.object({
+    reading: z
+      .object({
+        at: z.string(),
+        ramFreeGb: z.number(),
+        ramTotalGb: z.number(),
+        vramUsedGb: z.number().nullable(),
+        vramTotalGb: z.number().nullable(),
+      })
+      .nullable(),
+    keepFreeRamGb: z.number(),
+    keepFreeVramGb: z.number(),
+    source: z.enum(["file", "default"]),
+    veto: z.object({ command: z.string(), timeoutSeconds: z.number() }).nullable(),
+    agents: z.array(
+      z.object({
+        room: z.string(),
+        agent: z.string(),
+        name: z.string(),
+        kind: z.enum(["ram", "vram"]),
+        declaredGb: z.number(),
+        effectiveGb: z.number(),
+        runs: z.number(),
+        medianGb: z.number().nullable(),
+        maxGb: z.number().nullable(),
+      }),
+    ),
+    vetoes: z.array(
+      z.object({
+        room: z.string(),
+        agent: z.string(),
+        verdict: z.enum(["asking", "ok", "wait"]),
+        reason: z.string().nullable(),
+        error: z.string().nullable(),
+        at: z.string(),
+      }),
+    ),
+  }),
   /** Problems found in myhq.json, one line each; the keys concerned fall back to their defaults. */
   errors: z.array(z.string()),
 });

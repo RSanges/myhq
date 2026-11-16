@@ -391,6 +391,25 @@ export const strings = {
       summariesWeek: (calls: number, cost: string) => `Sur 7 jours : ${calls} ${calls === 1 ? "résumé" : "résumés"}, ${cost} $ en tout.`,
       verdicts: "Derniers avis du portier",
     },
+    /** The machine (machine.ts), on the « Limites et coûts » tab: read only, set in myhq.json. */
+    machine: {
+      title: "Machine",
+      hint: "Ce que MyHQ lit de la machine avant de lancer un tour d'un agent qui déclare needs (room.json), et ce qu'il garde libre. Se règle dans le bloc machine de myhq.json.",
+      reading: (p: { ramFree: number; ramTotal: number; vram: string }) => `Maintenant : ${p.ramFree} Go de mémoire vive libres sur ${p.ramTotal}, ${p.vram}.`,
+      vram: (free: number, total: number) => `${free} Go de mémoire vidéo libres sur ${total}`,
+      vramUnknown: "mémoire vidéo illisible (nvidia-smi absent ou en échec)",
+      margins: (ram: number, vram: number) => `Marge gardée libre : ${ram} Go de mémoire vive, ${vram} Go de mémoire vidéo.`,
+      veto: (command: string, seconds: number) => `Commande de veto : ${command} (${seconds} s au plus, une panne la laisse passer).`,
+      noVeto: "Pas de commande de veto.",
+      agentsEmpty: "Aucun agent ne déclare needs : la machine n'est regardée pour aucun tour.",
+      agentsCaption: "Besoin par agent : déclaré, mesuré sur ses derniers tours seuls, et celui que MyHQ réserve.",
+      columns: { agent: "Agent", kind: "Mémoire", declared: "Déclaré", median: "Médiane mesurée", max: "Max mesuré", effective: "Réservé" },
+      kinds: { ram: "vive", vram: "vidéo" },
+      gb: (value: number | null) => (value === null ? "non" : `${value} Go`),
+      runs: (n: number) => (n === 0 ? "aucun tour seul mesuré" : `${n} ${n === 1 ? "tour seul" : "tours seuls"}`),
+      lastVeto: (p: { verdict: string; reason: string | null; error: string | null; at: string }) =>
+        `Dernier avis du veto : ${p.verdict}${p.reason ? ` (${p.reason})` : ""}${p.error ? `, en panne : ${p.error}` : ""}, ${p.at}.`,
+    },
     roomsTab: {
       filterLabel: "Filtrer les salles",
       filters: { all: "Toutes", active: "Actives", paused: "En pause" },
@@ -1284,6 +1303,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       APPROVAL_NOT_WATCHABLE: "Cet item n'est pas à regarder : il attend une décision ou a déjà été traité.",
       DAILY_CAP_REACHED: "Le plafond quotidien de tours est atteint. Réessayez demain.",
       RESOURCE_BUSY: "Une ressource partagée de cet agent (le GPU par exemple) est prise par un autre tour. Réessayez quand il aura fini.",
+      MACHINE_BUSY: "La machine ne peut pas prendre ce tour maintenant (mémoire, ou la commande de veto du home) : la file d'attente du bureau dit pourquoi.",
+      NOT_IN_QUEUE: "Cette tâche n'attend plus : elle a été prise ou close.",
       ROADMAP_NOT_FOUND: "Aucune feuille de route valide.",
       TARGET_NOT_FOUND: "Aucun dossier à ce chemin.",
       PATH_OUTSIDE_ROOT: "Ce dossier est hors de la racine des projets (projectsRoot dans myhq.json).",
@@ -1392,6 +1413,23 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     cardError: "Erreur",
   },
   /** The objects of the desk (myhq.json `desk`) and their pages, /bureau/<id>. */
+  /** The queue on the desk (queue.ts): what waits for a run, in order, and the owner's controls. */
+  queue: {
+    title: (n: number) => `File d'attente (${n})`,
+    hint: "Ce qui attend un tour, dans l'ordre où MyHQ le servira. Mets une tâche en tête, déplace-la, ou rends-la à l'ordre automatique (la plus ancienne d'abord).",
+    machine: (p: { ramFree: number; vram: string }) => `Machine : ${p.ramFree} Go de mémoire vive libres, ${p.vram}.`,
+    vram: (free: number) => `${free} Go de mémoire vidéo libres`,
+    vramUnknown: "mémoire vidéo illisible",
+    since: (age: string) => `en attente ${age}`,
+    placed: "placée par toi",
+    first: "En tête",
+    up: "Monter",
+    down: "Descendre",
+    auto: "Ordre auto",
+    moveLabel: (move: string, taskId: number) => `${move} : tâche #${taskId}`,
+    failed: "Le déplacement n'a pas été fait.",
+    loadFailed: "La file d'attente n'a pas pu être lue.",
+  },
   deskModules: {
     /** Labels of the default desk, when myhq.json has no `desk` block. */
     defaults: {
@@ -1507,6 +1545,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       waiting: {
         AGENT_BUSY: "La tâche est repartie, mais l'agent a déjà un tour en cours : relance-la à la fin de ce tour.",
         RESOURCE_BUSY: "La tâche est repartie, mais une ressource de l'agent (le GPU par exemple) est prise par un autre tour : relance-la à la fin de ce tour.",
+        MACHINE_BUSY: "La tâche est repartie, mais la machine ne peut pas la prendre maintenant : elle part toute seule dès que la machine le permet.",
         DAILY_CAP_REACHED: "La tâche est repartie, mais le plafond du jour est atteint : elle attend demain, ou un plafond relevé dans les réglages.",
         SHUTTING_DOWN: "La tâche est repartie, mais MyHQ s'arrête : relance-la après le redémarrage.",
         ROOM_NOT_FOUND: "La tâche est repartie, mais son agent n'est dans aucune salle du home : personne ne la prendra.",
@@ -1578,6 +1617,16 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         noWake: "Aucun réveil ne la reprendra seul : elle attend le prochain tour de l'agent.",
         notWoken: "Elle aurait dû réveiller l'agent, sans raison connue : le journal du serveur peut le dire.",
         unknownAgent: "Son agent n'est plus dans les salles du home.",
+        machine: (p: { kind: "ram" | "vram"; needGb: number; keepGb: number; freeGb: number; reservedGb: number; leftGb: number }) =>
+          `Machine : il faut ${p.needGb} Go de ${p.kind === "ram" ? "mémoire vive" : "mémoire vidéo"} libres, plus ${p.keepGb} Go de marge, il en reste ${p.leftGb} (${p.freeGb} libres, ${p.reservedGb} réservés par les tours en cours) : elle repart dès que la machine le permet.`,
+        vramUnknown: (needGb: number) =>
+          `Machine : il faut ${needGb} Go de mémoire vidéo et la carte graphique ne se lit pas (nvidia-smi absent ou en échec) : elle attend une lecture.`,
+        veto: (reason: string) => `La commande de veto du home dit d'attendre : ${reason}`,
+        vetoAsking: "La commande de veto du home est consultée : elle part dès sa réponse.",
+        /** The reasons of the queue only (queue.ts): a task that is not stuck. */
+        byDesign: "Elle attend le prochain tour de l'agent, comme prévu (réglage de l'agent, ou message sans réveil).",
+        afterRun: (runId: number) => `Agent occupé sur le tour #${runId} : elle part à la fin de ce tour.`,
+        behind: (taskId: number) => `Derrière la tâche #${taskId}, qui attend la même ressource : elle passe après elle.`,
       },
     },
     postits: {
@@ -1734,6 +1783,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         `Noté (tâche #${p.taskId}), mais ${p.agent} est occupé : elle sera prise dès la fin de son tour en cours.`,
       resource: (p: { taskId: number; agent: string; resource?: string }) =>
         `Noté (tâche #${p.taskId}), mais ${p.agent} attend que ${p.resource ? `la ressource « ${p.resource} »` : "une ressource partagée"} soit libre : elle sera prise dès la fin du tour qui l'occupe.`,
+      machine: (p: { taskId: number; agent: string }) =>
+        `Noté (tâche #${p.taskId}), mais la machine ne peut pas prendre ${p.agent} maintenant : la tâche partira toute seule dès qu'elle le pourra (file d'attente du bureau).`,
     },
     status: {
       today: (runs: number, cost: string) => `Aujourd'hui : ${runs} tour(s), ${cost}`,
@@ -1766,6 +1817,16 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         run: (agent: string, task: string | null) => `lancer un tour de ${agent}${task ? ` (tâche : ${task})` : ""}`,
         arm: (agent: string) => `armer les routines de ${agent}`,
         disarm: (agent: string) => `désarmer les routines de ${agent}`,
+        queue: "lire la file d'attente",
+        queueFirst: (taskId: number) => `mettre la tâche #${taskId} en tête de la file d'attente`,
+      },
+      /** The chat actions `queue` and `queue_first` (queue.ts). */
+      queue: {
+        empty: "File d'attente : rien n'attend.",
+        title: (n: number) => `File d'attente (${n}) :`,
+        entry: (p: { position: number; taskId: number; who: string; summary: string; reason: string }) =>
+          `${p.position}. Tâche #${p.taskId}, ${p.who} : ${p.summary} (${p.reason})`,
+        first: (taskId: number) => `Tâche #${taskId} mise en tête de la file d'attente.`,
       },
       /** The chat action `file_received`: a file of the drop folder moves into a room's recu/ drawer. */
       fileReceived: (file: string, room: string, order: string | null) =>

@@ -129,7 +129,7 @@ export function fireRoutine(
     );
     return recordFiring(db, { ...base, outcome: "started", runId: run.id });
   } catch (error) {
-    if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "RESOURCE_BUSY")) {
+    if (error instanceof HqError && (error.code === "AGENT_BUSY" || error.code === "RESOURCE_BUSY" || error.code === "MACHINE_BUSY")) {
       return recordFiring(db, { ...base, outcome: "skipped_busy", detail: error.message });
     }
     if (error instanceof HqError && error.code === "DAILY_CAP_REACHED") {

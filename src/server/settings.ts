@@ -22,6 +22,7 @@ import { roomPauses } from "./room-manage";
 import { runsToday } from "./runner";
 import { roomWeekTotals } from "./usage";
 import { recentVerdicts } from "./portier";
+import { machineView } from "./machine";
 import { readDoorConfig, recentDoorRequests } from "./door";
 import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, roomLabelSchema, type Home, type Room } from "./rooms";
 import {
@@ -388,6 +389,12 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
   if (summaries.error && !raw.error) errors.push(summaries.error);
   const archivedList = readArchivedRooms(live.home);
   if (archivedList.error && !raw.error) errors.push(archivedList.error);
+  const { error: machineError, ...machine } = machineView(
+    db,
+    live,
+    home.rooms.flatMap((room) => room.agents.map((agent) => ({ room: room.name, agent }))),
+  );
+  if (machineError && !raw.error) errors.push(machineError);
 
   const pauses = roomPauses(db);
   const weeks = roomWeekTotals(db);
@@ -534,6 +541,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
       verdicts: verdicts.verdicts,
     },
     door: { enabled: doorOpen, week: door.week, requests: door.requests },
+    machine,
     errors,
   };
 }

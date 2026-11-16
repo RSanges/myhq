@@ -4,6 +4,7 @@ import { z } from "zod";
 import { strings } from "../ui/strings";
 import { app } from "./app";
 import { listBlocked, stuckAgents, type BlockedEntry } from "./blocked";
+import { queueSignature } from "./queue";
 import { listClosures, type ClosureDto } from "./closures";
 import { isInside, type Env, type HqConfig } from "./config";
 import { liveItem, now, type ApprovalRow, type Db, type RunRow } from "./db";
@@ -221,7 +222,11 @@ export type DeskDto = {
 };
 
 /** The count and the state of each object, as the `desk` event carries them. */
-export type DeskCountsDto = { objects: { id: string; count: number; status: "ok" | "error" }[] };
+export type DeskCountsDto = {
+  objects: { id: string; count: number; status: "ok" | "error" }[];
+  /** What the queue looks like (queue.ts, queueSignature): a change tells the open pages to read it again. */
+  queue?: string;
+};
 
 // --- Reading the sources -------------------------------------------------------------
 
@@ -610,7 +615,7 @@ export async function deskCounts(deps: DeskDeps): Promise<DeskCountsDto> {
       };
     }),
   );
-  return { objects };
+  return { objects, queue: queueSignature(deps.db) };
 }
 
 // --- The command runner and the live counts, one per home ------------------------------
@@ -637,7 +642,7 @@ export const DESK_POLL_MS = 3_000;
 type DeskListener = (counts: DeskCountsDto) => void;
 type DeskHub = { listeners: Set<DeskListener>; stop: () => void; poke: () => void };
 
-const signature = (counts: DeskCountsDto): string => JSON.stringify(counts.objects);
+const signature = (counts: DeskCountsDto): string => JSON.stringify([counts.objects, counts.queue ?? null]);
 
 /**
  * Calls `onChange` with the counts each time one of them (or the state of an

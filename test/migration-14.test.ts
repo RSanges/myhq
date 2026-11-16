@@ -42,7 +42,7 @@ const REFERENCE = (() => {
 
 test("migration 14: a new database goes through 13 then 14 and has the table once", () => {
   const db = openDb(tempDb());
-  assert.deepEqual(versions(db), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+  assert.deepEqual(versions(db), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
   assert.deepEqual(approvalFilesSchema(db), REFERENCE);
   assert.equal(REFERENCE.columns.length, 8);
   assert.deepEqual(REFERENCE.index, [{ name: "approval_files_approval" }]);
@@ -58,7 +58,7 @@ test("migration 14: the database in service (version 13 without the table) gets 
   raw.close();
 
   const db = openDb(file);
-  assert.equal(Math.max(...versions(db)), 30, "and the later ones");
+  assert.equal(Math.max(...versions(db)), 31, "and the later ones");
   assert.deepEqual(approvalFilesSchema(db), REFERENCE);
   db.close();
 });
@@ -97,9 +97,9 @@ test("migration 14: the abandoned draft of 13 (tasks widened with 'need') gets t
 
   const db = openDb(file);
   assert.deepEqual(approvalFilesSchema(db), REFERENCE);
-  // The draft's tasks table is as it was, rows included; only the column of a later migration (28, subject_id) joins it.
+  // The draft's tasks table is as it was, rows included; only the columns of later migrations (28, subject_id; 31, queue_rank) join it.
   assert.deepEqual(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'tasks'").get(), {
-    sql: tasksBefore.sql.replace(/\)$/, ", subject_id INTEGER)"),
+    sql: tasksBefore.sql.replace(/\)$/, ", subject_id INTEGER, queue_rank REAL)"),
   });
   assert.deepEqual(db.prepare("SELECT source, text FROM tasks").all(), [{ source: "need", text: "a need" }]);
   // The only table that appeared is approval_files.
@@ -121,7 +121,7 @@ test("migration 14: it is a no-op when the table and its rows already exist", ()
   db.close();
 
   const again = openDb(file);
-  assert.equal(Math.max(...versions(again)), 30, "and the later ones");
+  assert.equal(Math.max(...versions(again)), 31, "and the later ones");
   assert.deepEqual(again.prepare("SELECT name FROM approval_files").all(), [{ name: "a.png" }]);
   assert.deepEqual(approvalFilesSchema(again), REFERENCE);
   again.close();

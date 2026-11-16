@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { isAgentModeTask, isStaleRevision, wakeAgentNeed } from "./agent-need";
 import { getConfig, type HqConfig } from "./config";
-import { getDbAt, now, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
+import { getDbAt, now, queueOrder, type ApprovalRow, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { homeRosterLines } from "./home-roster";
@@ -355,7 +355,7 @@ export function startOnboarding(request: z.infer<typeof onboardingSchema>, deps:
 export function wakeOnboarding(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   const pending = db
     .prepare(
-      "SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND source IN ('revise', 'message') AND status = 'pending' ORDER BY id",
+      `SELECT * FROM tasks WHERE room = ? AND agent_id = ? AND source IN ('revise', 'message') AND status = 'pending' ORDER BY ${queueOrder()}`,
     )
     .all(ONBOARDING_ROOM, ONBOARDING_AGENT) as TaskRow[];
   const started: RunRow[] = [];

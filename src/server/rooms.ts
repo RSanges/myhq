@@ -76,6 +76,14 @@ export const mcpServersSchema = z
 /** A shared resource name: lowercase letters, digits, '-' or '_'. */
 export const resourceSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/, "lowercase letters, digits, '-' or '_' (max 32)");
 
+/** `needs` of an agent: free RAM and free GPU memory one of its runs needs, in GB, at least one of them. */
+export const needsSchema = z
+  .strictObject({
+    ramGb: z.number().positive().max(4096).optional(),
+    vramGb: z.number().positive().max(1024).optional(),
+  })
+  .refine((needs) => needs.ramGb !== undefined || needs.vramGb !== undefined, "give ramGb, vramGb or both");
+
 export const agentSchema = z.strictObject({
   id: idSchema,
   name: z.string().trim().min(1),
@@ -135,6 +143,12 @@ export const agentSchema = z.strictObject({
     .max(16)
     .refine((list) => new Set(list).size === list.length, "a resource is listed twice")
     .optional(),
+  /**
+   * What one run of the agent takes from the machine, in GB (machine.ts): a run starts only when the machine
+   * has it free on top of the home's margin and of what the runs in progress still have to take. Left out:
+   * the machine is not looked at for this agent.
+   */
+  needs: needsSchema.optional(),
   /**
    * The supervisor of the Standard: it reads what is stuck (hq_blocked), writes to any agent of any room,
    * relaunches a stuck entry (hq_relaunch), annotates it for the owner (hq_blocked_note) and reads the items
@@ -258,6 +272,8 @@ export type Agent = {
   notifyRuns: "summary" | null;
   /** Shared resources its runs hold (see launchRun); empty for most agents. */
   resources: string[];
+  /** What one of its runs takes from the machine, in GB (machine.ts); null or absent: not gated by the machine. */
+  needs?: { ramGb: number | null; vramGb: number | null } | null;
   /** The supervisor of the Standard (see supervisor.ts); false for most agents. */
   supervisor?: boolean;
   // Run options (room.json), absent for MyHQ's own agents.
@@ -471,6 +487,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       onRevise: agent.onRevise ?? null,
       notifyRuns: agent.notifyRuns ?? null,
       resources: agent.resources ?? [],
+      needs: agent.needs ? { ramGb: agent.needs.ramGb ?? null, vramGb: agent.needs.vramGb ?? null } : null,
       supervisor: agent.supervisor ?? false,
       effort: agent.effort ?? null,
       modelFor: agent.modelFor ?? {},

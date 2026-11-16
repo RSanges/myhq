@@ -1,5 +1,5 @@
 import type { HqConfig } from "./config";
-import { now, type Db, type RunRow } from "./db";
+import { now, queueOrder, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
 import { startRun, WAITS, WAKE_TASK, type RunnerDeps } from "./runner";
 
@@ -13,13 +13,13 @@ import { startRun, WAITS, WAKE_TASK, type RunnerDeps } from "./runner";
 export const RELAUNCH_REASON = "relaunch";
 
 /**
- * The subject a relaunch works on (subjects.ts): the one of the oldest of its
- * tasks, null for the general one. A relaunch is about those tasks, so its run
+ * The subject a relaunch works on (subjects.ts): the one of the first of its
+ * tasks in the queue (queueOrder), null for the general one. A relaunch is about those tasks, so its run
  * takes their subject's mailbox, whatever older task another subject holds.
  */
 export function relaunchSubject(db: Db, taskIds: readonly number[]): number | null {
   const row = db
-    .prepare("SELECT subject_id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id LIMIT 1")
+    .prepare(`SELECT subject_id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) ORDER BY ${queueOrder()} LIMIT 1`)
     .get(JSON.stringify(taskIds)) as { subject_id: number | null } | undefined;
   return row?.subject_id ?? null;
 }

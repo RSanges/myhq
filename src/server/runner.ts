@@ -7,7 +7,7 @@ import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
 import { briefingText, giveBackDecisions, readMemories, takeDecisions } from "./briefing";
 import { alertCapReached } from "./cap-alert";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
-import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow, type TaskSource } from "./db";
+import { getDbAt, now, queueOrder, type Db, type RunRow, type RunStatus, type TaskRow, type TaskSource } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
@@ -25,6 +25,7 @@ import {
   stopsFor,
   type DeadlineDecision,
 } from "./long-runs";
+import { closeRunMachine, declaresNeeds, machineCheck, recordRunMachine, sampleMachine, scarceOf, shortfallText, type MachineRead } from "./machine";
 import { languageName, wakeOnboarding } from "./onboarding";
 import { messageGate, type PortierCall } from "./portier";
 import { summarizeRun } from "./run-summary";
@@ -92,6 +93,8 @@ export type RunnerDeps = {
   subject?: number | null;
   /** The door's model call (door.ts, hq_ask_assistant). Default: the real `claude -p`. */
   door?: SmallModelCall;
+  /** How the machine is read (machine.ts). Default: the real reading, node:os and nvidia-smi. */
+  machine?: MachineRead;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -344,6 +347,10 @@ export function findAgent(config: HqConfig, roomName: string, agentId: string): 
   return { room, agent };
 }
 
+/** The run instruction of an agent with `needs` or `resources` (machine.ts): one sentence, and none for the others. */
+export const MACHINE_CHECKED =
+  "MyHQ checked the machine before starting you (memory, shared resources); you still check it before a heavy step if your role tells you to.";
+
 export function buildPrompt(params: {
   room: Room;
   agent: Agent;
@@ -405,6 +412,10 @@ export function buildPrompt(params: {
   const shared = params.sharedRooms ?? [];
   if (shared.length > 0) {
     lines.push(`Shared rooms you may order from with hq_message and "room" (hq_rooms lists their agents): ${shared.join(", ")}.`);
+  }
+  // `?? []`: a prompt may be built for an agent given in part (tests, MyHQ's own agents).
+  if (declaresNeeds(params.agent) || (params.agent.resources ?? []).length > 0) {
+    lines.push(MACHINE_CHECKED);
   }
   lines.push(
     "",
@@ -640,7 +651,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const candidates = db
     .prepare(
       `SELECT * FROM (
-         SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent, t.subject_id,
+         SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent, t.subject_id, t.queue_rank,
            t.source IN ('approval', 'message', 'revise', 'chat')
              AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
                AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status <> 'cancelled')
@@ -648,7 +659,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
                AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1 AS fresh,
            ${OVERDUE_TASK} AS overdue
          FROM tasks t WHERE t.status = 'pending')
-       WHERE fresh OR overdue ORDER BY id`,
+       WHERE fresh OR overdue ORDER BY ${queueOrder()}`,
     )
     .all() as (WakeCandidate & { overdue: 0 | 1 })[];
   if (candidates.length === 0) return [...onboarding, ...relaunched];
@@ -656,6 +667,8 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const started: RunRow[] = [...onboarding, ...relaunched];
   const done = new Set<string>();
   const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
+  // What an earlier task of the queue waits for (a shared resource, RAM, GPU memory): no later task that needs it starts before it.
+  const held = new Set<string>();
   for (const candidate of candidates) {
     const key = `${candidate.room}/${candidate.agent_id}`;
     if (done.has(key)) continue;
@@ -684,12 +697,16 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     ) {
       continue;
     }
+    const scarce = scarceOf(agent);
+    if (scarce.some((each) => held.has(each))) continue;
     done.add(key);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
       started.push(startRun(request, { ...deps, config, subject: candidate.subject_id ?? null }));
     } catch (error) {
-      // A busy agent, a busy resource or the cap: the task waits, and the end of the run that holds them wakes it again.
+      // Waiting for a resource or the machine, it keeps everything scarce its agent needs for itself (queue.ts, "behind").
+      if (error instanceof HqError && SCARCE_WAITS.has(error.code)) for (const each of scarce) held.add(each);
+      // A busy agent, a busy resource, the machine or the cap: the task waits, and the end of the run that holds them wakes it again.
       if (error instanceof HqError && WAITS.has(error.code)) continue;
       console.error(`[runner] could not wake ${key}`, error);
     }
@@ -738,7 +755,9 @@ export function applyRunStops(db: Db): void {
 }
 
 /** Errors that leave a woken task pending, to be taken by a later run. */
-export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED", "SHUTTING_DOWN"]);
+export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "MACHINE_BUSY", "DAILY_CAP_REACHED", "SHUTTING_DOWN"]);
+/** The waits for something another agent's run may take: the task holds its place for it (no overtaking). */
+export const SCARCE_WAITS = new Set(["RESOURCE_BUSY", "MACHINE_BUSY"]);
 
 /**
  * Wakes the agents whose tasks wait for the daily cap, once the counter allows
@@ -752,6 +771,8 @@ export const WAITS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"
 export function resumeWaitingTasks(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   try {
     applyRunStops(db);
+    // What the runs with needs take from the machine, measured on this tick (machine.ts).
+    sampleMachine(db, deps.machine);
     if (runsToday(db) >= liveConfig(config).maxRunsPerDay) return [];
     return wakeAgents(config, db, deps);
   } catch (error) {
@@ -833,13 +854,33 @@ export function launchRun(params: {
           `Daily cap reached: ${today} of ${cap} runs today (HQ_MAX_RUNS_PER_DAY, or maxRunsPerDay in myhq.json).`,
         );
       }
+      // The machine (machine.ts): nothing is read for an agent without needs, nothing is asked without needs or resources.
+      const machine = machineCheck({
+        config,
+        db,
+        room: room.name,
+        agent,
+        read: deps.machine,
+        ask: { env: agentEnv(process.env, {}), rewake: () => void wakeAgents(config, db, deps) },
+      });
+      if (machine.kind !== "free") {
+        throw new HqError(
+          "MACHINE_BUSY",
+          409,
+          machine.kind === "machine"
+            ? `The machine cannot take the run of "${agent.id}" now: ${shortfallText(machine.shortfall)}.`
+            : machine.reason === null
+              ? `The home's veto command is asked before the run of "${agent.id}": it starts once it answers.`
+              : `The home's veto command says to wait before the run of "${agent.id}": ${machine.reason}`,
+        );
+      }
       const at = now();
       const only = params.claimIds;
       const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
       // One subject per run: the one it is given, else the one of the oldest of the tasks it is started for, else the general one.
       const oldest = only
         ? (db
-            .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY id LIMIT 1`)
+            .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY ${queueOrder()} LIMIT 1`)
             .get(room.name, agent.id, ...only) as { subject_id: number | null } | undefined)
         : undefined;
       const subject = params.subjectId !== undefined ? params.subjectId : (oldest?.subject_id ?? null);
@@ -856,6 +897,8 @@ export function launchRun(params: {
         `INSERT INTO tasks (room, agent_id, source, text, status, run_id, subject_id, created_at, updated_at)
          VALUES (?, ?, 'manual', ?, 'in_progress', ?, ?, ?, ?)`,
       ).run(room.name, agent.id, task, runId, subject, at, at);
+      // What it reserves from the machine until it has taken it (reservations, machine.ts).
+      if (machine.need && machine.reading) recordRunMachine(db, runId, room.name, agent.id, machine.need, machine.reading, at);
       const claimed = db
         .prepare(
           `UPDATE tasks SET status = 'in_progress', run_id = ?, updated_at = ?
@@ -1294,6 +1337,8 @@ async function execute(p: ExecuteParams): Promise<void> {
 
   // The end of a run may be what closes a subject whose work is validated.
   settleSubject(db, run.subject_id);
+  // What the machine gave it, stored with whether it ran alone (machine.ts); nothing for an agent without needs.
+  closeRunMachine(db, run.id, p.deps.machine);
   wake(p);
   await notifyPendingApprovals(db, p.send, p.deps.env);
   // What the bot sends on its own goes into the conversation MyHQ keeps, so

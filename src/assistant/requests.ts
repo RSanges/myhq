@@ -21,7 +21,7 @@ const requestSchema = z.strictObject({
 export const REJECTED_DIR = "rejected";
 
 /** Why the run of a request did not start: the task waits. */
-export type WaitCause = "cap" | "busy" | "resource";
+export type WaitCause = "cap" | "busy" | "resource" | "machine";
 
 /** A request whose task was created but whose run could not start now. */
 export type WaitingRequest = {
@@ -58,6 +58,7 @@ function waitingOf(deps: RequestsDeps, taskId: number, request: { room: string; 
     const holder = resourceHolder(deps.db, agent.resources);
     return { ...base, cause: "resource", ...(holder ? { resource: holder.resource } : {}) };
   }
+  if (error.code === "MACHINE_BUSY") return { ...base, cause: "machine" };
   return { ...base, cause: "busy" };
 }
 

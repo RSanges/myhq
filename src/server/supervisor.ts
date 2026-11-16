@@ -401,8 +401,8 @@ const TRANSIENT: readonly { why: string; pattern: RegExp }[] = [
  * interrupted run, a busy agent whose task nothing takes, two interruptions in
  * a row, or a failed run or a blocked task whose words name a passing failure
  * (an MCP server not connected, the GPU busy, an interruption, SQLITE_BUSY,
- * the daily cap) is relaunched once; the cap, a resource, the anti ping-pong
- * window and a stop of MyHQ resolve themselves; everything else is the
+ * the daily cap) is relaunched once; the cap, a resource, the machine, the
+ * anti ping-pong window and a stop of MyHQ resolve themselves; everything else is the
  * supervisor's.
  */
 export function entryRule(entry: Pick<BlockedEntry, "cause" | "detail">): EntryRule {
@@ -414,6 +414,8 @@ export function entryRule(entry: Pick<BlockedEntry, "cause" | "detail">): EntryR
       return { kind: "relaunch", why: "busy" };
     case "cap":
     case "resource":
+    case "machine":
+    case "veto":
     case "pingPong":
     case "stopping":
       return { kind: "wait" };
@@ -428,7 +430,7 @@ export function entryRule(entry: Pick<BlockedEntry, "cause" | "detail">): EntryR
 }
 
 /** Guards of a relaunch that pass on their own: MyHQ tries again at a later tick. */
-const PASSING_GUARDS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "DAILY_CAP_REACHED"]);
+const PASSING_GUARDS = new Set(["AGENT_BUSY", "RESOURCE_BUSY", "MACHINE_BUSY", "DAILY_CAP_REACHED"]);
 
 /**
  * Applies the rules of the Standard to the open entries: relaunches once, in

@@ -305,6 +305,56 @@ export function readRunSummariesSetting(home: string): { enabled: boolean; fromF
 }
 
 /**
+ * `machine` of myhq.json (machine.ts): what the gate keeps free on the machine for the owner, on top of
+ * what the runs need, and the home's veto command, asked before a run of an agent that declares `needs` or
+ * `resources` starts.
+ */
+export const machineSettingSchema = z.strictObject({
+  /** Free RAM, in GB, that no run may take. */
+  keepFreeRamGb: z.number().min(0).max(1024).optional(),
+  /** Free GPU memory, in GB, that no run may take. */
+  keepFreeVramGb: z.number().min(0).max(256).optional(),
+  veto: z
+    .strictObject({
+      /** The program and its arguments, relative to the home (its cwd). It reads the run about to start on stdin. */
+      command: z.array(z.string().min(1).max(4_000)).min(1).max(64),
+      timeoutSeconds: z.number().positive().max(60).optional(),
+    })
+    .optional(),
+});
+
+export type MachineSetting = { keepFreeRamGb: number; keepFreeVramGb: number; veto: { command: string[]; timeoutMs: number } | null };
+
+/** The margins when myhq.json says nothing, and the veto command's timeout when it gives none. */
+export const DEFAULT_MACHINE: MachineSetting = { keepFreeRamGb: 2, keepFreeVramGb: 1, veto: null };
+export const VETO_TIMEOUT_SECONDS = 10;
+
+/**
+ * The `machine` block of myhq.json over the defaults. Read apart, like the portier: an invalid block keeps
+ * the defaults (no veto command) and gives the reason. Never throws.
+ */
+export function readMachineSetting(home: string): { setting: MachineSetting; fromFile: boolean; error: string | null } {
+  const { block, error } = readBlock(home, "machine");
+  if (error) return { setting: DEFAULT_MACHINE, fromFile: false, error };
+  if (block === undefined) return { setting: DEFAULT_MACHINE, fromFile: false, error: null };
+  const parsed = machineSettingSchema.safeParse(block);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `machine.${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return { setting: DEFAULT_MACHINE, fromFile: false, error: `myhq.json: ${details}` };
+  }
+  const { keepFreeRamGb, keepFreeVramGb, veto } = parsed.data;
+  return {
+    setting: {
+      keepFreeRamGb: keepFreeRamGb ?? DEFAULT_MACHINE.keepFreeRamGb,
+      keepFreeVramGb: keepFreeVramGb ?? DEFAULT_MACHINE.keepFreeVramGb,
+      veto: veto ? { command: veto.command, timeoutMs: (veto.timeoutSeconds ?? VETO_TIMEOUT_SECONDS) * 1000 } : null,
+    },
+    fromFile: true,
+    error: null,
+  };
+}
+
+/**
  * `archivedRooms` of myhq.json: the rooms the owner archived, each with the day it was archived (YYYY-MM-DD).
  * An archived room keeps its folder; MyHQ leaves it out of the floor, the desk lists and the scheduler.
  */

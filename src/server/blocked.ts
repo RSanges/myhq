@@ -5,6 +5,7 @@ import { liveConfig, type HqConfig } from "./config";
 import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
+import { machineCheck, type MachineRead, type MachineShortfall } from "./machine";
 import { waitsForNextRun } from "./portier";
 import { RELAUNCH_REASON, relaunchSubject } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
@@ -127,19 +128,35 @@ function runText(db: Db, run: RunRow, taskIds: readonly number[]): string {
 
 type Why = { reason: string; cause: string };
 
-/** Why a pending task is stuck, or null when it is not (a wake-up will take it, or it waits by design). */
-function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null): Why | null {
+/**
+ * Why a pending task waits, whatever it waits for: `stuck` when no wake-up
+ * will take it on its own (the Standard lists it once it is old enough),
+ * otherwise it waits by design (`byDesign`), for the end of its agent's run
+ * (`afterRun`), or for what holds back any run (the cap, a resource, the
+ * machine...). The reasons of the Standard and of the queue (queue.ts) alike.
+ */
+export type TaskWait = Why & { stuck: boolean };
+
+/** The French sentence of a shortfall of the machine, with its figures. */
+export function shortfallReason(shortfall: MachineShortfall): string {
   const r = strings.deskModules.standard.reasons;
-  const why = (cause: keyof typeof r, reason: string): Why => ({ reason, cause });
+  if (shortfall.kind === "vramUnknown") return r.vramUnknown(shortfall.needGb);
+  return r.machine({ ...shortfall, leftGb: Math.round((shortfall.freeGb - shortfall.reservedGb) * 100) / 100 });
+}
+
+export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null, read?: MachineRead): TaskWait {
+  const r = strings.deskModules.standard.reasons;
+  const why = (cause: keyof typeof r, reason: string): TaskWait => ({ reason, cause, stuck: true });
+  const waits = (cause: keyof typeof r, reason: string): TaskWait => ({ reason, cause, stuck: false });
   if (!agent && task.room !== RECEPTION_ROOM) return why("unknownAgent", r.unknownAgent);
   // Its next run went to another subject: it wakes the agent itself (OVERDUE_TASK), whatever its source.
   const overdue = (db.prepare(`SELECT ${OVERDUE_TASK} AS overdue FROM tasks t WHERE t.id = ?`).get(task.id) as { overdue: number }).overdue === 1;
   const wakes = WAKE_SOURCES.has(task.source);
   if (!overdue) {
     // Waiting for the agent's next run is what `"queue"` asks for: not a block.
-    if (wakes && agent && !wakesAgent(agent, task.source)) return null;
+    if (wakes && agent && !wakesAgent(agent, task.source)) return waits("byDesign", r.byDesign);
     // So is a message its sender sent for the next run (`expects: "none"`), or that the portier let wait.
-    if (task.source === "message" && waitsForNextRun(db, task.id)) return null;
+    if (task.source === "message" && waitsForNextRun(db, task.id)) return waits("byDesign", r.byDesign);
   }
   // The wake-ups count the runs of the task's own subject only (wakeAgents).
   const later = db
@@ -159,7 +176,7 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
     .get(task.room, task.agent_id) as { id: number; started_at: string; subject_id: number | null } | undefined;
   if (running) {
     // The end of the run wakes the agent for it, or makes it overdue: a run of another subject since it was created.
-    if (woken || (running.subject_id !== task.subject_id && running.started_at >= task.created_at)) return null;
+    if (woken || (running.subject_id !== task.subject_id && running.started_at >= task.created_at)) return waits("afterRun", r.afterRun(running.id));
     return why("busy", r.busy(running.id));
   }
   if (woken) {
@@ -170,6 +187,10 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
     if (today >= cap) return why("cap", r.cap(today, cap));
     const holder = resourceHolder(db, agent?.resources ?? []);
     if (holder) return why("resource", r.resource(holder.resource, holder.runId, `${holder.room} / ${holder.agentId}`));
+    // The machine (machine.ts): read only for an agent with needs, the veto command's last answer only for one with needs or resources.
+    const machine = agent ? machineCheck({ config, db, room: task.room, agent, read }) : null;
+    if (machine?.kind === "machine") return why("machine", shortfallReason(machine.shortfall));
+    if (machine?.kind === "veto") return why("veto", machine.reason === null ? r.vetoAsking : r.veto(machine.reason));
     if (!overdue && task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
       const candidate: WakeCandidate = {
@@ -192,6 +213,12 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
     .prepare("SELECT id, status FROM runs WHERE room = ? AND agent_id = ? AND subject_id IS ? AND started_at >= ? ORDER BY id DESC LIMIT 1")
     .get(task.room, task.agent_id, task.subject_id, task.created_at) as { id: number; status: string } | undefined;
   return last?.status === "failed" ? why("givenBack", r.givenBack(last.id)) : why("noWake", r.noWake);
+}
+
+/** Why a pending task is stuck, or null when it is not (a wake-up will take it, or it waits by design). */
+function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agent: Agent | null): Why | null {
+  const wait = taskWait(db, config, home, task, agent);
+  return wait.stuck ? { reason: wait.reason, cause: wait.cause } : null;
 }
 
 /** Everything stuck at the agents, newest first. */
