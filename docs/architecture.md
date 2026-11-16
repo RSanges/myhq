@@ -2713,7 +2713,7 @@ tile shows the piece the agent works on, large.
   `.glb`) is drawn by the desk's viewer (`model-viewer.tsx`), without
   remarks: in the detail panel always, with its views and a download link,
   and in a tile only for the first 2 live tiles whose shown version is a part
-  (compact, no row of views; a drag turns it and does not open the panel),
+  (compact: no dimensions, no row of views; a drag turns it and does not open the panel),
   the other tiles and the finished ones showing a card with its name, size
   and time. Each viewer is a WebGL context and a download of the file, which
   it fetches again only when the address changes (`&v=`, a new version), not

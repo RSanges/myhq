@@ -102,7 +102,7 @@ export default function ModelViewer({
   picking: boolean;
   onPick: (point: ModelPoint) => void;
   onPin: (key: string) => void;
-  /** The part alone, without the row of views and the help line (a tile of the surveillance room). */
+  /** The part alone, without its dimensions, the row of views and the help line (a tile of the surveillance room). */
   compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -404,7 +404,7 @@ export default function ModelViewer({
             <p>{status === "loading" ? strings.attachments.loading3d : strings.attachments.error3d}</p>
           </div>
         )}
-        {status === "ready" && dimensions && size && (
+        {status === "ready" && !compact && dimensions && size && (
           <p
             className="pointer-events-none absolute left-2 top-2 max-w-[calc(100%-4rem)] rounded bg-card/90 px-2 py-1 text-xs tabular-nums shadow-sm"
             title={strings.attachments.dimensionsLabel}
