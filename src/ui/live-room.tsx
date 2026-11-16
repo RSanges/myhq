@@ -389,6 +389,19 @@ function Info({ tile, now, pin }: { tile: LiveTile; now: number; pin: PieceVersi
           </a>
         </p>
       )}
+      {(tile.alsoRunning?.length ?? 0) > 0 && (
+        <p className="watch-done-line">
+          {t.alsoRunning}{" "}
+          {tile.alsoRunning!.map((runId, index) => (
+            <span key={runId}>
+              {index > 0 && ", "}
+              <a className="watch-link" href={`${DESK_PATH}${runHash(runId)}`}>
+                {t.runLink(runId)}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
     </>
   );
 }

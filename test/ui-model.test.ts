@@ -322,3 +322,20 @@ test("a room proposal shows its title through the UI strings, whatever language 
   assert.equal(approvalTitle({ ...proposal, payload: {} }), "Room proposal: acme");
   assert.equal(approvalTitle({ type: "pull_request", title: "Fix it", payload: { room: { name: "acme" } } }), "Fix it");
 });
+
+test("a parallel agent's run that ends while another still runs leaves the agent at work on that one", () => {
+  let model = reducer(initialModel, { type: "state", state: baseState() });
+  model = reducer(model, { type: "run", run: run({ id: 7, status: "running" }) });
+  model = reducer(model, { type: "run", run: run({ id: 8, status: "running" }) });
+  model = reducer(model, { type: "run", run: run({ id: 7, status: "running" }) });
+  assert.equal(selectAgents(model)[0]!.lastRun?.id, 8, "the latest started is shown");
+  model = reducer(model, { type: "run", run: run({ id: 8, status: "done" }) });
+  // The server announces the run still going after the end of the other one.
+  model = reducer(model, { type: "run", run: run({ id: 7, status: "running" }) });
+  assert.equal(selectAgents(model)[0]!.state, "working");
+  assert.equal(selectAgents(model)[0]!.lastRun?.id, 7);
+  model = reducer(model, { type: "run", run: run({ id: 6, status: "done" }) });
+  assert.equal(selectAgents(model)[0]!.lastRun?.id, 7, "an older run that ended changes nothing");
+  model = reducer(model, { type: "run", run: run({ id: 7, status: "done" }) });
+  assert.equal(selectAgents(model)[0]!.state, "idle");
+});

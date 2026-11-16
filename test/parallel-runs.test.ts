@@ -5,6 +5,8 @@ import { listBlocked, taskWait } from "../src/server/blocked";
 import { getDbAt, type Db, type RunRow, type TaskRow } from "../src/server/db";
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
+import { changesSince, currentCursor, getState } from "../src/server/feed";
+import { readLiveRoom } from "../src/server/live-room";
 import type { MachineReading } from "../src/server/machine";
 import { listQueue } from "../src/server/queue";
 import { loadHome, syncHome } from "../src/server/rooms";
@@ -335,4 +337,56 @@ test("a crash with several runs of one agent in progress: all of them are closed
   assert.equal(recovered.runs, 2);
   assert.equal(recovered.requeued, 2);
   assert.deepEqual([taskRow(db, t1).status, taskRow(db, t2).status], ["pending", "pending"]);
+});
+
+test("the floor and the feed show a parallel agent's latest run in progress, and the others are not lost", async () => {
+  const { config, db } = office({ parallel: true });
+  const held = heldEngine();
+  const deps = { config, engine: held.engine, send: quiet };
+  const one = createSubject(db, "demo", "scout", "One");
+  const two = createSubject(db, "demo", "scout", "Two");
+  const older = startRun({ room: "demo", agent: "scout", task: "One." }, { ...deps, subject: one.id });
+  const newer = startRun({ room: "demo", agent: "scout", task: "Two." }, { ...deps, subject: two.id });
+  const scheduler = { enabled: false, running: false, timeZone: "UTC" };
+  const agentOf = () => getState(db, loadHome(config.home), scheduler).rooms[0]!.agents[0]!;
+  assert.equal(agentOf().lastRun?.id, newer.id);
+  assert.equal(agentOf().parallel, true);
+  const tiles = readLiveRoom(db, loadHome(config.home), config.runsDir);
+  assert.deepEqual(
+    tiles.map((tile) => [tile.runId, tile.alsoRunning]),
+    [[newer.id, [older.id]]],
+    "one tile per agent: its latest run, naming the other",
+  );
+
+  // The latest ends first: the state shows the older one at work, and the feed announces it again after the end.
+  const cursor = currentCursor(db);
+  held.release(newer.id);
+  await waitForRun(db, newer.id);
+  assert.equal(agentOf().lastRun?.id, older.id);
+  assert.equal(agentOf().state, "working");
+  const runs = changesSince(db, cursor).items.filter((item) => item.kind === "run").map((item) => [item.data.id, item.data.status]);
+  assert.deepEqual(runs.slice(-2), [
+    [newer.id, "done"],
+    [older.id, "running"],
+  ]);
+  assert.deepEqual(
+    readLiveRoom(db, loadHome(config.home), config.runsDir).map((tile) => [tile.runId, tile.alsoRunning ?? []]),
+    [[older.id, []]],
+    "the run in progress takes the tile over",
+  );
+  held.releaseAll();
+  await waitForRun(db, older.id);
+  assert.equal(agentOf().state, "idle");
+});
+
+test("an agent without parallel is announced as before: its end adds nothing to the feed", async () => {
+  const { config, db } = office();
+  const held = heldEngine();
+  const only = startRun({ room: "demo", agent: "scout", task: "Alone." }, { config, engine: held.engine, send: quiet });
+  const cursor = currentCursor(db);
+  held.release(only.id);
+  await waitForRun(db, only.id);
+  const runs = changesSince(db, cursor).items.filter((item) => item.kind === "run").map((item) => item.data.id);
+  assert.deepEqual(runs, [only.id]);
+  assert.equal(getState(db, loadHome(config.home), { enabled: false, running: false, timeZone: "UTC" }).rooms[0]!.agents[0]!.parallel, false);
 });

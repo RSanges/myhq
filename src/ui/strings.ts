@@ -789,6 +789,9 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     pausedFor: (minutes: number) => (minutes < 1 ? "En pause depuis un instant." : `En pause depuis ${minutes} min.`),
     pinnedBy: (name: string, time: string) => `Montré par ${name} à ${time}`,
     summaryLink: "voir le compte rendu",
+    /** A parallel agent's other runs in progress, under the tile of its latest one. */
+    alsoRunning: "Aussi en cours :",
+    runLink: (runId: number) => `tour #${runId}`,
     strip: {
       versions: "Versions du tour",
       single: "Seule pièce du tour",

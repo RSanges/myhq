@@ -1370,6 +1370,12 @@ async function execute(p: ExecuteParams): Promise<void> {
         "UPDATE tasks SET status = 'pending', run_id = NULL, updated_at = ? WHERE run_id = ? AND source <> 'manual' AND status = 'in_progress'",
       ).run(at, run.id);
     }
+    // A parallel agent still runs another subject: its latest run in progress is announced again after this end,
+    // so the pages show the agent at work on it (the floor and the desk follow one run per agent). None otherwise.
+    db.prepare(
+      `INSERT INTO changes (entity, entity_id) SELECT 'run', id FROM runs
+       WHERE room = ? AND agent_id = ? AND status = 'running' AND id <> ? ORDER BY id DESC LIMIT 1`,
+    ).run(run.room, run.agent_id, run.id);
   })();
 
   // The end of a run may be what closes a subject whose work is validated.

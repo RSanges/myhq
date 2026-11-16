@@ -373,9 +373,10 @@ function applyEvent(model: RoomModel, event: HqEvent, at: number): RoomModel {
 function applyRun(model: RoomModel, run: RunSeed, at: number): RoomModel {
   if (!owns(model, run.room)) return model;
   return replaceAgent(model, agentKey(run.room, run.agentId), (agent) => {
-    if (run.id < agent.runId) return agent;
+    // An earlier run counts only when it still runs while the agent shows none: a parallel agent's other subject.
+    if (run.id < agent.runId && !(run.status === "running" && !agent.running)) return agent;
     if (run.status === "running") {
-      if (run.id > agent.runId) {
+      if (run.id !== agent.runId) {
         // A new run starts afresh: no question mark, no leftover bubble. The same run seen again changes nothing.
         return {
           ...agent,

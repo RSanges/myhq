@@ -143,7 +143,8 @@ export function reducer(model: Model, action: Action): Model {
     case "run": {
       const key = agentKey(action.run.room, action.run.agentId);
       const current = model.latestRuns[key];
-      if (current && current.id > action.run.id) return model;
+      // A later run wins, but a run in progress wins over one that ended: a parallel agent still works on it.
+      if (current && current.id > action.run.id && !(action.run.status === "running" && current.status !== "running")) return model;
       const next = { ...model, latestRuns: { ...model.latestRuns, [key]: action.run } };
       if (action.run.room !== RECEPTION_ROOM || action.run.agentId !== RECEPTION_AGENT) return next;
       const runs = upsertById(model.reception.runs.slice().reverse(), action.run, MAX_RECEPTION_RUNS).reverse();

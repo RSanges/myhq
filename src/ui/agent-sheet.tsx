@@ -423,7 +423,7 @@ function AgentSettings({
         <button
           type="button"
           className={buttonClass()}
-          disabled={busy || agent.state === "working"}
+          disabled={busy || (agent.state === "working" && !agent.parallel)}
           onClick={() => void launch()}
         >
           {busy ? strings.team.starting : t.settings.routineButton}
@@ -798,7 +798,8 @@ export function AgentSheet({
   const [deciding, setDeciding] = useState<number | null>(null);
   const decision: Decide = {
     deciding,
-    working,
+    // A parallel agent's run proposed here waits only for a run of this very subject (its tab says whether one goes).
+    working: agent.parallel ? (tabs.find((tab) => tab.current)?.working ?? false) : working,
     onDecide: async (questionId, action) => {
       setDeciding(questionId);
       const run = await decide(questionId, action);

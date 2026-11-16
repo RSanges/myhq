@@ -269,6 +269,9 @@ export type StateDto = {
       resources: string[];
       /** Its resources held by another agent's run while it has work waiting (« en attente du GPU »), empty otherwise. */
       waitingFor: string[];
+      /** Several runs at once, one per subject (room.json `parallel`). */
+      parallel: boolean;
+      /** Its run in progress, the latest started of them for a parallel agent, else its latest run. */
       lastRun: RunDto | null;
       /**
        * While a run is in progress: what the agent last said it is doing (hq_status) and its last other tool
@@ -376,7 +379,8 @@ function waitingFor(db: Db, room: string, agentId: string, resources: readonly s
 /** Snapshot for the interface: load it once, then follow /api/events from `cursor`. */
 export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date = new Date()): StateDto {
   const cursor = currentCursor(db);
-  const lastRun = db.prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? ORDER BY id DESC LIMIT 1");
+  // A run in progress first: a parallel agent's latest one may have ended while an older one still runs.
+  const lastRun = db.prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? ORDER BY status = 'running' DESC, id DESC LIMIT 1");
   return {
     cursor,
     rooms: home.rooms.map((room) => ({
@@ -406,6 +410,7 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
           state,
           resources: agent.resources,
           waitingFor: state === "working" ? [] : waitingFor(db, room.name, agent.id, agent.resources),
+          parallel: agent.parallel ?? false,
           lastRun: row ? toRun(row) : null,
           activity: row?.status === "running" ? runActivity(db, row.id) : null,
         };

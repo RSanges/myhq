@@ -191,6 +191,8 @@ export type LiveTileDto = {
   waitingSince: string | null;
   /** The piece, its versions oldest first; null: a text-only tile (no pattern, no pin, nothing found). */
   piece: { source: "pin" | "auto"; versions: PieceVersionDto[] } | null;
+  /** The agent's other runs in progress (a parallel agent), the latest started first; absent: none. */
+  alsoRunning?: number[];
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -348,13 +350,18 @@ export function readLiveRoom(db: Db, home: Home, runsDir: string, now: number = 
   const ended = db
     .prepare("SELECT * FROM runs WHERE status <> 'running' AND ended_at >= ? ORDER BY ended_at DESC, id DESC")
     .all(iso(now - LIVE_DONE_MS)) as RunRow[];
+  const keyOf = (run: RunRow) => `${run.room}\u0000${run.agent_id}`;
+  // A parallel agent's tile shows its latest started run in progress; the others are named on it (alsoRunning).
+  const shown = new Map<string, RunRow>();
+  for (const run of running) shown.set(keyOf(run), run);
   const seen = new Set<string>();
   const tiles: LiveTileDto[] = [];
   for (const run of [...running, ...ended]) {
-    const key = `${run.room}\u0000${run.agent_id}`;
-    if (seen.has(key)) continue;
+    const key = keyOf(run);
+    if (seen.has(key) || (run.status === "running" && shown.get(key) !== run)) continue;
     seen.add(key);
-    tiles.push(tileOf(db, home, runsDir, run, now));
+    const others = running.filter((each) => keyOf(each) === key && each !== run).map((each) => each.id).reverse();
+    tiles.push({ ...tileOf(db, home, runsDir, run, now), ...(others.length > 0 ? { alsoRunning: others } : {}) });
   }
   return tiles;
 }

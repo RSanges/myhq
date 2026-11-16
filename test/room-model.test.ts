@@ -510,3 +510,18 @@ test("the walk frame follows the stride of the sheet: 3 voxels by default, 2 for
   assert.equal(walkFrame(16, 2), 0, "8 frames of 2 voxels: one floor cell is a full cycle");
   assert.equal(walkFrame(24), 0, "8 frames of 3 voxels: 24 voxels are a full cycle");
 });
+
+test("a parallel agent stays at work on its other run when its latest one ends", () => {
+  const scout = (model: RoomModel) => model.agents.find((each) => each.key === SCOUT)!;
+  let model = applyInput(hydrated(), { type: "run", run: run(1, "running") }, T0);
+  model = applyInput(model, { type: "run", run: run(2, "running") }, T0 + 1000);
+  assert.deepEqual([scout(model).running, scout(model).runId], [true, 2]);
+  model = applyInput(model, { type: "run", run: run(1, "running") }, T0 + 1500);
+  assert.equal(scout(model).runId, 2, "an earlier run seen again while the latest runs changes nothing");
+  model = applyInput(model, { type: "run", run: run(2, "done") }, T0 + 2000);
+  assert.equal(scout(model).running, false);
+  model = applyInput(model, { type: "run", run: run(1, "running") }, T0 + 2001);
+  assert.deepEqual([scout(model).running, scout(model).runId], [true, 1], "the run still going takes over");
+  model = applyInput(model, { type: "run", run: run(1, "done") }, T0 + 3000);
+  assert.equal(scout(model).running, false);
+});

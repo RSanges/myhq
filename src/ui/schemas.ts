@@ -129,6 +129,8 @@ export const agentSchema = z.object({
   resources: z.array(z.string()).optional(),
   /** Its resources another run held while its work waited, when the state was read. */
   waitingFor: z.array(z.string()).optional(),
+  /** Several runs at once, one per subject (room.json `parallel`); absent from an older server: false. */
+  parallel: z.boolean().optional(),
   lastRun: runSchema.nullable(),
   /** While a run is in progress: its latest status (hq_status) and its latest other tool call; absent from an older server. */
   activity: z
@@ -630,6 +632,8 @@ export const liveTileSchema = z.object({
   previous: z.array(liveStatusSchema),
   waitingSince: z.string().nullable(),
   piece: z.object({ source: z.enum(["pin", "auto"]), versions: z.array(pieceVersionSchema) }).nullable(),
+  /** The agent's other runs in progress (a parallel agent), latest started first; absent from an older server: none. */
+  alsoRunning: z.array(z.number().int()).optional(),
 });
 
 export const liveRoomSchema = z.object({ now: z.string(), tiles: z.array(liveTileSchema) });
