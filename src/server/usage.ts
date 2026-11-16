@@ -36,6 +36,9 @@ export type QuestionTotals = {
   costUsd: number;
 };
 
+/** Totals of the agents' questions to the assistant over a period (door.ts): the calls of the door. */
+export type DoorTotals = { requests: number; costUsd: number };
+
 export type UsageDto = {
   today: Totals & { date: string };
   week: Totals & { start: string };
@@ -43,7 +46,7 @@ export type UsageDto = {
   cap: { maxRunsPerDay: number; runsToday: number; remaining: number };
   /**
    * Share of the user's weekly budget spent this week (HQ_WEEKLY_BUDGET_USD), or null when not set: the
-   * runs and the questions to the agents.
+   * runs, the questions to the agents and the door's calls.
    */
   budget: { weeklyUsd: number; spentUsd: number; share: number } | null;
   /** The runs of each agent that ran in the period, most expensive first. */
@@ -52,6 +55,8 @@ export type UsageDto = {
   chat: { today: ChatTotals; week: ChatTotals };
   /** The owner's questions to the agents (agent-questions.ts): not in `today` nor `week`, but in `budget`. */
   questions: { today: QuestionTotals; week: QuestionTotals };
+  /** The door's calls (door.ts): not in `today` nor `week`, but in `budget`, and added to the day and the week by the whiteboard. */
+  door: { today: DoorTotals; week: DoorTotals };
 };
 
 const TOTALS = `COUNT(r.id) AS runs,
@@ -103,6 +108,15 @@ function questionTotals(db: Db, from: string): QuestionTotals {
     .get() as QuestionTotals;
 }
 
+function doorTotals(db: Db, from: string): DoorTotals {
+  return db
+    .prepare(
+      `SELECT COUNT(d.id) AS requests, COALESCE(SUM(d.cost_usd), 0) AS costUsd
+       FROM door_requests d WHERE date(d.created_at, 'localtime') >= ${from}`,
+    )
+    .get() as DoorTotals;
+}
+
 /**
  * Tokens and cost of the runs, by local calendar day (the server's time zone),
  * per agent, of the assistant's chat turns and of the questions to the
@@ -129,7 +143,8 @@ export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number 
   const today = days[days.length - 1]!;
   const count = runsToday(db);
   const questions = { today: questionTotals(db, TODAY), week: questionTotals(db, WEEK_START) };
-  const spentUsd = week.costUsd + questions.week.costUsd;
+  const door = { today: doorTotals(db, TODAY), week: doorTotals(db, WEEK_START) };
+  const spentUsd = week.costUsd + questions.week.costUsd + door.week.costUsd;
   return {
     today,
     week,
@@ -142,6 +157,7 @@ export function getUsage(db: Db, maxRunsPerDay: number, weeklyBudgetUsd: number 
     agents: { today: agentTotals(db, TODAY), week: agentTotals(db, WEEK_START) },
     chat: { today: chatTotals(db, TODAY), week: chatTotals(db, WEEK_START) },
     questions,
+    door,
   };
 }
 

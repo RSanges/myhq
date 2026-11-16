@@ -16,6 +16,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { openDb } from "../server/db";
 import {
   hqAsk,
+  hqAskAssistant,
   hqBlocked,
   hqBlockedClose,
   hqBlockedNote,
@@ -93,6 +94,21 @@ async function main(): Promise<void> {
         inputSchema: inputs.hq_ask,
       },
       async (args) => respond(() => hqAsk(db, ctx, args)),
+    );
+    server.registerTool(
+      "hq_ask_assistant",
+      {
+        description:
+          "Ask the office's assistant for one fact you need for your work and cannot find in your folders: about the owner, the owner's habits or the owner's other projects. The assistant reads the owner's notes, you do not. One short question, a short answer of one to three sentences (it answers a question, it never hands over a file or a list); a question with no link to your role, or about secrets, contacts or personal matters, is refused or put to the owner. It waits for the answer, two minutes at most; without one, go on without the fact.",
+        inputSchema: inputs.hq_ask_assistant,
+      },
+      async (args) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(await hqAskAssistant(db, ctx, args)) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: toolErrorText(error) }], isError: true };
+        }
+      },
     );
     server.registerTool(
       "hq_status",

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { doorSchema } from "../server/door";
 import { MODELS, mcpServersSchema, type McpServerConfig } from "../server/rooms";
 import { CHAT_ACTIONS, type ChatActionName } from "./actions";
 import { DEFAULT_FRESH_AFTER_MINUTES } from "./chat-resume";
@@ -80,6 +81,8 @@ export const assistantFileSchema = z.strictObject({
     .optional(),
   dropDir: relativePath.optional(),
   extensions: z.array(relativePath).default([]),
+  /** The door agents ask the assistant through (hq_ask_assistant), read by src/server/door.ts; left out, it is closed. */
+  door: doorSchema.optional(),
 });
 
 export type ChatConfig = {

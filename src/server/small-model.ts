@@ -20,6 +20,15 @@ export type SmallModelCallInput = {
   timeoutMs: number;
   /** `--max-budget-usd`: the cap of the call. */
   maxBudgetUsd: number;
+  // The door's call only (door.ts); left out, none of them changes the arguments.
+  /** Built-in tools that exist for the call (`--tools`, also allowed); default: none. */
+  tools?: string[];
+  /** Folders the call may read (`--add-dir`). */
+  addDirs?: string[];
+  /** `--effort`; default: low. */
+  effort?: string;
+  /** The working directory, the caller's to create and remove; default: a fresh private folder of the system's temporary directory, removed after the call. */
+  cwd?: string;
 };
 
 /** What a call gives back: the model's text, and what it cost. */
@@ -54,8 +63,14 @@ const resultSchema = z.looseObject({
     .optional(),
 });
 
-/** The arguments of the call: no tool, no MCP server, no user settings, low effort, the budget cap. */
-export function smallModelArgs(input: Pick<SmallModelCallInput, "model" | "system" | "prompt" | "maxBudgetUsd">): string[] {
+/**
+ * The arguments of the call: no tool (or only `tools`, for the door), no MCP
+ * server, no user settings, low effort, the budget cap.
+ */
+export function smallModelArgs(
+  input: Pick<SmallModelCallInput, "model" | "system" | "prompt" | "maxBudgetUsd" | "tools" | "addDirs" | "effort">,
+): string[] {
+  const tools = input.tools ?? [];
   return [
     "-p",
     input.prompt,
@@ -66,30 +81,43 @@ export function smallModelArgs(input: Pick<SmallModelCallInput, "model" | "syste
     "--system-prompt",
     input.system,
     "--tools",
-    "",
+    ...(tools.length > 0 ? tools : [""]),
+    ...(tools.length > 0 ? ["--allowedTools", ...tools] : []),
+    ...(input.addDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
     "--strict-mcp-config",
+    // `local` alone: the cwd's .claude/settings.local.json (the door's read guard). With `project`, a CLAUDE.md
+    // in any parent of the cwd (the system's temporary directory) reaches the call (measured on CLI 2.1.325).
     "--setting-sources",
-    "project,local",
+    "local",
     "--effort",
-    "low",
+    input.effort ?? "low",
     "--max-budget-usd",
     String(input.maxBudgetUsd),
   ];
 }
 
 /**
- * The real call: `claude -p` in a scratch folder of the system's temporary
- * directory (no CLAUDE.md of the home is read), its JSON result parsed.
+ * The real call: `claude -p` in a fresh private folder of the system's
+ * temporary directory (no CLAUDE.md of the home is read, and nothing another
+ * process left in a shared folder), its JSON result parsed.
  */
 export const claudeSmallModelCall: SmallModelCall = (input) =>
   new Promise((resolve, reject) => {
-    const cwd = path.join(os.tmpdir(), "myhq-portier");
+    let cwd: string;
     try {
-      fs.mkdirSync(cwd, { recursive: true });
+      cwd = input.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "myhq-small-"));
     } catch (error) {
       reject(error as Error);
       return;
     }
+    const scratch = input.cwd === undefined ? cwd : null;
+    const done = () => {
+      try {
+        if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+      } catch {
+        // Still held (Windows): left to the system's cleaning of its temporary directory.
+      }
+    };
     const started = Date.now();
     const child = spawn(input.claudeBin, smallModelArgs(input), {
       cwd,
@@ -109,10 +137,12 @@ export const claudeSmallModelCall: SmallModelCall = (input) =>
     }, input.timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timer);
+      done();
       reject(new Error(`could not start "${input.claudeBin}": ${error.message}`));
     });
     child.once("close", (code) => {
       clearTimeout(timer);
+      done();
       let raw: unknown;
       try {
         raw = JSON.parse(stdout.trim());

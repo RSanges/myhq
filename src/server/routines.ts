@@ -4,10 +4,11 @@ import { homeOwnedElsewhere } from "./app";
 import { liveConfig, type HqConfig } from "./config";
 import { describeCron, nextFire, parseCron, type CronSummary } from "./cron";
 import { getDbAt, now, type Db, type FiringOutcome, type FiringRow, type RunRow } from "./db";
+import { serveDoor } from "./door";
 import { HqError } from "./errors";
 import { acquireLock, type Lock } from "./lock";
 import { loadHome, syncHome, type Agent, type Home, type Room, type Routine } from "./rooms";
-import { findAgent, resumeWaitingTasks, startRun, type RunnerDeps, type StartRunRequest } from "./runner";
+import { agentEnv, findAgent, resumeWaitingTasks, startRun, type RunnerDeps, type StartRunRequest } from "./runner";
 import { watchStandard } from "./supervisor";
 
 // --- Armed state ---------------------------------------------------------------
@@ -316,6 +317,14 @@ function resumeWaiting(host: SchedulerHost): void {
     watchStandard(config, getDbAt(config.dbPath));
   } catch (error) {
     console.error("[scheduler] waking the supervisor of the Standard failed", error);
+  }
+  try {
+    const config = currentConfig(host);
+    if (homeOwnedElsewhere(config.dbPath)) return;
+    // The door's safety net: a request the run's tool_use event did not get to is answered here (door.ts).
+    void serveDoor({ config, db: getDbAt(config.dbPath), env: agentEnv(process.env, {}) });
+  } catch (error) {
+    console.error("[scheduler] serving the door to the assistant failed", error);
   }
 }
 

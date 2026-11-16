@@ -35,7 +35,7 @@ export function buildBoard(params: {
   rows.push({
     key: "cost",
     label: t.cost,
-    value: usage ? formatCost(usage.today.costUsd + (usage.questions?.today.costUsd ?? 0)) : t.unknown,
+    value: usage ? formatCost(usage.today.costUsd + (usage.questions?.today.costUsd ?? 0) + (usage.door?.today.costUsd ?? 0)) : t.unknown,
   });
   rows.push(
     usage?.budget
@@ -43,7 +43,7 @@ export function buildBoard(params: {
       : {
           key: "week",
           label: t.week,
-          value: usage ? formatCost(usage.week.costUsd + (usage.questions?.week.costUsd ?? 0)) : t.unknown,
+          value: usage ? formatCost(usage.week.costUsd + (usage.questions?.week.costUsd ?? 0) + (usage.door?.week.costUsd ?? 0)) : t.unknown,
         },
   );
 

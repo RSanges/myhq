@@ -11,8 +11,9 @@
  * that cannot be bundled anyway.
  *
  * The write guard's hook script (src/server/write-guard-hook.mjs) is frozen,
- * with the library of its decisions beside it (write-guard-lib.mjs),
- * there too, for the same reason: the runs in service use that copy.
+ * with the library of its decisions beside it (write-guard-lib.mjs), and so
+ * is the read guard's (read-guard-hook.mjs, read-guard-lib.mjs), there too,
+ * for the same reason: the runs and the door's calls in service use that copy.
  *
  * The new copy is built beside the old one and swapped in, so a run starting
  * during the build finds either the old or the new copy, never half of one.
@@ -21,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 import { mcpBundleDir } from "../src/mcp/bundle";
-import { WRITE_GUARD_HOOK, WRITE_GUARD_LIB } from "../src/server/write-guard";
+import { READ_GUARD_HOOK, READ_GUARD_LIB, WRITE_GUARD_HOOK, WRITE_GUARD_LIB } from "../src/server/write-guard";
 
 /** Builds the frozen server of the repository at `repoRoot` into `<repoRoot>/build/mcp`. Returns its folder. */
 export async function buildMcpBundle(repoRoot: string): Promise<string> {
@@ -43,7 +44,7 @@ export async function buildMcpBundle(repoRoot: string): Promise<string> {
     fs.cpSync(path.join(repoRoot, "templates", "roles"), path.join(stagingDir, "templates", "roles"), {
       recursive: true,
     });
-    for (const file of [WRITE_GUARD_HOOK, WRITE_GUARD_LIB]) {
+    for (const file of [WRITE_GUARD_HOOK, WRITE_GUARD_LIB, READ_GUARD_HOOK, READ_GUARD_LIB]) {
       fs.copyFileSync(path.join(repoRoot, "src", "server", file), path.join(stagingDir, file));
     }
     fs.rmSync(outDir, { recursive: true, force: true });

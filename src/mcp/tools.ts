@@ -17,6 +17,7 @@ import {
   storeAttachments,
   type ResolvedAttachment,
 } from "../server/attachments";
+import { DOOR_DAY_MAX, DOOR_QUESTION_MAX, DOOR_RUN_MAX, DOOR_TYPE, DOOR_WAIT_MS, type DoorRow } from "../server/door";
 import { pieceKind } from "../server/live-room";
 import { APPROVAL_STATUSES, liveItem, now, type ApprovalRow, type Db } from "../server/db";
 import { readNotifyTypes } from "../server/home-settings";
@@ -351,6 +352,16 @@ export const inputs = {
       "For the owner, one sentence of the home's language (10 to 500 characters): what you did that settled the entry, or why it has no more reason to be. Kept and shown to the owner with the closure.",
     ),
   },
+  hq_ask_assistant: {
+    question: z
+      .string()
+      .trim()
+      .min(1)
+      .max(DOOR_QUESTION_MAX)
+      .describe(
+        `One question for a fact you need for your work, in a sentence or two (${DOOR_QUESTION_MAX} characters at most): the fact, not a file. For example "Which carrier does the owner use for parcels abroad?".`,
+      ),
+  },
   hq_run_status: { runId: runIdShape },
   hq_run_extend: {
     runId: runIdShape,
@@ -609,6 +620,10 @@ export type SubmitResult = {
 
 export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): SubmitResult {
   const parsed = z.object(inputs.hq_submit).parse(args);
+  // The door's own item (door.ts): only the app puts one on the desk, for a request it holds.
+  if (parsed.type === DOOR_TYPE) {
+    throw new ToolError(`Type "${DOOR_TYPE}" is reserved to MyHQ: to ask the assistant for a fact, use hq_ask_assistant.`);
+  }
   let { body, payload } = parsed;
   // The supervisor of the Standard submits nothing to approve: only a note to the owner, informational.
   const supervisor = isSupervisor(db, ctx.room, ctx.agentId);
@@ -1249,4 +1264,97 @@ export function hqMemoryWrite(db: Db, ctx: HqContext, args: Args<"hq_memory_writ
      ON CONFLICT (room, agent_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(ctx.room, ctx.agentId, parsed.key, parsed.value, now());
   return { key: parsed.key, saved: true };
+}
+
+/** How often hq_ask_assistant reads its request again while the app answers it. */
+export const ASK_ASSISTANT_POLL_MS = 500;
+
+export type AskAssistantResult =
+  | { answered: true; requestId: number; answer: string }
+  | { answered: false; requestId: number; outcome: "refused" | "asked_owner" | "closed" | "no_answer"; note: string };
+
+/**
+ * hq_ask_assistant: the agent asks the assistant for a fact (door.ts). This
+ * server only has SQLite: the question becomes a pending row of
+ * `door_requests`, and the tool reads it again every ASK_ASSISTANT_POLL_MS
+ * until the app fills it, DOOR_WAIT_MS at most. Past that, a request still
+ * pending expires (the app then never answers it) and the agent goes on
+ * without the fact. The answer is the app's, already cut to one paragraph.
+ */
+export async function hqAskAssistant(
+  db: Db,
+  ctx: HqContext,
+  args: Args<"hq_ask_assistant">,
+  opts: { waitMs?: number; pollMs?: number } = {},
+): Promise<AskAssistantResult> {
+  const parsed = z.object(inputs.hq_ask_assistant).parse(args);
+  // The caps count every request, whatever became of it, and refuse before anything is written (one transaction).
+  const requestId = db
+    .transaction((): number => {
+      const runId = ctx.runId || null;
+      if (runId !== null) {
+        const inRun = (db.prepare("SELECT COUNT(*) AS n FROM door_requests WHERE run_id = ?").get(runId) as { n: number }).n;
+        if (inRun >= DOOR_RUN_MAX) {
+          throw new ToolError(
+            `You already asked the assistant ${inRun} times in this run, the most a run may (${DOOR_RUN_MAX}): go on without this fact, and say in your report that it is missing.`,
+          );
+        }
+      }
+      const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const inDay = (
+        db.prepare("SELECT COUNT(*) AS n FROM door_requests WHERE room = ? AND agent_id = ? AND created_at >= ?").get(ctx.room, ctx.agentId, since) as {
+          n: number;
+        }
+      ).n;
+      if (inDay >= DOOR_DAY_MAX) {
+        throw new ToolError(
+          `You already asked the assistant ${inDay} times in the last 24 hours, the most an agent may (${DOOR_DAY_MAX}): go on without this fact, and say in your report that it is missing.`,
+        );
+      }
+      return Number(
+        db
+          .prepare("INSERT INTO door_requests (room, agent_id, run_id, question, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)")
+          .run(ctx.room, ctx.agentId, runId, parsed.question, now()).lastInsertRowid,
+      );
+    })
+    .immediate();
+  const deadline = Date.now() + (opts.waitMs ?? DOOR_WAIT_MS);
+  const read = db.prepare("SELECT * FROM door_requests WHERE id = ?");
+  const noAnswer = {
+    answered: false as const,
+    requestId,
+    outcome: "no_answer" as const,
+    note: "No answer came from the assistant: go on without this fact, and say in your report that it is missing.",
+  };
+  for (;;) {
+    const row = read.get(requestId) as DoorRow;
+    if (row.status === "done" && (row.verdict === "answered" || row.verdict === "granted") && row.answer) {
+      return { answered: true, requestId, answer: row.answer };
+    }
+    if (row.status === "done" && row.verdict === "refused") {
+      return {
+        answered: false,
+        requestId,
+        outcome: "refused",
+        note: `The assistant refused: ${row.reason ?? "no reason given"}. Do not ask it again in other words; go on without this fact.`,
+      };
+    }
+    if (row.status === "done" && row.verdict === "closed") {
+      return { answered: false, requestId, outcome: "closed", note: "The door to the assistant is closed in this office: go on without this fact." };
+    }
+    if (row.status === "owner") {
+      return {
+        answered: false,
+        requestId,
+        outcome: "asked_owner",
+        note: "This fact needs the owner's approval: the owner was asked. If the owner grants it, the answer comes as a message in your mailbox; do not wait for it in this run.",
+      };
+    }
+    if (row.status !== "pending" && row.status !== "answering") return noAnswer;
+    if (Date.now() >= deadline) {
+      db.prepare("UPDATE door_requests SET status = 'expired', ended_at = ? WHERE id = ? AND status = 'pending'").run(now(), requestId);
+      return noAnswer;
+    }
+    await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? ASK_ASSISTANT_POLL_MS));
+  }
 }

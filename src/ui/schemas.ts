@@ -230,6 +230,11 @@ export const usageSchema = z.object({
   agents: z.object({ today: z.array(agentTotalsSchema), week: z.array(agentTotalsSchema) }).nullable().default(null),
   chat: z.object({ today: chatTotalsSchema, week: chatTotalsSchema }).nullable().default(null),
   questions: z.object({ today: questionTotalsSchema, week: questionTotalsSchema }).nullable().default(null),
+  /** The door's calls (door.ts); absent from an older server. */
+  door: z
+    .object({ today: z.object({ requests: z.number(), costUsd: z.number() }), week: z.object({ requests: z.number(), costUsd: z.number() }) })
+    .nullable()
+    .optional(),
 });
 
 export const routinesResponseSchema = z.object({

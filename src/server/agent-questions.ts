@@ -9,12 +9,14 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } fro
 import { strings } from "../ui/strings";
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
+import { NOTEBOOK_TOOLS, notebookText } from "./notebook";
 import { languageName } from "./onboarding";
 import { QUESTION_TYPE } from "./questions";
 import type { Agent, Room } from "./rooms";
 import { decideApproval, decisionSchema } from "./approvals";
 import { parseRunProposal, REVISION_PROPOSAL_TAG, RUN_PROPOSAL_TAG } from "./run-proposal";
 import { agentEnv, findAgent, isStopping, startRun, todayLine, WAITS, type RunnerDeps } from "./runner";
+import { agentReadGuard } from "./read-guard";
 import {
   otherSubjects,
   readSubject,
@@ -24,6 +26,7 @@ import {
   subjectTitleFrom,
   type SubjectContext,
 } from "./subjects";
+import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 // Questions of the owner to an agent (docs/architecture.md, "Questions to an
 // agent"). The agent answers with its own role, memory, model and effort, in
@@ -352,14 +355,19 @@ export function recoverInterruptedQuestions(db: Db): number {
     .run("Interrupted: MyHQ stopped during the question.", now()).changes;
 }
 
-/** The question-mode rules, after the agent's role in its system prompt. */
-export function questionSystemText(language: string, web = false): string {
+/**
+ * The question-mode rules, after the agent's role in its system prompt. With
+ * `notebook`, the agent may write there, and only there (the write guard).
+ */
+export function questionSystemText(language: string, web = false, notebook = false): string {
   return [
     "## Question mode",
     "",
     "The owner of MyHQ is asking you a question. This is not a task and not a run: answer it, and nothing else.",
     `Answer in ${language}, short and concrete, as a colleague would: a few sentences, no long structured report unless the owner asks for one. Answer from what you know (your role, your memory, the discussion below) and from what you can read in your working directory and its folders (Read, Glob, Grep; hq_memory_read and hq_items for your memory and the items).`,
-    "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
+    notebook
+      ? "You do nothing, deliver nothing, change nothing: you write no file except the notes of your notebook (see the message), submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here."
+      : "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
     ...(web
       ? [
           "You have WebSearch and WebFetch here, to read only. Anything that may have changed (a release, a model, a version, a price, a rule, an announcement, the state of the art): search the web before you answer, never answer it from memory, and give each fact with its source and its date. Search results are leads: for the facts that matter, open the official source (the publisher's own page, release notes, documentation) with WebFetch before you state them. Your notes and knowledge files are a starting point, not the latest word.",
@@ -393,7 +401,30 @@ export function questionSystemText(language: string, web = false): string {
     "### What follows this discussion",
     "",
     "This discussion is handed to the run that revises an item you delivered, to a run you propose here, and, while a run of yours works on this subject, to that run at its next step: what was agreed here is not lost. So never ask the owner to copy or repeat what was agreed into a task or a note. The task of a proposed run is still a self-contained recap of what was agreed.",
+    ...(notebook
+      ? ["What must outlast this discussion (what you and the owner settle, a lasting preference of the owner) goes into your notebook, when it is settled: the discussion is handed to one run, the notebook to all of them."]
+      : []),
   ].join("\n");
+}
+
+const isNotebookTool = (tool: string): boolean => (NOTEBOOK_TOOLS as readonly string[]).includes(tool);
+
+/**
+ * The write access of a question to an agent with a notebook: the write
+ * guard installed in the working directory with the notebook as its single
+ * writable folder and nothing of the working directory itself (no `allow`
+ * pattern), the notebook as an `--add-dir`. Write and Edit are then the only
+ * write tools that exist (MultiEdit and NotebookEdit stay denied), and every
+ * call of theirs outside the notebook is refused by the hook, whatever the
+ * model tries.
+ */
+export function questionNotebook(p: { config: HqConfig; agent: Agent; workDir: string; notebook: string }): {
+  addDirs: string[];
+  env: Record<string, string>;
+} {
+  installWriteGuard(p.workDir, { script: writeGuardScript(p.config.repoRoot), ignoreInGit: p.agent.worktree !== null });
+  const guard = writeGuardConfig({ workDir: p.workDir, allowedTools: [], notebooks: [p.notebook] });
+  return { addDirs: [...new Set([...p.agent.addDirs, p.notebook])], env: writeGuardEnv(guard) };
 }
 
 /** What became of the run an earlier answer proposed, for the context of the next question. */
@@ -484,6 +515,8 @@ export function buildQuestionPrompt(params: {
   items?: readonly { id: number; type: string; title: string; status: string }[];
   memory: string;
   today: string;
+  /** The notebook block (notebook.ts), left out: the agent has none. */
+  notebook?: string | null;
 }): string {
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ. The owner asks you a question: this is not a run.`,
@@ -529,6 +562,7 @@ export function buildQuestionPrompt(params: {
       "When the owner's message clearly belongs to one of these other subjects, say so in one sentence (name that subject, so the owner can write there), then answer anyway.",
     );
   }
+  if (params.notebook) lines.push("", params.notebook);
   lines.push("", params.memory, "", params.today);
   return lines.join("\n");
 }
@@ -662,9 +696,11 @@ async function answerQuestion(p: {
     fs.mkdirSync(dir, { recursive: true });
     const language = languageName(homeLanguage(config.home));
     const web = questionWebTools(agent.allowedTools);
+    const notebook = agent.notebook ?? null;
+    if (notebook) fs.mkdirSync(notebook, { recursive: true });
     fs.writeFileSync(
       systemFile,
-      `${fs.readFileSync(agent.rolePath, "utf8").trimEnd()}\n\n${questionSystemText(language, web.length > 0)}\n`,
+      `${fs.readFileSync(agent.rolePath, "utf8").trimEnd()}\n\n${questionSystemText(language, web.length > 0, notebook !== null)}\n`,
     );
     // The HQ server alone, in read-only mode: never the agent's own servers.
     writeMcpConfig({
@@ -690,10 +726,21 @@ async function answerQuestion(p: {
       items: subjectItems(db, room.name, agent.id, subject),
       memory,
       today: todayLine(new Date(), liveConfig(config).timeZone, homeLanguage(config.home)),
+      notebook: notebook ? notebookText(notebook, language, "question") : null,
     });
     // The working directory is read, never created here: an agent that never ran answers from a scratch folder.
     const workDir = fs.existsSync(agent.workDir) ? agent.workDir : path.join(dir, "scratch");
     fs.mkdirSync(workDir, { recursive: true });
+    // The notebook is the one place a question writes: the guard, not the prompt, holds it there (questionNotebook).
+    const writes = notebook ? questionNotebook({ config, agent, workDir, notebook }) : null;
+    // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.
+    const reads = agentReadGuard({
+      home: config.home,
+      repoRoot: config.repoRoot,
+      workDir,
+      readDirs: writes ? writes.addDirs : agent.addDirs,
+      ignoreInGit: agent.worktree !== null,
+    });
     const input: RunInput = {
       runId: row.id,
       room: room.name,
@@ -703,14 +750,14 @@ async function answerQuestion(p: {
       ...(agent.effort ? { effort: agent.effort } : {}),
       ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
       rolePath: systemFile,
-      allowedTools: [...QUESTION_TOOLS, ...web, ...QUESTION_HQ_TOOLS],
-      disallowedTools: QUESTION_DENIED_TOOLS.filter((tool) => !web.includes(tool)),
-      tools: [...QUESTION_TOOLS, ...web],
-      addDirs: agent.addDirs,
+      allowedTools: [...QUESTION_TOOLS, ...web, ...(writes ? NOTEBOOK_TOOLS : []), ...QUESTION_HQ_TOOLS],
+      disallowedTools: QUESTION_DENIED_TOOLS.filter((tool) => !web.includes(tool) && !(writes && isNotebookTool(tool))),
+      tools: [...QUESTION_TOOLS, ...web, ...(writes ? NOTEBOOK_TOOLS : [])],
+      addDirs: writes ? writes.addDirs : agent.addDirs,
       mcpConfigPath,
       maxBudgetUsd: Math.min(QUESTION_MAX_BUDGET_USD, agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd),
       workDir,
-      env: agentEnv(process.env, {}),
+      env: { ...agentEnv(process.env, {}), ...(writes ? writes.env : {}), ...reads },
       signal: controller.signal,
       onRawLine: (line) => {
         fs.appendFileSync(path.join(dir, `${row.id}.jsonl`), `${line}\n`);

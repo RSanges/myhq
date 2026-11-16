@@ -12,6 +12,8 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine"
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
 import { discussionHandoff, heardFrom } from "./discussion-handoff";
+import { DOOR_TOOL, DOOR_WAIT_MS, serveDoor } from "./door";
+import { notebookAccess, notebookText } from "./notebook";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
 import {
@@ -38,6 +40,7 @@ import { skillTools, syncSkills } from "./skills";
 import { settleSubject } from "./subjects";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
+import { agentReadGuard } from "./read-guard";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
@@ -87,6 +90,8 @@ export type RunnerDeps = {
    * a run started by hand). Never passed on to the runs this one wakes.
    */
   subject?: number | null;
+  /** The door's model call (door.ts, hq_ask_assistant). Default: the real `claude -p`. */
+  door?: SmallModelCall;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -359,6 +364,7 @@ export function buildPrompt(params: {
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_submit for anything to approve. Never publish anything yourself.",
     "When a decision of the owner is truly needed to go on, ask with hq_ask (if you have it): concrete options, all your questions at once, then finish your turn; the answers wake you with a new task. Do not guess, and do not submit a deliverable at random hoping it is the right one. Do not overuse it: ask only what blocks you. A doubt that would change the deliverable is asked early in the run, before you build on it, not once it is built.",
+    "For a fact about the owner or the owner's other projects that is not in your folders, ask the assistant with hq_ask_assistant (if you have it): one short question, a short answer. It answers a question, it does not hand over files.",
     "When a deliverable offers variants to choose from (voices, seeds, titles...), attach the choice as `questions` to the hq_submit of that deliverable instead of a separate hq_ask: the owner sees both together, and the answers come back with the decision.",
     "A revision (a task of source revise) is about the item it names: keep that piece's subject and brief, and apply the note to it. If the note seems to ask for a different subject or a new piece, do not start one: ask with hq_ask (or, without it, say so in your report) whether the owner wants to change the subject.",
     "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
@@ -418,6 +424,14 @@ const NESTED_SESSION_VAR =
   /^(CLAUDECODE|CLAUDE_CODE_.+|CLAUDE_AGENT_SDK_.+|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PREVIEW_.+|USE_LOCAL_OAUTH|USE_STAGING_OAUTH|ANTHROPIC_BASE_URL|MCP_CONNECTION_NONBLOCKING)$/;
 /** User settings that stay valid for a nested run. */
 const KEPT_CLAUDE_VARS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_GIT_BASH_PATH"]);
+/**
+ * The CLI's limits on one MCP tool call (CLI 2.1.325, a stdio server: a hard
+ * limit of 1e8 ms and an idle one of 30 minutes by default). hq_ask_assistant
+ * waits up to DOOR_WAIT_MS without a word: a shorter value inherited from the
+ * service's environment would cut it, so it is dropped and the default holds.
+ */
+const MCP_CALL_LIMIT_VARS = new Set(["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"]);
+const MCP_CALL_LIMIT_MIN_MS = DOOR_WAIT_MS + 30_000;
 
 /**
  * Environment of a `claude -p` process (agent run or assistant chat). The
@@ -433,6 +447,7 @@ export function agentEnv(base: Env, hqEnv: Record<string, string>): Env {
   for (const [key, value] of Object.entries(base)) {
     if (/^(HQ|MYHQ)_/i.test(key)) continue;
     if (nested && NESTED_SESSION_VAR.test(key) && !KEPT_CLAUDE_VARS.has(key)) continue;
+    if (MCP_CALL_LIMIT_VARS.has(key) && Number(value) < MCP_CALL_LIMIT_MIN_MS) continue;
     env[key] = value;
   }
   const token = base.HQ_CLAUDE_OAUTH_TOKEN?.trim();
@@ -1093,10 +1108,26 @@ async function execute(p: ExecuteParams): Promise<void> {
       fs.mkdirSync(agent.workDir, { recursive: true });
       syncSkills(agent.workDir, agent.skills ?? [], { ignoreInGit: agent.worktree !== null });
       // Where the agent may write is enforced by MyHQ's hook, not by the CLI's path rules (write-guard.ts).
-      const guard = writeGuardConfig({ workDir: agent.workDir, allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools });
-      if (guard.allow.length > 0) {
+      // The notebook is the one folder outside the working directory it writes, from its own rules or none (notebook.ts).
+      const notebook = agent.notebook ? notebookAccess(agent) : null;
+      const guard = writeGuardConfig({
+        workDir: agent.workDir,
+        allowedTools: agent.allowedTools,
+        disallowedTools: agent.disallowedTools,
+        notebooks: notebook ? [notebook.dir] : [],
+      });
+      if (guard.allow.length > 0 || guard.notebooks !== undefined) {
         installWriteGuard(agent.workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
       }
+      const addDirs = notebook ? notebook.addDirs : agent.addDirs;
+      // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.
+      const reads = agentReadGuard({
+        home: config.home,
+        repoRoot: config.repoRoot,
+        workDir: agent.workDir,
+        readDirs: addDirs,
+        ignoreInGit: agent.worktree !== null,
+      });
       fs.mkdirSync(config.runsDir, { recursive: true });
       writeMcpConfig({
         file: mcpConfigPath,
@@ -1112,7 +1143,8 @@ async function execute(p: ExecuteParams): Promise<void> {
         briefing = briefingText(decisions, readMemories(db, room.name, agent.id));
       }
       const ready = prepared?.kind === "run" ? prepared : null;
-      const prompt = [p.prompt, briefing, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
+      const notes = notebook ? notebookText(notebook.dir, languageName(promptLanguage(config.home)), "run") : null;
+      const prompt = [p.prompt, briefing, notes, ready?.context ? `${PREPARED_HEADING}\n\n${ready.context}` : null, p.today]
         .filter((part): part is string => part !== null)
         .join("\n\n");
       const effort = ready?.effort ?? agent.effort ?? null;
@@ -1125,14 +1157,14 @@ async function execute(p: ExecuteParams): Promise<void> {
         ...(effort ? { effort } : {}),
         ...(agent.cacheTtl ? { cacheTtl: agent.cacheTtl } : {}),
         rolePath: agent.rolePath,
-        allowedTools: agent.allowedTools,
+        allowedTools: notebook ? notebook.allowedTools : agent.allowedTools,
         disallowedTools: agent.disallowedTools,
-        addDirs: agent.addDirs,
-        tools: skillTools(agent),
+        addDirs,
+        tools: notebook ? notebook.tools : skillTools(agent),
         mcpConfigPath,
         maxBudgetUsd: agent.maxBudgetUsd ?? config.defaultMaxBudgetUsd,
         workDir: agent.workDir,
-        env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard) },
+        env: { ...agentEnv(process.env, hqEnv), ...writeGuardEnv(guard), ...reads },
         signal: active.controller.signal,
         onRawLine: (line) => fs.appendFileSync(logFile, `${line}\n`),
       };
@@ -1164,6 +1196,10 @@ async function execute(p: ExecuteParams): Promise<void> {
           db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
         }
         storeEvent(db, run, event);
+        // The agent asks the assistant (hq_ask_assistant): its request is answered as soon as the HQ server records it (door.ts).
+        if (event.type === "tool_call" && event.name === DOOR_TOOL) {
+          void serveDoor({ config, db, env: agentEnv(process.env, {}), call: p.deps.door, expectRun: run.id });
+        }
         if (event.type === "tool_result") {
           void notifyPendingApprovals(db, p.send, p.deps.env);
           wake(p);

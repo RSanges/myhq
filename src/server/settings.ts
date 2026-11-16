@@ -22,6 +22,7 @@ import { roomPauses } from "./room-manage";
 import { runsToday } from "./runner";
 import { roomWeekTotals } from "./usage";
 import { recentVerdicts } from "./portier";
+import { readDoorConfig, recentDoorRequests } from "./door";
 import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, roomLabelSchema, type Home, type Room } from "./rooms";
 import {
   budgetSettingSchema,
@@ -376,6 +377,13 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
   const portier = readPortierSetting(live.home, config.portier ?? DEFAULT_PORTIER);
   if (portier.error && !raw.error) errors.push(portier.error);
   const verdicts = recentVerdicts(db);
+  let doorOpen = false;
+  try {
+    doorOpen = readDoorConfig(live.home) !== null;
+  } catch (error) {
+    errors.push((error as Error).message);
+  }
+  const door = recentDoorRequests(db);
   const summaries = readRunSummariesSetting(live.home);
   if (summaries.error && !raw.error) errors.push(summaries.error);
   const archivedList = readArchivedRooms(live.home);
@@ -525,6 +533,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
       week: verdicts.week,
       verdicts: verdicts.verdicts,
     },
+    door: { enabled: doorOpen, week: door.week, requests: door.requests },
     errors,
   };
 }

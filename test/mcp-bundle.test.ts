@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { buildMcpBundle } from "../scripts/build-mcp";
 import { mcpBundleEntry } from "../src/mcp/bundle";
 import { hqMcpServerCommand } from "../src/server/claude-engine";
-import { WRITE_GUARD_HOOK, writeGuardScript } from "../src/server/write-guard";
+import { READ_GUARD_HOOK, READ_GUARD_LIB, readGuardScript, WRITE_GUARD_HOOK, WRITE_GUARD_LIB, writeGuardScript } from "../src/server/write-guard";
 
 /** A scratch copy of the repository (sources and templates; node_modules is linked), to build in. */
 function scratchRepo(): string {
@@ -64,6 +64,9 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
     // The write guard's hook is frozen beside it, and the runs use that copy.
     assert.equal(writeGuardScript(root), path.join(dir, WRITE_GUARD_HOOK));
     assert.ok(fs.existsSync(writeGuardScript(root)));
+    // So is the read guard's, with its library and the write guard's it imports.
+    assert.equal(readGuardScript(root), path.join(dir, READ_GUARD_HOOK));
+    for (const file of [READ_GUARD_HOOK, READ_GUARD_LIB, WRITE_GUARD_LIB]) assert.ok(fs.existsSync(path.join(dir, file)), file);
 
     const warnings: string[] = [];
     const command = hqMcpServerCommand(root, (message) => warnings.push(message));
@@ -72,6 +75,7 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
 
     const expected = [
       "hq_ask",
+      "hq_ask_assistant",
       "hq_blocked",
       "hq_blocked_close",
       "hq_blocked_note",
