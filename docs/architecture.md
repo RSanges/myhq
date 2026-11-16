@@ -410,11 +410,13 @@ decision, with the note the agent wrote.
 **A subject closes itself.** A subject other than the general one is archived
 once its work is definitively validated (`settleSubject`,
 `src/server/subjects.ts`): its latest deliverable (neither an item of
-questions nor an informational one) is approved, the task that approval gave
-the agent, if any, is done (and its approval command has ended), nothing of
-the subject is pending or running (a task, a run, an item, a question, a run
-or a revision one of its answers proposes that the owner has not decided), and
-the owner has written nothing in it since the approval. It is checked where
+questions, nor a question to the assistant, nor an informational one) is
+approved, the task that approval gave the agent, if any, is done (and its
+approval command has ended), nothing of the subject is pending or running (a
+task, a run, an item, a question, a run or a revision one of its answers
+proposes that the owner has not decided, a question to the assistant the
+owner approved whose answer is not delivered yet), and the owner has written
+nothing in it since the approval. It is checked where
 those states change: after an approval, at the end of a run of the subject,
 at the end of an approval command. A rejected latest deliverable keeps it
 open. A new message of the owner in it, or a revise of one of its items,
@@ -1951,7 +1953,9 @@ a line saying the owner approved this very question; its answer goes to the
 agent as a task of its mailbox (source `message`, `expects: "action"`, so
 `onMessage` applies and the portier is not asked). Rejected, the agent is told
 no the same way, with the owner's note. The item cannot be sent back, and the
-agent never gets it as a decision of its briefing (it is marked seen).
+agent never gets it as a decision of its briefing (it is marked seen). The
+item and the task of the answer belong to the subject of the asking run (see
+"The sheet of an agent"): the run that hears the answer works on that subject.
 
 **Trace.** `/reglages` shows, in « Petits appels de modèle », whether the door
 is open, its count and cost over 7 days and its 20 latest requests (agent,

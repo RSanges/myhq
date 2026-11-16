@@ -29,6 +29,7 @@ import { READ_GUARD_ENV, readReadConfig } from "../src/server/read-guard-lib.mjs
 import { agentEnv, startRun } from "../src/server/runner";
 import { READ_GUARD_HOOK } from "../src/server/write-guard";
 import { smallModelArgs, type SmallModelCall, type SmallModelCallInput } from "../src/server/small-model";
+import { createSubject, settleSubject, subjectItems } from "../src/server/subjects";
 import { getUsage } from "../src/server/usage";
 import { makeHome, waitForRun } from "./helpers";
 
@@ -468,4 +469,57 @@ test("a short MCP tool limit inherited from the service is dropped, so the tool'
   assert.equal(env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT, undefined);
   const long = agentEnv({ MCP_TOOL_TIMEOUT: String(DOOR_WAIT_MS * 10) }, {});
   assert.equal(long.MCP_TOOL_TIMEOUT, String(DOOR_WAIT_MS * 10), "a longer one stays");
+});
+
+/** A subject of the agent with an approved deliverable, the fixture's run working on it. */
+function doorSubject(db: Db): number {
+  const subject = createSubject(db, "demo", "scout", "Packaging").id;
+  db.prepare("UPDATE runs SET subject_id = ? WHERE id = 7").run(subject);
+  const at = now();
+  db.prepare(
+    `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at, decided_at, subject_id)
+     VALUES ('demo', 'scout', 7, 'article', 'The page', 'Body.', '{}', 'approved', ?, ?, ?)`,
+  ).run(at, at, subject);
+  return subject;
+}
+
+const subjectStatus = (db: Db, id: number) => (db.prepare("SELECT status FROM subjects WHERE id = ?").get(id) as { status: string }).status;
+
+test("a door item and its answer belong to the subject of the asking run, which stays open until the answer is heard", async () => {
+  const { config, db } = doorHome();
+  const subject = doorSubject(db);
+  const call = fakeCall(['{"verdict":"needs_owner","text":"It is about money."}', '{"verdict":"answer","text":"The budget of the last order."}']);
+  await ask(config, db, "What budget did the owner set for the packaging?", call);
+  db.prepare("UPDATE runs SET status = 'done', ended_at = ? WHERE id = 7").run(now());
+  const item = db.prepare("SELECT * FROM approvals WHERE id = ?").get(lastRow(db).approval_id) as ApprovalRow;
+  assert.equal(item.subject_id, subject, "the item of the asking run's subject");
+  assert.deepEqual(
+    subjectItems(db, "demo", "scout", subject).map((row) => row.type),
+    ["article"],
+    "a question to the assistant is no item a revision may name",
+  );
+  assert.equal(settleSubject(db, subject), false, "a door item waiting for the owner keeps the subject open");
+
+  // Approved: the decision settles nothing while the answer is still to come.
+  decideApproval(db, item.id, { decision: "approved" }, config, { door: call });
+  assert.equal(subjectStatus(db, subject), "open", "the approved door is no validation of the work");
+  const task = await until(() => db.prepare("SELECT * FROM tasks WHERE agent_id = 'scout' AND source = 'message'").get() as TaskRow | undefined);
+  await doorIdle();
+  assert.equal(task.subject_id, subject, "the answer goes to the run of that subject");
+  assert.equal(settleSubject(db, subject), false, "the answer is not heard yet");
+
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(task.id);
+  assert.equal(settleSubject(db, subject), true, "once heard, the approved deliverable closes the subject");
+});
+
+test("a rejected door item is not the latest deliverable of its subject: the subject still closes on its approved work", async () => {
+  const { config, db } = doorHome();
+  const subject = doorSubject(db);
+  await ask(config, db, "Who are the owner's friends?", fakeCall(['{"verdict":"needs_owner","text":"Relations."}']));
+  db.prepare("UPDATE runs SET status = 'done', ended_at = ? WHERE id = 7").run(now());
+  decideApproval(db, lastRow(db).approval_id!, { decision: "rejected", note: "Not for this." }, config);
+  const task = db.prepare("SELECT * FROM tasks WHERE agent_id = 'scout' AND source = 'message'").get() as TaskRow;
+  assert.equal(task.subject_id, subject);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(task.id);
+  assert.equal(settleSubject(db, subject), true);
 });

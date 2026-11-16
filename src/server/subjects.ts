@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { now, type ApprovalStatus, type Db } from "./db";
+import { DOOR_TYPE } from "./door";
 import { HqError } from "./errors";
 import { QUESTION_TYPE } from "./questions";
 
@@ -116,12 +117,14 @@ export function reopenSubject(db: Db, id: number | null): void {
 
 /**
  * A subject closes itself once its work is definitively validated: its latest
- * deliverable item (neither an item of questions nor an informational one) is
+ * deliverable item (neither an item of questions, nor a question to the
+ * assistant (door.ts), nor an informational one) is
  * approved, the task that approval gave the agent, if any, is done (and the
  * approval command, if any, has ended), nothing of the subject is pending or
  * running (a task, a run, an item, a question, a run or a revision one of its
  * answers proposes and the owner has not decided yet; a proposal queued
- * waits as a pending task), and the owner has written
+ * waits as a pending task; a question to the assistant the owner approved
+ * and whose answer is not delivered yet), and the owner has written
  * nothing in it since that approval (a message after it reopened the work).
  * The general subject never closes. Called where those states change: a
  * decision (decideApproval), the end of a run, the end of an approval
@@ -136,10 +139,10 @@ export function settleSubject(db: Db, subjectId: number | null): boolean {
     if (!open) return false;
     const item = db
       .prepare(
-        `SELECT id, status, decided_at FROM approvals WHERE subject_id = ? AND type <> ? AND status NOT IN ('unseen', 'seen')
+        `SELECT id, status, decided_at FROM approvals WHERE subject_id = ? AND type NOT IN (?, ?) AND status NOT IN ('unseen', 'seen')
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(subjectId, QUESTION_TYPE) as { id: number; status: ApprovalStatus; decided_at: string | null } | undefined;
+      .get(subjectId, QUESTION_TYPE, DOOR_TYPE) as { id: number; status: ApprovalStatus; decided_at: string | null } | undefined;
     if (!item || item.status !== "approved") return false;
     const unsettled = db
       .prepare(
@@ -150,9 +153,11 @@ export function settleSubject(db: Db, subjectId: number | null): boolean {
            OR EXISTS (SELECT 1 FROM approvals WHERE subject_id = ? AND status = 'pending')
            OR EXISTS (SELECT 1 FROM agent_questions WHERE subject_id = ? AND (status = 'running' OR started_at > ?))
            OR EXISTS (SELECT 1 FROM question_proposals p JOIN agent_questions q ON q.id = p.question_id
-             WHERE q.subject_id = ? AND p.state = 'pending') AS n`,
+             WHERE q.subject_id = ? AND p.state = 'pending')
+           OR EXISTS (SELECT 1 FROM door_requests d JOIN approvals a ON a.id = d.approval_id
+             WHERE a.subject_id = ? AND d.status IN ('owner', 'answering')) AS n`,
       )
-      .get(subjectId, item.id, item.id, subjectId, subjectId, subjectId, item.decided_at ?? "", subjectId) as { n: number };
+      .get(subjectId, item.id, item.id, subjectId, subjectId, subjectId, item.decided_at ?? "", subjectId, subjectId) as { n: number };
     return unsettled.n === 0 && archive(db, subjectId);
   } catch (error) {
     console.error(`[subjects] subject #${subjectId} could not be settled`, error);
@@ -207,7 +212,7 @@ export function otherSubjects(db: Db, room: string, agentId: string, current: nu
     }));
 }
 
-/** The latest deliverable items of a subject of the agent (no item of questions, no informational one), newest first: what a revision may name. */
+/** The latest deliverable items of a subject of the agent (no item of questions, no question to the assistant, no informational one), newest first: what a revision may name. */
 export function subjectItems(
   db: Db,
   room: string,
@@ -216,8 +221,8 @@ export function subjectItems(
 ): { id: number; type: string; title: string; status: ApprovalStatus }[] {
   return db
     .prepare(
-      `SELECT id, type, title, status FROM approvals WHERE room = ? AND agent_id = ? AND subject_id IS ? AND type <> ?
+      `SELECT id, type, title, status FROM approvals WHERE room = ? AND agent_id = ? AND subject_id IS ? AND type NOT IN (?, ?)
          AND status NOT IN ('unseen', 'seen') ORDER BY id DESC LIMIT ?`,
     )
-    .all(room, agentId, subject, QUESTION_TYPE, SUBJECT_CONTEXT_ITEMS) as { id: number; type: string; title: string; status: ApprovalStatus }[];
+    .all(room, agentId, subject, QUESTION_TYPE, DOOR_TYPE, SUBJECT_CONTEXT_ITEMS) as { id: number; type: string; title: string; status: ApprovalStatus }[];
 }

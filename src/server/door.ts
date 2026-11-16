@@ -422,8 +422,9 @@ async function answerRequest(p: DoorParams, row: DoorRow): Promise<void> {
         const approvalId = Number(
           p.db
             .prepare(
-              `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+              // The item belongs to the subject of the asking run (subjects.ts), as the items it submits do.
+              `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at, subject_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, (SELECT subject_id FROM runs WHERE id = ?))`,
             )
             .run(
               row.room,
@@ -434,6 +435,7 @@ async function answerRequest(p: DoorParams, row: DoorRow): Promise<void> {
               t.itemBody({ agent: name, room: row.room, question: row.question, reason }),
               JSON.stringify({ doorRequest: row.id, question: row.question }),
               now(),
+              row.run_id,
             ).lastInsertRowid,
         );
         close(p.db, row.id, { status: "owner", verdict: "needs_owner", reason, approvalId }, consulted, door.model);
@@ -475,16 +477,20 @@ function ownerRequest(db: Db, approvalId: number): DoorRow | undefined {
   return db.prepare("SELECT * FROM door_requests WHERE approval_id = ? AND status = 'owner'").get(approvalId) as DoorRow | undefined;
 }
 
-/** A task of the agent's mailbox, as a message is: the wake-up rules apply (onMessage), and it wakes without the portier. */
+/**
+ * A task of the agent's mailbox, as a message is: the wake-up rules apply
+ * (onMessage), and it wakes without the portier. It belongs to the subject of
+ * the asking run (subjects.ts): the run that hears the answer goes on with it.
+ */
 function deliver(db: Db, row: DoorRow, text: string): void {
   const at = now();
   const taskId = Number(
     db
       .prepare(
-        `INSERT INTO tasks (room, agent_id, source, text, status, created_at, updated_at)
-         VALUES (?, ?, 'message', ?, 'pending', ?, ?)`,
+        `INSERT INTO tasks (room, agent_id, source, text, status, subject_id, created_at, updated_at)
+         VALUES (?, ?, 'message', ?, 'pending', (SELECT subject_id FROM runs WHERE id = ?), ?, ?)`,
       )
-      .run(row.room, row.agent_id, text, at, at).lastInsertRowid,
+      .run(row.room, row.agent_id, text, row.run_id, at, at).lastInsertRowid,
   );
   recordExpects(db, taskId, "action");
 }
