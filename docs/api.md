@@ -1073,9 +1073,10 @@ behind a shared resource have no run and no tile.
   the 12 newest at most; it wins over the patterns.
   `source: "auto"`: the files matching the agent's `pieces` (home-layout.md)
   written during the run, oldest first, the 12 newest at most.
-- A version: `kind` is `video`, `image`, `audio` or `text`. A media file has a
-  `url` (below, with `v` its modification time so that a new version is a new
-  address); a text file has no `url` but an `excerpt`: its first 40 lines or
+- A version: `kind` is `video`, `image`, `audio`, `model` (a 3D part: `.3mf`,
+  `.stl` or `.glb`, the model extensions of the attachments) or `text`. A
+  media file or a 3D part has a `url` (below, with `v` its modification time
+  so that a new version is a new address); a text file has no `url` but an `excerpt`: its first 40 lines or
   4 KB, null when it holds a NUL byte (not text). A text file is never served
   raw.
 
@@ -1091,7 +1092,8 @@ Errors: `INVALID_INPUT` (an id that is not a positive integer), `RUN_NOT_FOUND` 
 
 ### `GET /api/live/runs/[runId]/file?path=<relative path>`
 
-A media file of a run (video, image or sound), read where the agent wrote it,
+A media file of a run (video, image or sound) or a 3D part (`.3mf` as
+`model/3mf`, `.stl` as `model/stl`, `.glb` as `model/gltf-binary`), read where the agent wrote it,
 in its working directory. `HEAD` works the same, without the body. It is
 served only when all of these hold, else `404 FILE_NOT_FOUND`, the same
 answer whether the file exists or not:
@@ -1100,7 +1102,7 @@ answer whether the file exists or not:
   5 minutes ago;
 - `path` is relative to the agent's working directory, without `..`, and
   stays inside it once every link is followed;
-- it is a regular file of a media kind, at most the attachment cap
+- it is a regular file of a media kind or a 3D part, at most the attachment cap
   (`HQ_ATTACHMENT_MAX_MB`);
 - the run showed it (`hq_show`), or it matches the agent's `pieces`, lies
   outside `.git`, `node_modules` and `.claude`, and was modified between the
