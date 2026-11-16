@@ -55,11 +55,45 @@ export function resolveSkillDirs(roomDir: string, agentId: string, skills: reado
   });
 }
 
+/** Whether `dir` is a copy of a skill made by MyHQ (syncSkills). */
+export const isSkillCopy = (dir: string): boolean => fs.existsSync(path.join(dir, MARKER));
+
+/** Writes a file only when its content changes, through a file beside it renamed over it: a reader sees the old or the new one. */
+function writeIfChanged(file: string, content: Buffer): void {
+  const current = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (current?.isFile() && fs.readFileSync(file).equals(content)) return;
+  if (current && !current.isFile()) fs.rmSync(file, { recursive: true, force: true });
+  const next = `${file}.myhq-next-${process.pid}`;
+  fs.writeFileSync(next, content);
+  fs.renameSync(next, file);
+}
+
+/** Makes `dest` hold what `source` holds, writing only what changed; at the top of a copy, `keep` names MyHQ's own files, never copied nor removed. */
+function mirror(source: string, dest: string, keep: ReadonlySet<string> = new Set()): void {
+  const here = fs.lstatSync(dest, { throwIfNoEntry: false });
+  if (here && !here.isDirectory()) fs.rmSync(dest, { force: true });
+  fs.mkdirSync(dest, { recursive: true });
+  const names = new Set(fs.readdirSync(source));
+  for (const name of names) {
+    if (keep.has(name)) continue;
+    const from = path.join(source, name);
+    if (fs.statSync(from).isDirectory()) mirror(from, path.join(dest, name));
+    else writeIfChanged(path.join(dest, name), fs.readFileSync(from));
+  }
+  for (const name of fs.readdirSync(dest)) {
+    if (!names.has(name) && !keep.has(name)) fs.rmSync(path.join(dest, name), { recursive: true, force: true });
+  }
+}
+
 /**
  * Copies each skill folder to `<workDir>/.claude/skills/<folder name>/`,
- * replacing a stale copy and leaving every other folder of `.claude/skills`
- * alone. A folder of that name that MyHQ did not create (a skill the repository
- * versions, say) is never overwritten: it is an error.
+ * bringing a stale copy up to date and leaving every other folder of
+ * `.claude/skills` alone. Only what changed is written, each file replaced in
+ * one rename, and nothing is removed but what the skill no longer has: a run
+ * of the same working directory in progress (a parallel agent without a
+ * worktree) never misses a file of a skill. A folder of that name that MyHQ
+ * did not create (a skill the repository versions, say) is never
+ * overwritten: it is an error.
  *
  * With `ignoreInGit` (an agent in a Git worktree) each copy gets a `.gitignore`
  * holding `*`, so that Git ignores the whole folder, the `.gitignore` included.
@@ -74,17 +108,17 @@ export function syncSkills(workDir: string, skillDirs: readonly string[], opts: 
   for (const source of skillDirs) {
     const name = path.basename(source);
     const dest = path.join(root, name);
-    if (fs.existsSync(dest) && !fs.existsSync(path.join(dest, MARKER))) {
+    if (fs.existsSync(dest) && !isSkillCopy(dest)) {
       throw new HqError(
         "SKILL_CONFLICT",
         409,
         `Cannot sync skill "${name}": ${dest} exists and was not created by MyHQ.`,
       );
     }
-    fs.rmSync(dest, { recursive: true, force: true });
-    fs.cpSync(source, dest, { recursive: true });
-    fs.writeFileSync(path.join(dest, MARKER), `Copied by MyHQ from ${source}\n`);
-    if (opts.ignoreInGit) fs.writeFileSync(path.join(dest, ".gitignore"), "*\n");
+    const own = opts.ignoreInGit ? [MARKER, ".gitignore"] : [MARKER];
+    mirror(source, dest, new Set(own));
+    writeIfChanged(path.join(dest, MARKER), Buffer.from(`Copied by MyHQ from ${source}\n`));
+    if (opts.ignoreInGit) writeIfChanged(path.join(dest, ".gitignore"), Buffer.from("*\n"));
   }
 }
 

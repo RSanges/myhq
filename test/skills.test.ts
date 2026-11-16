@@ -101,6 +101,29 @@ test("syncs a skill folder into .claude/skills, replaces a stale copy and leaves
   assert.equal(fs.readFileSync(path.join(other, "SKILL.md"), "utf8"), "mine");
 });
 
+test("a sync writes only what changed and never removes a file the skill still has: a run of the same folder in progress sees every file", () => {
+  const { roomDir } = skillHome();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-skillwork-"));
+  const alpha = path.join(roomDir, "skills", "alpha");
+  syncSkills(work, [alpha], { ignoreInGit: true });
+  const copy = path.join(work, ".claude", "skills", "alpha");
+  const tool = path.join(copy, "scripts", "tool.py");
+  // A reader holds the copy's file open, as a run in progress may.
+  const held = fs.openSync(tool, "r");
+  const before = fs.statSync(tool);
+  const old = Date.now() / 1000 - 3600;
+  fs.utimesSync(tool, old, old);
+  fs.writeFileSync(path.join(alpha, "SKILL.md"), "---\nname: alpha\n---\nChanged.\n");
+  syncSkills(work, [alpha], { ignoreInGit: true });
+  fs.closeSync(held);
+  assert.equal(Math.round(fs.statSync(tool).mtimeMs / 1000), Math.round(old), "an unchanged file is not written again");
+  assert.equal(fs.statSync(tool).ino, before.ino);
+  assert.match(fs.readFileSync(path.join(copy, "SKILL.md"), "utf8"), /Changed/);
+  assert.equal(fs.readFileSync(path.join(copy, ".gitignore"), "utf8"), "*\n");
+  assert.ok(fs.existsSync(path.join(copy, ".myhq-skill")));
+  assert.deepEqual(fs.readdirSync(copy).filter((name) => name.includes(".myhq-next-")), [], "no file of the replacement is left");
+});
+
 test("syncing nothing creates nothing", () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-skillwork-"));
   syncSkills(work, []);
