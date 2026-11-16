@@ -346,7 +346,8 @@ export const agentQuestionSchema = z.object({
   proposal: z
     .object({
       task: z.string(),
-      state: z.enum(["pending", "launched", "dismissed"]),
+      /** `queued`: confirmed, it starts once the agent is free; absent from an older server. */
+      state: z.enum(["pending", "queued", "launched", "dismissed"]),
       runId: z.number().int().nullable(),
       decidedAt: z.string().nullable(),
       /** The item the answer proposes to revise instead of a run (`task` is then the note); absent from an older server: none. */

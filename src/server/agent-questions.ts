@@ -13,7 +13,7 @@ import { QUESTION_TYPE } from "./questions";
 import type { Agent, Room } from "./rooms";
 import { decideApproval, decisionSchema } from "./approvals";
 import { parseRunProposal, REVISION_PROPOSAL_TAG, RUN_PROPOSAL_TAG } from "./run-proposal";
-import { agentEnv, findAgent, isStopping, startRun, todayLine, type RunnerDeps } from "./runner";
+import { agentEnv, findAgent, isStopping, startRun, todayLine, WAITS, type RunnerDeps } from "./runner";
 import {
   otherSubjects,
   readSubject,
@@ -33,7 +33,10 @@ import {
 // `agent_questions` (migration 19), and its cost counts in the day and the
 // week of the whiteboard (usage.ts). A message that asks for work gets an
 // answer that proposes a run (run-proposal.ts, `question_proposals`, migration
-// 20): that run starts only when the owner confirms it (`decideProposal`).
+// 20): that run starts only when the owner confirms it (`decideProposal`),
+// at once, or once the agent is free (a queued proposal, migration 30). While
+// a run of the agent works on the subject of the question, the exchange
+// reaches that run at its next step (hearOwner, discussion-handoff.ts).
 
 /** The longest question the owner may ask. */
 export const QUESTION_MAX_CHARS = 4_000;
@@ -109,6 +112,9 @@ export type ActiveRun = {
   task: string;
   reason: string | null;
   startedAt: string;
+  /** The subject it works on (subjects.ts), null: the general one, and that subject's title. */
+  subjectId: number | null;
+  subjectTitle: string | null;
   /** What the agent said last in this run (hq_status), oldest first. */
   statuses: { text: string; at: string }[];
 };
@@ -126,7 +132,19 @@ export function activeRunOf(db: Db, room: string, agentId: string): ActiveRun | 
   )
     .reverse()
     .map((row) => ({ text: row.text, at: row.created_at }));
-  return { id: run.id, task: run.task, reason: run.reason, startedAt: run.started_at, statuses };
+  const subjectTitle =
+    run.subject_id === null
+      ? null
+      : ((db.prepare("SELECT title FROM subjects WHERE id = ?").get(run.subject_id) as { title: string | null } | undefined)?.title ?? null);
+  return {
+    id: run.id,
+    task: run.task,
+    reason: run.reason,
+    startedAt: run.started_at,
+    subjectId: run.subject_id,
+    subjectTitle,
+    statuses,
+  };
 }
 
 export const askSchema = z.strictObject({
@@ -144,6 +162,11 @@ export type QuestionError = "timeout" | "budget" | "error" | "interrupted";
 /** A run proposed by an answer: waiting for the owner, started by « Lancer le tour », or set aside by « On en parle d'abord ». */
 export const PROPOSAL_STATES = ["pending", "launched", "dismissed"] as const;
 export type ProposalState = (typeof PROPOSAL_STATES)[number];
+/**
+ * A proposal as the owner reads it: `queued` is a confirmed run that waits
+ * for the agent to be free (stored `launched`, its task still pending).
+ */
+export type ProposalView = ProposalState | "queued";
 
 export const proposalActionSchema = z.strictObject({ action: z.enum(["launch", "dismiss"]) });
 export type ProposalAction = z.infer<typeof proposalActionSchema>["action"];
@@ -153,7 +176,7 @@ export type ProposalAction = z.infer<typeof proposalActionSchema>["action"];
  * revision of an item (`reviseId`, migration 28): `task` is then the note of
  * that revision, and `runId` the revision run once one started.
  */
-export type ProposalDto = { task: string; state: ProposalState; runId: number | null; decidedAt: string | null; reviseId: number | null };
+export type ProposalDto = { task: string; state: ProposalView; runId: number | null; decidedAt: string | null; reviseId: number | null };
 
 export type QuestionRow = {
   id: number;
@@ -184,12 +207,18 @@ export type QuestionRow = {
   proposal_run_id?: number | null;
   proposal_decided_at?: string | null;
   proposal_revise_id?: number | null;
+  /** 1: the task of a queued proposal is still pending. */
+  proposal_queued?: number | null;
 };
 
-/** Selects questions as `q` with the run their answer proposes; append a WHERE clause. */
-const QUESTION_SELECT = `SELECT q.*, p.task AS proposal_task, p.state AS proposal_state, p.run_id AS proposal_run_id,
-  p.decided_at AS proposal_decided_at, p.revise_id AS proposal_revise_id
-  FROM agent_questions q LEFT JOIN question_proposals p ON p.question_id = q.id`;
+/**
+ * Selects questions as `q` with the run their answer proposes; append a WHERE
+ * clause. The run of a queued proposal is the one that took its task.
+ */
+const QUESTION_SELECT = `SELECT q.*, p.task AS proposal_task, p.state AS proposal_state,
+  COALESCE(p.run_id, pt.run_id) AS proposal_run_id, p.decided_at AS proposal_decided_at, p.revise_id AS proposal_revise_id,
+  pt.status = 'pending' AS proposal_queued
+  FROM agent_questions q LEFT JOIN question_proposals p ON p.question_id = q.id LEFT JOIN tasks pt ON pt.id = p.task_id`;
 
 /** A question as the API gives it. */
 export type QuestionDto = {
@@ -221,7 +250,7 @@ export function toQuestion(row: QuestionRow): QuestionDto {
       row.proposal_task && row.proposal_state
         ? {
             task: row.proposal_task,
-            state: row.proposal_state,
+            state: row.proposal_queued ? "queued" : row.proposal_state,
             runId: row.proposal_run_id ?? null,
             decidedAt: row.proposal_decided_at ?? null,
             reviseId: row.proposal_revise_id ?? null,
@@ -327,7 +356,7 @@ export function questionSystemText(language: string, web = false): string {
     "## Question mode",
     "",
     "The owner of MyHQ is asking you a question. This is not a task and not a run: answer it, and nothing else.",
-    `Answer in ${language}, short and concrete, from what you know (your role, your memory, the discussion below) and from what you can read in your working directory and its folders (Read, Glob, Grep; hq_memory_read and hq_items for your memory and the items).`,
+    `Answer in ${language}, short and concrete, as a colleague would: a few sentences, no long structured report unless the owner asks for one. Answer from what you know (your role, your memory, the discussion below) and from what you can read in your working directory and its folders (Read, Glob, Grep; hq_memory_read and hq_items for your memory and the items).`,
     "You do nothing, deliver nothing, change nothing: you write no file, submit nothing, send no message. The instructions of your role about reporting, submitting or writing do not apply here.",
     ...(web
       ? [
@@ -335,7 +364,7 @@ export function questionSystemText(language: string, web = false): string {
           "Never put anything personal or private in a search query or a fetched URL.",
         ]
       : []),
-    "If you do not know, say so: never invent.",
+    "If you do not know, say so: never invent. When you need something from the owner, ask one question, the one that matters most, and keep the others for after their answer.",
     "",
     "### A discussion or a task",
     "",
@@ -361,7 +390,7 @@ export function questionSystemText(language: string, web = false): string {
     "",
     "### What follows this discussion",
     "",
-    "This discussion is handed to the run that revises an item you delivered, and to a run you propose here: what was agreed here is not lost. So never ask the owner to copy or repeat what was agreed into a task or a note. The task of a proposed run is still a self-contained recap of what was agreed.",
+    "This discussion is handed to the run that revises an item you delivered, to a run you propose here, and, while a run of yours works on this subject, to that run at its next step: what was agreed here is not lost. So never ask the owner to copy or repeat what was agreed into a task or a note. The task of a proposed run is still a self-contained recap of what was agreed.",
   ].join("\n");
 }
 
@@ -381,7 +410,9 @@ function proposalNote(proposal: ProposalDto): string {
     return `[You proposed to revise item #${proposal.reviseId}: "${task}". ${fate}]`;
   }
   const fate =
-    proposal.state === "launched"
+    proposal.state === "queued"
+      ? "The owner confirmed it: it starts once you are free."
+      : proposal.state === "launched"
       ? `The owner started it (run #${proposal.runId ?? "?"}).`
       : proposal.state === "dismissed"
         ? "The owner set it aside, to talk about it first."
@@ -392,8 +423,10 @@ function proposalNote(proposal: ProposalDto): string {
 /**
  * The agent's run state, read from the database when the question is asked:
  * above its memory, which may say a run ended when the lock says it runs.
+ * `subject` is the subject of the question (null: the general one): a run on
+ * it hears this exchange at its next step, a run on another one does not.
  */
-function runStateText(run: ActiveRun | null, checkedAt: string): string {
+function runStateText(run: ActiveRun | null, checkedAt: string, subject: number | null): string {
   const heading = `Your run state, read from the MyHQ database at ${checkedAt}: this is the source of truth, above your memory, your notes and the discussion so far.`;
   if (!run) return `${heading}\nYou have no run in progress.`;
   const task =
@@ -411,8 +444,22 @@ function runStateText(run: ActiveRun | null, checkedAt: string): string {
   }
   lines.push(
     `This run is still going: never say you have no run in progress or that run #${run.id} ended. When the owner asks where you stand, say it runs and what it is doing or waiting for, as far as the lines above show, without inventing more.`,
-    `Do not propose a run (no ${RUN_PROPOSAL_TAG} block): MyHQ refuses a second run of an agent while one runs. If the owner asks for work, say it can be started once run #${run.id} ends. A revision of an item (a ${REVISION_PROPOSAL_TAG} block) can still be proposed: it waits for the end of run #${run.id}.`,
   );
+  if (run.subjectId === subject) {
+    lines.push(
+      `Run #${run.id} works on this very subject: what the owner says here now, and your answer, reach that run at its next step. So answer as the same agent at work, in one or two sentences, what will happen (for example "seen, it reaches my bench at the next step", or "good catch, I change it now"), and settle with the owner what is unclear. Do not propose a run nor a revision (no ${RUN_PROPOSAL_TAG} or ${REVISION_PROPOSAL_TAG} block) for something that amends the work in progress: the run hears it. A separate piece of work may still be proposed: it waits for the end of run #${run.id}.`,
+    );
+  } else {
+    const where =
+      run.subjectId === null
+        ? "your general discussion"
+        : run.subjectTitle
+          ? `your subject "${run.subjectTitle}"`
+          : `your subject #${run.subjectId}`;
+    lines.push(
+      `Run #${run.id} works on another subject, ${where}: what the owner says here does not reach it. You are busy on that subject, say so plainly. A run or a revision proposed here waits for its turn: it starts once run #${run.id} ends.`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -428,7 +475,7 @@ export function buildQuestionPrompt(params: {
   /** When the run state was read. */
   checkedAt?: string;
   /** The subject the question is asked in (subjects.ts); null or left out: the general one. */
-  subject?: { title: string | null } | null;
+  subject?: { id: number; title: string | null } | null;
   /** The agent's other open subjects; left out: none. */
   subjects?: readonly SubjectContext[];
   /** The deliverable items of this subject, newest first: what a revision may name; left out: not given. */
@@ -459,7 +506,7 @@ export function buildQuestionPrompt(params: {
     }
   }
   lines.push("", "The owner's question:", params.question);
-  if (params.run !== undefined) lines.push("", runStateText(params.run, params.checkedAt ?? now()));
+  if (params.run !== undefined) lines.push("", runStateText(params.run, params.checkedAt ?? now(), params.subject?.id ?? null));
   if (params.items) {
     if (params.items.length === 0) {
       lines.push("", "You have delivered no item in this subject yet: there is nothing to revise here.");
@@ -499,9 +546,10 @@ function homeLanguage(home: string): string {
  * another one in the same subject (QUESTION_BUSY): one at a time per subject.
  * A message in an archived subject opens it again, and the first message in a
  * subject without a title gives it one. A run of the agent in progress does
- * not refuse it: the agent is told about that run, and its answer proposes no
- * run then (`startRun` would refuse it, AGENT_BUSY). Returns the question as
- * recorded.
+ * not refuse it: the agent is told about that run, which hears the exchange
+ * at its next step when it works on the same subject; a run the answer
+ * proposes meanwhile waits for the agent to be free once confirmed
+ * (decideProposal). Returns the question as recorded.
  */
 export function askAgent(
   request: { room: string; agent: string; question: string; subject?: number | null },
@@ -729,11 +777,11 @@ async function answerQuestion(p: {
     now(),
     row.id,
   ).changes;
-  // Recorded once the answer is: a question closed meanwhile (the app stopped) proposes nothing,
-  // and neither does one answered while the agent has a run in progress, which the agent lock would refuse.
-  // A revision waits for that run instead: it is kept, when it names an item it may revise.
+  // Recorded once the answer is: a question closed meanwhile (the app stopped) proposes nothing.
+  // One answered while the agent has a run in progress is kept: confirmed, it waits for the agent to be free.
+  // A revision is kept when it names an item it may revise.
   const revise = parsed?.revise;
-  const proposes = revise !== undefined ? revisable(db, row, revise) : !activeRunOf(db, room.name, agent.id);
+  const proposes = revise !== undefined ? revisable(db, row, revise) : true;
   if (closed > 0 && parsed?.task && proposes) {
     db.prepare(
       "INSERT OR IGNORE INTO question_proposals (question_id, task, state, created_at, revise_id) VALUES (?, ?, 'pending', ?, ?)",
@@ -762,6 +810,24 @@ function revisable(db: Db, question: QuestionRow, itemId: number): boolean {
   );
 }
 
+/** Keeps a confirmed run the agent cannot start now as a pending task of its subject, for the wake-ups (decideProposal). */
+function queueProposal(db: Db, p: { room: string; agentId: string; question: QuestionRow; task: string }): void {
+  db.transaction(() => {
+    const at = now();
+    const taskId = Number(
+      db
+        .prepare(
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'chat', ?, ?, 'pending', ?, ?, ?)`,
+        )
+        .run(p.room, p.agentId, p.question.id, p.task, p.question.subject_id, at, at).lastInsertRowid,
+    );
+    db.prepare(
+      "UPDATE question_proposals SET state = 'launched', task_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'",
+    ).run(taskId, at, p.question.id);
+  }).immediate();
+}
+
 /** A question of this agent with the run its answer proposes, or undefined. */
 function readQuestion(db: Db, room: string, agentId: string, id: number): QuestionRow | undefined {
   return db.prepare(`${QUESTION_SELECT} WHERE q.id = ? AND q.room = ? AND q.agent_id = ?`).get(id, room, agentId) as
@@ -772,8 +838,12 @@ function readQuestion(db: Db, room: string, agentId: string, id: number): Questi
 /**
  * What the owner does with the run an answer proposes: « Lancer le tour »
  * (`launch`) starts it through `startRun`, as the desk's « Lancer un tour »
- * does (the agent lock, the shared resources and the daily cap refuse it the
- * same way, and the proposal then stays pending), with the agent's task;
+ * does, with the agent's task. When the agent cannot start now (its lock, a
+ * shared resource, the daily cap: WAITS), the run is kept as a pending task
+ * of source `chat` of the question's subject, whose ref_id is the question
+ * (the run that takes it gets the discussion up to it, discussion-handoff.ts),
+ * and the wake-ups start it once the agent is free (wakeAgents): the proposal
+ * shows `queued` until then;
  * « On en parle d'abord » (`dismiss`) sets it aside. This is the only way a
  * proposed run starts: an answer never starts one by itself. A proposal is
  * decided once (PROPOSAL_DECIDED). The run carries the subject the question
@@ -817,15 +887,23 @@ export function decideProposal(
       question.id,
     );
   } else if (request.action === "launch") {
-    run = startRun(
-      { room: room.name, agent: agent.id, task: proposal.task },
-      { ...deps, config, discussionUpTo: question.id, subject: question.subject_id },
-    );
-    db.prepare("UPDATE question_proposals SET state = 'launched', run_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
-      run.id,
-      now(),
-      question.id,
-    );
+    try {
+      run = startRun(
+        { room: room.name, agent: agent.id, task: proposal.task },
+        { ...deps, config, discussionUpTo: question.id, subject: question.subject_id },
+      );
+    } catch (error) {
+      if (!(error instanceof HqError && WAITS.has(error.code))) throw error;
+    }
+    if (run) {
+      db.prepare("UPDATE question_proposals SET state = 'launched', run_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
+        run.id,
+        now(),
+        question.id,
+      );
+    } else {
+      queueProposal(db, { room: room.name, agentId: agent.id, question, task: proposal.task });
+    }
   } else {
     db.prepare("UPDATE question_proposals SET state = 'dismissed', decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
       now(),

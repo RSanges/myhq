@@ -510,7 +510,7 @@ test("a revision may be proposed while a run goes on: confirmed, it waits for th
     { config, engine: answering(`Ok.\n<revision-proposal item="${delivered}">Thicker border.</revision-proposal>`, prompts) },
   );
   await questionsIdle();
-  assert.match(prompts[0]!, /A revision of an item \(a revision-proposal block\) can still be proposed/);
+  assert.match(prompts[0]!, /A separate piece of work may still be proposed: it waits for the end of run/);
   const { run } = decideProposal({ room: "demo", agent: "scout", questionId: asked.id, action: "launch" }, { config, engine: runEngine([]) });
   assert.equal(run, null, "the agent is busy: the revision task waits");
   assert.equal((db.prepare("SELECT status FROM tasks WHERE source = 'revise'").get() as TaskRow).status, "pending");

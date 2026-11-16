@@ -219,7 +219,7 @@ test("every run is told to open its submission with what it decided alone", () =
 
 test("question mode says the discussion follows the task, and a proposed task stays a recap", () => {
   const text = questionSystemText("English");
-  assert.match(text, /handed to the run that revises an item you delivered, and to a run you propose here/);
+  assert.match(text, /handed to the run that revises an item you delivered, to a run you propose here, and, while a run of yours works on this subject, to that run at its next step/);
   assert.match(text, /never ask the owner to copy or repeat what was agreed/);
   assert.match(text, /self-contained recap of what was agreed/);
 });

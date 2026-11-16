@@ -175,7 +175,7 @@ type Decide = {
   onDecide: (questionId: number, action: "launch" | "dismiss") => Promise<void>;
   /** The question whose proposal is being decided, if any. */
   deciding: number | null;
-  /** The agent has a run in progress: a new one would be refused. */
+  /** The agent has a run in progress: a run launched now waits for it. */
   working: boolean;
 };
 
@@ -197,9 +197,9 @@ function ProposalCard({
 }) {
   const p = t.thread.proposal;
   const busy = decide.deciding === questionId;
-  // A revision of an item waits for the run in progress, if any: it is never refused for it.
+  // A run or a revision launched while the agent works waits for its run in progress: never refused for it.
   const revision = proposal.reviseId;
-  const blocked = decide.working && revision === null;
+  const waits = decide.working && revision === null;
   return (
     <section className="agent-proposal" data-state={proposal.state} aria-label={revision === null ? p.label : p.reviseLabel}>
       <p className="agent-proposal-lead">{revision === null ? p.lead : p.reviseLead(revision)}</p>
@@ -215,7 +215,7 @@ function ProposalCard({
             <button
               type="button"
               className="chat-btn chat-btn-primary"
-              disabled={busy || blocked}
+              disabled={busy}
               onClick={() => void decide.onDecide(questionId, "launch")}
             >
               {busy ? p.launching : revision === null ? p.launch : p.revise}
@@ -224,8 +224,12 @@ function ProposalCard({
               {p.talk}
             </button>
           </div>
-          {blocked && <p className="agent-proposal-note">{p.busy(name)}</p>}
+          {waits && <p className="agent-proposal-note">{p.busy(name)}</p>}
         </>
+      ) : proposal.state === "queued" ? (
+        <p className="agent-proposal-note" role="status">
+          {p.queued(name)}
+        </p>
       ) : proposal.state === "launched" ? (
         <p className="agent-proposal-note" role="status">
           <span className="agent-proposal-done">{revision === null ? p.launched(proposal.runId) : p.revised}</span>

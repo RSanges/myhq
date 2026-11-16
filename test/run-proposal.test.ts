@@ -189,30 +189,41 @@ test("« Lancer le tour » starts the run with the agent's task, as the desk's b
   assert.equal(runs(db).length, 1, "one run, never two");
 });
 
-test("a launch the agent lock refuses leaves the proposal pending, to launch later", async () => {
+test("a launch while the agent is busy is queued, and the end of its run starts it", async () => {
   const config = makeHome();
   const db = getDbAt(config.dbPath);
   const id = await ask(config, WORK_ANSWER);
   let release = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
+  // The run woken at the end of the busy one runs on that run's engine: it records the prompts.
+  const seen: RunInput[] = [];
   const busyEngine: Engine = {
     name: "claude",
-    async *run() {
+    async *run(input) {
+      seen.push(input);
       await held;
       yield { type: "end", status: "done", reason: "success", summary: "ok", usage, costUsd: 0 };
     },
   };
   const first = startRun({ room: "demo", agent: "scout" }, { config, engine: busyEngine });
+  const { question, run } = decideProposal({ room: "demo", agent: "scout", questionId: id, action: "launch" }, { config, engine: runEngine([]) });
+  assert.equal(run, null, "nothing starts while the agent is busy");
+  assert.equal(toQuestion(question).proposal?.state, "queued");
+  assert.equal(toQuestion(question).proposal?.runId, null);
   assert.throws(
-    () => decideProposal({ room: "demo", agent: "scout", questionId: id, action: "launch" }, { config, engine: busyEngine }),
-    expectHqError("AGENT_BUSY", 409),
+    () => decideProposal({ room: "demo", agent: "scout", questionId: id, action: "launch" }, { config }),
+    expectHqError("PROPOSAL_DECIDED", 409),
   );
-  assert.equal(toQuestion(readDiscussion(db, "demo", "scout")[0]!).proposal?.state, "pending");
   release();
   await waitForRun(db, first.id);
-  const { run } = decideProposal({ room: "demo", agent: "scout", questionId: id, action: "launch" }, { config, engine: runEngine([]) });
-  assert.ok(run);
-  await waitForRun(db, run.id);
+  const woken = runs(db).find((each) => each.id !== first.id);
+  assert.ok(woken, "the end of the busy run started the queued one");
+  assert.equal(woken.reason, "chat");
+  await waitForRun(db, woken.id);
+  assert.match(seen[1]?.prompt ?? "", /Refais le clip B avec la nouvelle musique/);
+  const after = toQuestion(readDiscussion(db, "demo", "scout")[0]!).proposal;
+  assert.equal(after?.state, "launched");
+  assert.equal(after?.runId, woken.id);
 });
 
 test("a plain answer, an unknown question and another agent's question cannot be launched", async () => {
@@ -321,7 +332,7 @@ test("migration 20 is additive and safe at a restart: an older database gets the
 
 // --- A run in progress -------------------------------------------------------------
 
-test("a question asked while a run is active gives the agent that run as the truth, and proposes nothing to launch", async () => {
+test("a question asked while a run is active gives the agent that run as the truth; a proposal is kept, to wait for it", async () => {
   const config = makeHome();
   const db = getDbAt(config.dbPath);
   let release = () => {};
@@ -354,8 +365,7 @@ test("a question asked while a run is active gives the agent that run as the tru
 
     const question = toQuestion(readDiscussion(db, "demo", "scout").find((row) => row.id === asked.id)!);
     assert.equal(question.status, "done");
-    assert.equal(question.proposal, null, "no proposal that the agent lock would refuse");
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM question_proposals").get() as { n: number }).n, 0);
+    assert.equal(question.proposal?.state, "pending", "kept: confirmed, it waits for the run in progress");
   } finally {
     release();
     await waitForRun(db, run.id);
