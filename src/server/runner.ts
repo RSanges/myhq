@@ -7,7 +7,7 @@ import { ClaudeEngine, removeMcpConfig, writeMcpConfig } from "./claude-engine";
 import { briefingText, giveBackDecisions, readMemories, takeDecisions } from "./briefing";
 import { alertCapReached } from "./cap-alert";
 import { getConfig, liveConfig, type Env, type HqConfig } from "./config";
-import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow } from "./db";
+import { getDbAt, now, type Db, type RunRow, type RunStatus, type TaskRow, type TaskSource } from "./db";
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
@@ -82,9 +82,9 @@ export type RunnerDeps = {
   discussionUpTo?: number;
   /**
    * The subject the run works on (subjects.ts): the one of the proposal that started it
-   * (decideProposal), or of the task that woke it (wakeAgents); null: the general one.
-   * Left out: the subject of the oldest pending task it claims, else the general one.
-   * Never passed on to the runs this one wakes.
+   * (decideProposal), of the task that woke it (wakeAgents), of the tasks relaunched
+   * (blocked.ts, relaunch-requests.ts); null or left out: the general one (a routine,
+   * a run started by hand). Never passed on to the runs this one wakes.
    */
   subject?: number | null;
 };
@@ -547,7 +547,8 @@ export type WakeCandidate = {
   id?: number;
   room: string;
   agent_id: string;
-  source: "approval" | "message" | "revise" | "chat";
+  /** A source that wakes the agent; any source for an overdue task (OVERDUE_TASK). */
+  source: TaskSource;
   /** For a message: who sent it. */
   from_room: string | null;
   from_agent: string | null;
@@ -567,8 +568,25 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
       return agent.onRevise !== "queue";
     case "chat":
       return true;
+    case "manual":
+      return false;
   }
 }
+
+/**
+ * Whether the pending task `t` (an SQL condition on that alias) is overdue: it
+ * waited for the agent's next run (a task that does not wake the agent, or one
+ * a failed run of its subject gave back), and that run went to another
+ * subject. A run of another subject ended done since the task was created, and
+ * no run of the task's own subject started since that one. Such a task wakes
+ * the agent itself (wakeAgents), so no task stays pending while its agent
+ * keeps running. Never true for a home without subjects: all its runs are of
+ * the general subject.
+ */
+export const OVERDUE_TASK = `EXISTS (SELECT 1 FROM runs o WHERE o.room = t.room AND o.agent_id = t.agent_id
+  AND o.subject_id IS NOT t.subject_id AND o.started_at >= t.created_at AND o.status = 'done'
+  AND NOT EXISTS (SELECT 1 FROM runs s WHERE s.room = t.room AND s.agent_id = t.agent_id
+    AND s.subject_id IS t.subject_id AND s.started_at >= o.started_at))`;
 
 /**
  * Starts a run, at once, for each agent that has a task to take: one from an
@@ -592,6 +610,9 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
  * takes only that subject's tasks (launchRun). A run counts against the tasks
  * of its own subject only: the tasks of another subject it left pending still
  * wake the agent once it ends, and a failing subject is not woken in a loop.
+ * A task that waits for the agent's next run, when that run went to another
+ * subject and ended done, wakes the agent itself (OVERDUE_TASK), past the
+ * `queue` options, the portier and the pair window: its next run came.
  * Never throws for a busy agent or the cap; returns the runs started.
  */
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
@@ -603,15 +624,18 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const relaunched = startRelaunchRequests(config, db, deps);
   const candidates = db
     .prepare(
-      `SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent, t.subject_id FROM tasks t
-       WHERE t.status = 'pending' AND t.source IN ('approval', 'message', 'revise', 'chat')
-         AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
-           AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status <> 'cancelled')
-         AND (SELECT COUNT(*) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
-           AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1
-       ORDER BY t.id`,
+      `SELECT * FROM (
+         SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent, t.subject_id,
+           t.source IN ('approval', 'message', 'revise', 'chat')
+             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
+               AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status <> 'cancelled')
+             AND (SELECT COUNT(*) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
+               AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1 AS fresh,
+           ${OVERDUE_TASK} AS overdue
+         FROM tasks t WHERE t.status = 'pending')
+       WHERE fresh OR overdue ORDER BY id`,
     )
-    .all() as WakeCandidate[];
+    .all() as (WakeCandidate & { overdue: 0 | 1 })[];
   if (candidates.length === 0) return [...onboarding, ...relaunched];
   const home = loadHome(config.home);
   const started: RunRow[] = [...onboarding, ...relaunched];
@@ -622,11 +646,14 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     if (done.has(key)) continue;
     const agent = home.rooms.find((r) => r.name === candidate.room)?.agents.find((a) => a.id === candidate.agent_id);
     if (!agent) continue;
-    if (!wakesAgent(agent, candidate.source)) continue;
+    // An overdue task waited for the agent's next run, which went to another subject: it wakes the agent itself.
+    const overdue = candidate.overdue === 1;
+    if (!overdue && !wakesAgent(agent, candidate.source)) continue;
     // Another task of the agent may still wake it, and its run then takes this one too.
-    if (candidate.source === "message" && config.messageWakeIntervalMs > 0 && pairWokeRecently(db, candidate, since)) continue;
+    if (!overdue && candidate.source === "message" && config.messageWakeIntervalMs > 0 && pairWokeRecently(db, candidate, since)) continue;
     // The portier: a message that needs no wake waits for the agent's next run (portier.ts).
     if (
+      !overdue &&
       candidate.source === "message" &&
       candidate.id !== undefined &&
       !messageGate({
@@ -735,8 +762,8 @@ export function launchRun(params: {
   /** Only these pending tasks of the agent go into the run's mailbox. Default: all of them. Either way, those of its subject only. */
   claimIds?: number[];
   /**
-   * The subject the run works on (subjects.ts), null: the general one. Left out: the subject
-   * of the oldest pending task it would claim, else the general one.
+   * The subject the run works on (subjects.ts), null: the general one. Left out: with `claimIds`,
+   * the subject of the oldest of those tasks still pending; without, the general one.
    */
   subjectId?: number | null;
   prompt: (runId: number, mailbox: TaskRow[], folders: RunFolders, subjectId: number | null) => string;
@@ -794,10 +821,12 @@ export function launchRun(params: {
       const at = now();
       const only = params.claimIds;
       const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
-      // One subject per run: the one it is given, else the one of the oldest task it would claim.
-      const oldest = db
-        .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY id LIMIT 1`)
-        .get(room.name, agent.id, ...(only ?? [])) as { subject_id: number | null } | undefined;
+      // One subject per run: the one it is given, else the one of the oldest of the tasks it is started for, else the general one.
+      const oldest = only
+        ? (db
+            .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY id LIMIT 1`)
+            .get(room.name, agent.id, ...only) as { subject_id: number | null } | undefined)
+        : undefined;
       const subject = params.subjectId !== undefined ? params.subjectId : (oldest?.subject_id ?? null);
       const runId = Number(
         db

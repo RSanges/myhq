@@ -6,11 +6,12 @@ import { now, type Db, type RunRow, type TaskRow } from "./db";
 import { HqError } from "./errors";
 import { readDeadlines } from "./long-runs";
 import { waitsForNextRun } from "./portier";
-import { RELAUNCH_REASON } from "./relaunch-requests";
+import { RELAUNCH_REASON, relaunchSubject } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
 import type { Agent, Home } from "./rooms";
 import {
   isStopping,
+  OVERDUE_TASK,
   pairWokeRecently,
   runsToday,
   startRun,
@@ -107,10 +108,10 @@ function runTaskIds(db: Db, run: RunRow): number[] {
       .prepare(
         `SELECT id FROM tasks
          WHERE (run_id = ? AND status = 'blocked')
-            OR (room = ? AND agent_id = ? AND status = 'pending' AND run_id IS NULL AND updated_at = ?)
+            OR (room = ? AND agent_id = ? AND subject_id IS ? AND status = 'pending' AND run_id IS NULL AND updated_at = ?)
          ORDER BY id`,
       )
-      .all(run.id, run.room, run.agent_id, run.ended_at ?? "") as { id: number }[]
+      .all(run.id, run.room, run.agent_id, run.subject_id, run.ended_at ?? "") as { id: number }[]
   ).map((row) => row.id);
 }
 
@@ -131,30 +132,37 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
   const r = strings.deskModules.standard.reasons;
   const why = (cause: keyof typeof r, reason: string): Why => ({ reason, cause });
   if (!agent && task.room !== RECEPTION_ROOM) return why("unknownAgent", r.unknownAgent);
+  // Its next run went to another subject: it wakes the agent itself (OVERDUE_TASK), whatever its source.
+  const overdue = (db.prepare(`SELECT ${OVERDUE_TASK} AS overdue FROM tasks t WHERE t.id = ?`).get(task.id) as { overdue: number }).overdue === 1;
   const wakes = WAKE_SOURCES.has(task.source);
-  // Waiting for the agent's next run is what `"queue"` asks for: not a block.
-  if (wakes && agent && !wakesAgent(agent, task.source as WakeCandidate["source"])) return null;
-  // So is a message its sender sent for the next run (`expects: "none"`), or that the portier let wait.
-  if (task.source === "message" && waitsForNextRun(db, task.id)) return null;
-  const running = db
-    .prepare("SELECT id, started_at FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
-    .get(task.room, task.agent_id) as { id: number; started_at: string } | undefined;
-  if (running) {
-    // The end of the run wakes the agent again for a task newer than it.
-    if (wakes && task.created_at > running.started_at) return null;
-    return why("busy", r.busy(running.id));
+  if (!overdue) {
+    // Waiting for the agent's next run is what `"queue"` asks for: not a block.
+    if (wakes && agent && !wakesAgent(agent, task.source)) return null;
+    // So is a message its sender sent for the next run (`expects: "none"`), or that the portier let wait.
+    if (task.source === "message" && waitsForNextRun(db, task.id)) return null;
   }
+  // The wake-ups count the runs of the task's own subject only (wakeAgents).
   const later = db
     .prepare(
       `SELECT
          SUM(CASE WHEN status <> 'cancelled' THEN 1 ELSE 0 END) AS taken,
          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled
-       FROM runs WHERE room = ? AND agent_id = ? AND started_at >= ?`,
+       FROM runs WHERE room = ? AND agent_id = ? AND subject_id IS ? AND started_at >= ?`,
     )
-    .get(task.room, task.agent_id, task.created_at) as { taken: number | null; cancelled: number | null };
+    .get(task.room, task.agent_id, task.subject_id, task.created_at) as { taken: number | null; cancelled: number | null };
   const taken = later.taken ?? 0;
   const cancelled = later.cancelled ?? 0;
-  if (wakes && taken === 0 && cancelled <= 1) {
+  // What `wakeAgents` takes once the agent is free.
+  const woken = overdue || (wakes && taken === 0 && cancelled <= 1);
+  const running = db
+    .prepare("SELECT id, started_at, subject_id FROM runs WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+    .get(task.room, task.agent_id) as { id: number; started_at: string; subject_id: number | null } | undefined;
+  if (running) {
+    // The end of the run wakes the agent for it, or makes it overdue: a run of another subject since it was created.
+    if (woken || (running.subject_id !== task.subject_id && running.started_at >= task.created_at)) return null;
+    return why("busy", r.busy(running.id));
+  }
+  if (woken) {
     // `wakeAgents` would take it: what holds it back is what holds back a run.
     if (isStopping()) return why("stopping", r.stopping);
     const today = runsToday(db);
@@ -162,7 +170,7 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
     if (today >= cap) return why("cap", r.cap(today, cap));
     const holder = resourceHolder(db, agent?.resources ?? []);
     if (holder) return why("resource", r.resource(holder.resource, holder.runId, `${holder.room} / ${holder.agentId}`));
-    if (task.source === "message" && config.messageWakeIntervalMs > 0) {
+    if (!overdue && task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
       const candidate: WakeCandidate = {
         room: task.room,
@@ -181,8 +189,8 @@ function pendingReason(db: Db, config: HqConfig, home: Home, task: TaskRow, agen
   if (!wakes) return why("noWake", r.noWake);
   if (taken === 0 && cancelled > 1) return why("interruptedTwice", r.interruptedTwice);
   const last = db
-    .prepare("SELECT id, status FROM runs WHERE room = ? AND agent_id = ? AND started_at >= ? ORDER BY id DESC LIMIT 1")
-    .get(task.room, task.agent_id, task.created_at) as { id: number; status: string } | undefined;
+    .prepare("SELECT id, status FROM runs WHERE room = ? AND agent_id = ? AND subject_id IS ? AND started_at >= ? ORDER BY id DESC LIMIT 1")
+    .get(task.room, task.agent_id, task.subject_id, task.created_at) as { id: number; status: string } | undefined;
   return last?.status === "failed" ? why("givenBack", r.givenBack(last.id)) : why("noWake", r.noWake);
 }
 
@@ -195,7 +203,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
   const entries: BlockedEntry[] = [];
   const listed = new Set<number>();
 
-  // The failed or interrupted runs of the window, unless a later run of the agent did the same work; and, at
+  // The failed or interrupted runs of the window, unless a later run of the agent did the same work in the same subject; and, at
   // any age, a run whose closure by the supervisor the owner reopened (closures.ts), while its tasks are open.
   const runs = db
     .prepare(
@@ -203,7 +211,7 @@ export function listBlocked(db: Db, home: Home, config: HqConfig, at: Date = new
        WHERE r.status IN ('failed', 'cancelled')
          AND ((r.ended_at >= ?
            AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.room = r.room AND n.agent_id = r.agent_id AND n.id > r.id
-             AND n.task = r.task AND n.status IN ('done', 'running')))
+             AND n.subject_id IS r.subject_id AND n.task = r.task AND n.status IN ('done', 'running')))
            OR EXISTS (SELECT 1 FROM supervisor_closes c WHERE c.target_kind = 'run' AND c.target_id = r.id AND c.reopened_at IS NOT NULL))
        ORDER BY r.id`,
     )
@@ -393,7 +401,8 @@ const relaunchWaits = () => new Set([...WAITS, "ROOM_NOT_FOUND", "AGENT_NOT_FOUN
 
 /**
  * « Relancer »: the tasks of the target go back to pending, then the agent is
- * woken at once by a run that takes its mailbox (reason `relaunch`), under the
+ * woken at once by a run of their subject that takes that subject's mailbox
+ * (reason `relaunch`, `relaunchSubject`), under the
  * usual rules: the agent lock, the shared resources, the daily cap. When the
  * run cannot start, the tasks stay pending and the result says why.
  */
@@ -408,7 +417,10 @@ export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget,
     })
     .immediate();
   try {
-    const run = startRun({ room, agent: agentId, task: WAKE_TASK, reason: RELAUNCH_REASON }, { ...deps, config });
+    const run = startRun(
+      { room, agent: agentId, task: WAKE_TASK, reason: RELAUNCH_REASON },
+      { ...deps, config, subject: relaunchSubject(db, ids) },
+    );
     return { tasks: ids, run, waiting: null };
   } catch (error) {
     if (error instanceof HqError && relaunchWaits().has(error.code)) {

@@ -13,16 +13,29 @@ import { startRun, WAITS, WAKE_TASK, type RunnerDeps } from "./runner";
 export const RELAUNCH_REASON = "relaunch";
 
 /**
+ * The subject a relaunch works on (subjects.ts): the one of the oldest of its
+ * tasks, null for the general one. A relaunch is about those tasks, so its run
+ * takes their subject's mailbox, whatever older task another subject holds.
+ */
+export function relaunchSubject(db: Db, taskIds: readonly number[]): number | null {
+  const row = db
+    .prepare("SELECT subject_id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id LIMIT 1")
+    .get(JSON.stringify(taskIds)) as { subject_id: number | null } | undefined;
+  return row?.subject_id ?? null;
+}
+
+/**
  * Starts the run of each relaunch request not handled yet, oldest first, with
- * the rules of « Relancer »: the agent lock, its shared resources, the daily
- * cap. A request is handled once: `run_id` is the run started, `waiting` the
- * code of what held it back (its tasks then stay pending, and its entry stays
- * on the Standard). Never throws; returns the runs started.
+ * the rules of « Relancer »: the subject of its tasks, the agent lock, its
+ * shared resources, the daily cap. A request is handled once: `run_id` is the
+ * run started, `waiting` the code of what held it back (its tasks then stay
+ * pending, and its entry stays on the Standard). Never throws; returns the
+ * runs started.
  */
 export function startRelaunchRequests(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   const requests = db
-    .prepare("SELECT id, room, agent_id FROM supervisor_relaunches WHERE handled_at IS NULL ORDER BY id")
-    .all() as { id: number; room: string; agent_id: string }[];
+    .prepare("SELECT id, room, agent_id, task_ids FROM supervisor_relaunches WHERE handled_at IS NULL ORDER BY id")
+    .all() as { id: number; room: string; agent_id: string; task_ids: string }[];
   const started: RunRow[] = [];
   const claim = db.prepare("UPDATE supervisor_relaunches SET handled_at = ? WHERE id = ? AND handled_at IS NULL");
   const record = db.prepare("UPDATE supervisor_relaunches SET run_id = ?, waiting = ? WHERE id = ?");
@@ -32,7 +45,7 @@ export function startRelaunchRequests(config: HqConfig, db: Db, deps: RunnerDeps
     try {
       const run = startRun(
         { room: request.room, agent: request.agent_id, task: WAKE_TASK, reason: RELAUNCH_REASON },
-        { ...deps, config },
+        { ...deps, config, subject: relaunchSubject(db, JSON.parse(request.task_ids) as number[]) },
       );
       record.run(run.id, null, request.id);
       started.push(run);

@@ -374,24 +374,27 @@ test("a run proposed in a subject carries it, and what it submits or asks belong
     { source: "revise", subject_id: sign.id },
     { source: "revise", subject_id: sign.id },
   ]);
-  // A run started by hand names no subject: it takes the one of the oldest pending task it claims.
+  // A run started by hand names no subject: it is general, and leaves the tasks of the subject to their own run.
   const plain = startRun({ room: "demo", agent: "scout", task: "Routine." }, { config, engine: runEngine([]) });
-  assert.equal(plain.subject_id, sign.id);
+  assert.equal(plain.subject_id, null);
+  assert.deepEqual(mailboxOf(db, plain.id), []);
   await waitForRun(db, plain.id);
+  const woken = db.prepare("SELECT * FROM runs WHERE id > ? ORDER BY id").all(plain.id) as RunRow[];
+  assert.deepEqual(woken.map((each) => each.subject_id), [sign.id], "its end woke the agent for the subject's revisions");
+  await waitForRun(db, woken[0]!.id);
 });
 
-test("a run takes the tasks of one subject: the oldest pending task's, NULL with NULL; the others wake the agent once it ends", async () => {
+test("a run takes the tasks of one subject: a run by hand the general ones, NULL with NULL; the others wake the agent once it ends", async () => {
   const config = office();
   const db = getDbAt(config.dbPath);
   const sign = createSubject(db, "demo", "scout", "Shop sign");
   const general = pendingTask(db, null, "A message for the general subject.");
   const first = pendingTask(db, sign.id, "First of the sign.");
   const second = pendingTask(db, sign.id, "Second of the sign.");
-  // claimIds: the subject of the oldest of them, and only the ones of that subject.
   const held = gate();
   const seen: RunInput[] = [];
   const run = startRun({ room: "demo", agent: "scout", task: "Go." }, { config, engine: runEngine(seen, undefined, held.promise) });
-  assert.equal(run.subject_id, null, "the oldest pending task is the general one");
+  assert.equal(run.subject_id, null, "a run by hand is general");
   assert.deepEqual(mailboxOf(db, run.id), [general]);
   assert.match(seen[0]?.prompt ?? "", /A message for the general subject\./);
   assert.ok(!(seen[0]?.prompt ?? "").includes("First of the sign."));
