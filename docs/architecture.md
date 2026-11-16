@@ -141,7 +141,7 @@ room) and writes directly to SQLite. Twenty tools, all validated with zod:
 | `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). `questions`: multiple-choice questions attached to the deliverable (see "Questions attached to a deliverable"). |
 | `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
-| `hq_status(text, waiting?)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). With `waiting: true` the text is the reason the agent waits, and the status is also marked in `run_waits` (migration 22) in the same transaction: the agent waits until its next status (see "The surveillance room"). |
+| `hq_status(text, waiting?)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). It is also where the run hears the owner: when the owner and the agent exchanged in question mode, in the run's subject, since the run was last given those exchanges, the result carries them as `fromOwner` (see "Questions to an agent", "While the agent runs"); otherwise it is as always (`saved`, `text`, `at`, `waiting`). With `waiting: true` the text is the reason the agent waits, and the status is also marked in `run_waits` (migration 22) in the same transaction: the agent waits until its next status (see "The surveillance room"). |
 | `hq_show(path, caption)` | Show the owner a file of the working directory, with why (1 to 200 characters): the piece of the agent's tile in the surveillance room, marked « Montré par l'agent », over its `pieces` patterns. Checked at the call (inside the working directory once links are followed, a regular file of a video, image, sound, 3D part or text kind, at most the attachment cap) and stored in `run_pins` (migration 22) as the real path, relative and in POSIX form. A run may show 50 files at most (then an error asks the agent to show only what matters); the room keeps the latest showing of each file, the 12 newest. Publishes nothing. Not given in read-only mode. |
 | `hq_task_update(status, note)` | Report the state of the current task. |
 | `hq_read_decisions()` | Read the user's decisions not yet seen by this agent (each one is given once). |
@@ -435,7 +435,10 @@ visible mark), the block holds 24000 characters at most: the oldest exchanges go
 first and the block says how many were left out. No exchange, no block: the
 prompt is unchanged. Every run is also told that the body of a submission starts
 with the readings and choices it made alone where the owner's words left a
-doubt. These are the rules of the general subject, restricted to its own
+doubt, that a doubt which would change the deliverable is asked early, before
+it builds on it, and that a result of `hq_status` may bring new messages of the
+owner, to apply and acknowledge in its next status (see "Questions to an
+agent", "While the agent runs"). These are the rules of the general subject, restricted to its own
 exchanges; a run of another subject gets every exchange of that subject
 (those of a run proposed in it, up to the proposing question), whatever the
 reason of the run, with the same bounds and the title of the subject.
@@ -1075,7 +1078,7 @@ last run started, of source:
 | `revise` (a revise decision, or the answers to an item of questions) | `revise` | unless `onRevise: "queue"` |
 | `message` (`hq_message`) | `message` | unless `onMessage: "queue"` |
 | `approval` (an approved item) | `approval` | when `onApproval: "task"` (with `"queue"` the task waits; without the field there is no task) |
-| `chat` (a request of the chat) | `chat` | always |
+| `chat` (a request of the chat, or a run the owner confirmed in the discussion while the agent could not start it, `ref_id` the proposing question) | `chat` | always |
 | `revise` of a `room_proposal` | `revise` | the onboarding agent, always (see below) |
 | a need (`message` of `_hq/onboarding`), `revise` of an `agent_proposal` | `agent_need`, `revise` | the receptionist, always (see "Proposing a missing agent") |
 
@@ -1510,8 +1513,10 @@ model, effort and prompt cache duration, its working directory as cwd (a
 scratch folder of `data/runs/questions/` when it does not exist yet: a
 question never creates it) and its `addDirs`. The system prompt is the agent's
 role followed by a « Question mode » block: the owner asks, this is not a task;
-answer in the home's language, short and concrete, from what you know and what
-you can read; you write nothing, submit nothing, send nothing; a request for
+answer in the home's language, short and concrete, as a colleague would (a few
+sentences, no long structured report unless the owner asks for one), from what
+you know and what you can read; when you need something from the owner, ask one
+question, the one that matters most, and keep the others for after the answer; you write nothing, submit nothing, send nothing; a request for
 work is proposed as a run, never done (see "A task or a discussion" below).
 The user message names the agent and the subject the question is asked in
 (see "The discussion" below), gives the earlier exchanges of that subject's
@@ -1641,24 +1646,59 @@ card: « C'est une tâche. Je lance un tour pour : » and the task, with
 « Lancer le tour » and « On en parle d'abord ». No route starts a run from an
 answer by itself; only `POST .../ask/<question>/proposal` with
 `{ "action": "launch" }` does (`decideProposal`), through `startRun`, the
-same path as the desk's « Lancer un tour »: the agent lock, the shared
-resources and the daily cap refuse it the same way (the proposal then stays
-pending, to launch later), and the run has no `reason`, like any run started
-by hand. `dismiss` sets it aside. A proposal is decided once
+same path as the desk's « Lancer un tour », and the run has no `reason`, like
+any run started by hand. When the agent cannot start now (its lock, a shared
+resource, the daily cap, the app stopping: the `WAITS` of the wake-ups), the
+yes is kept instead: a pending task of source `chat` of the question's
+subject, its `ref_id` the proposing question, and
+`question_proposals.task_id` (migration 30) pointing at it. The wake-ups start
+it once the agent is free (see "Wake-ups"); its run claims the task, so the
+proposal's run is the task's (`COALESCE(run_id, task.run_id)`), and while the
+task waits the proposal reads `queued`: the card says « En file : le tour
+démarrera dès que <agent> sera libre. », then « Tour #N lancé. » once it
+started. `dismiss` sets it aside. A proposal is decided once
 (`PROPOSAL_DECIDED`), and the card keeps what became of it after a reload
 (the run launched, with a button that shows its line in the thread, or set
 aside). The context of the next questions says it too, after the answer
 (« You proposed a run: ... The owner started it (run #12) »), so that the
 agent knows where the discussion stands.
 
-**No proposal while the agent runs.** A run in progress would make
-« Lancer le tour » fail (`AGENT_BUSY`). The run state of the prompt tells the
-agent so: it says the run is still going and what it does or waits for as far
-as its steps show, proposes no run, and says the work can be started once that
-run ends. The server does not rely on it: a block in an answer that closes
-while the agent has a run in progress is dropped, and no proposal is recorded.
-The message is not queued for that run. A revision (below) is the exception:
-it waits for the end of that run instead, so it may still be proposed.
+**While the agent runs.** A run is one `claude -p` process: nothing can be
+pushed into it, but it calls `hq_status` at each step, and that is where it
+hears the owner. Every exchange of the run's subject (the owner's message and
+the agent's own question-mode answer) answered after the run's prompt was
+built comes back once in the result of its next `hq_status`, as `fromOwner`
+(`hearOwner`, `src/server/discussion-handoff.ts`): oldest first, the owner's
+message whole, each answer cut to 6000 characters, 24000 characters at most
+in one result (always one exchange at least; the rest comes with the next
+status, and the result says so). The cursor is `runs.heard_up_to` (migration
+30), the highest exchange id the run has been given: set when its prompt is
+built, from the same reads as its discussion block (the proposing question
+for a run proposed in the discussion, so what followed it reaches the run at
+its first step; else the latest answered exchange of the subject), then moved
+by each delivery in the transaction that stores the status. Within a subject
+one question runs at a time and ids grow, so a question still running when
+the prompt is built is delivered once answered: no gap, no duplicate with the
+block. A run of the general subject hears the general discussion, a run of a
+subject that subject's; a run from before the migration (no cursor) hears
+nothing. The prompt of every run says what to do with them: what was settled
+is part of the task from that moment, applied at once if what it changes is
+not built yet, else once the step in progress is finished, and said in the
+very next `hq_status`, which the owner reads in the thread as the
+acknowledgement.
+
+The question half knows it. The run state of its prompt says the run is still
+going and what it does or waits for as far as its steps show. When the run
+works on the subject of the question, it also says that the exchange reaches
+that run at its next step: the agent answers as the same agent at work, in one
+or two sentences, what will happen (« vu, ça arrive sur mon établi à la
+prochaine étape »), settles what is unclear with the owner, and proposes
+neither a run nor a revision for something that amends the work in progress.
+When the run works on another subject, it says so: what is said here does not
+reach it, and a run or a revision proposed here waits for its turn. Such a
+proposal is kept (a run proposed while the agent works is no longer dropped):
+confirmed, it is queued (above), and a revision waits as its `revise` task
+always did.
 
 **A change to an item.** When the owner asks to change something in an item
 the agent delivered in this subject (one of the items its prompt lists,
@@ -1699,7 +1739,10 @@ this one wakes): the prompt gets the exchanges of the current discussion, not
 cleared, up to and including that question; what was asked after the proposal
 is left out. Same bounds as for a revision. The run carries the subject the
 question was asked in (`RunnerDeps.subject`), so its prompt gets that
-subject's exchanges only, and what it delivers lands in that subject.
+subject's exchanges only, and what it delivers lands in that subject. A
+queued proposal keeps the link in its task (`ref_id`): the run that claims it
+gets the discussion up to that question (`queuedProposalUpTo`), and its
+subject from the task, as any run woken by a task.
 
 ### The write guard
 
@@ -2741,8 +2784,9 @@ messaging app:
   and the latest 20 items they submitted. The interface turns it
   into lines (`threadLines`, pure). It is read again when the agent's last run
   starts or ends, when one of its items comes or is decided, at each new
-  status of the agent (a moment after its tool call, for the server to store
-  it), when another tab is chosen (never showing the thread of the previous
+  status of the agent (on the result of its `hq_status` call: the server
+  has stored the status by then, and a run's acknowledgement of the owner's
+  message shows while it works), when another tab is chosen (never showing the thread of the previous
   one meanwhile), and every 2 seconds while a question waits for its answer.
 - **One field at the bottom**, « Écris à <agent> », and a send button: Enter
   sends, Shift+Enter goes to the next line. Each message is a question to the

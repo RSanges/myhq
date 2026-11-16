@@ -1507,7 +1507,9 @@ reported, the agent's alias until then. `proposal` is the run the answer
 proposes when the message asked for work (`architecture.md`, "A task or a
 discussion"), null otherwise: `{ "task": "...", "state": "pending", "runId":
 null, "decidedAt": null, "reviseId": null }`, `state` being `pending`,
-`launched` (with `runId`) or `dismissed`. With `reviseId`, the answer proposes
+`queued` (confirmed while the agent could not start it: it starts once the
+agent is free, `runId` null until then), `launched` (with `runId`) or
+`dismissed`. With `reviseId`, the answer proposes
 to revise that item instead of a run, and `task` is the note of the revision
 (`runId`: the revision run, once one started). The answer never holds the
 block of the proposal.
@@ -1558,8 +1560,11 @@ The owner's decision on the run an answer proposes: the only way such a run
 starts. Body: `{ "action": "launch" }` (« Lancer le tour ») or
 `{ "action": "dismiss" }` (« On en parle d'abord »). `launch` starts the run
 with the proposal's task as `POST /api/runs` does from the desk (no
-`reason`; the run works on the question's subject), and answers `202`;
-`dismiss` answers `200`. For a proposed revision (`reviseId`), `launch` is the
+`reason`; the run works on the question's subject), and answers `202`. When
+the agent cannot start now (a run in progress, a shared resource held, the
+daily cap, the app stopping), the run is queued instead: the answer is `200`
+with `run` null and the proposal `queued`, and the wake-ups start it once the
+agent is free. `dismiss` answers `200`. For a proposed revision (`reviseId`), `launch` is the
 `revise` decision on that item with the proposal's note, as
 `PATCH /api/approvals/[id]` takes it: the revision run is returned when the
 agent was woken at once, null when it waits (a run in progress,
@@ -1574,10 +1579,9 @@ Errors: `INVALID_JSON`, `INVALID_INPUT` (no `action`, another value, a
 `question` that is not a positive integer), `ROOM_NOT_FOUND`,
 `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_NOT_FOUND`,
 `PROPOSAL_NOT_FOUND` (the answer proposes no run), `PROPOSAL_DECIDED`
-(already launched or set aside), and for `launch` the refusals of a run
-(`AGENT_BUSY`, `RESOURCE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`), or
-for a revision the refusals of a decision (`ROOM_ARCHIVED`,
-`APPROVAL_ALREADY_DECIDED`...): the proposal then stays `pending`.
+(already queued, launched or set aside), and for a revision the refusals of
+a decision (`ROOM_ARCHIVED`, `APPROVAL_ALREADY_DECIDED`...): the proposal
+then stays `pending`.
 
 ### Subjects
 
