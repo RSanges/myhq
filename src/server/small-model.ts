@@ -20,6 +20,15 @@ export type SmallModelCallInput = {
   timeoutMs: number;
   /** `--max-budget-usd`: the cap of the call. */
   maxBudgetUsd: number;
+  // The door's call only (door.ts); left out, none of them changes the arguments.
+  /** Built-in tools that exist for the call (`--tools`, also allowed); default: none. */
+  tools?: string[];
+  /** Folders the call may read (`--add-dir`). */
+  addDirs?: string[];
+  /** `--effort`; default: low. */
+  effort?: string;
+  /** The working directory; default: a scratch folder of the system's temporary directory. */
+  cwd?: string;
 };
 
 /** What a call gives back: the model's text, and what it cost. */
@@ -54,8 +63,14 @@ const resultSchema = z.looseObject({
     .optional(),
 });
 
-/** The arguments of the call: no tool, no MCP server, no user settings, low effort, the budget cap. */
-export function smallModelArgs(input: Pick<SmallModelCallInput, "model" | "system" | "prompt" | "maxBudgetUsd">): string[] {
+/**
+ * The arguments of the call: no tool (or only `tools`, for the door), no MCP
+ * server, no user settings, low effort, the budget cap.
+ */
+export function smallModelArgs(
+  input: Pick<SmallModelCallInput, "model" | "system" | "prompt" | "maxBudgetUsd" | "tools" | "addDirs" | "effort">,
+): string[] {
+  const tools = input.tools ?? [];
   return [
     "-p",
     input.prompt,
@@ -66,12 +81,14 @@ export function smallModelArgs(input: Pick<SmallModelCallInput, "model" | "syste
     "--system-prompt",
     input.system,
     "--tools",
-    "",
+    ...(tools.length > 0 ? tools : [""]),
+    ...(tools.length > 0 ? ["--allowedTools", ...tools] : []),
+    ...(input.addDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
     "--strict-mcp-config",
     "--setting-sources",
     "project,local",
     "--effort",
-    "low",
+    input.effort ?? "low",
     "--max-budget-usd",
     String(input.maxBudgetUsd),
   ];
@@ -83,7 +100,7 @@ export function smallModelArgs(input: Pick<SmallModelCallInput, "model" | "syste
  */
 export const claudeSmallModelCall: SmallModelCall = (input) =>
   new Promise((resolve, reject) => {
-    const cwd = path.join(os.tmpdir(), "myhq-portier");
+    const cwd = input.cwd ?? path.join(os.tmpdir(), "myhq-portier");
     try {
       fs.mkdirSync(cwd, { recursive: true });
     } catch (error) {

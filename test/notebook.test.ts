@@ -114,6 +114,7 @@ test("a run with a notebook: the folder is created, readable and writable there 
   assert.match(input.prompt, /## Your notebook/);
   assert.match(input.prompt, /It holds no note yet\./);
   assert.match(input.prompt, /state of your bench .* stays in hq_memory/);
+  assert.match(input.prompt, /hq_ask_assistant/, "the common instructions name the door");
 });
 
 test("a run without a notebook keeps its access as it was: no added folder, tool or guard", async () => {

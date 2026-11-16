@@ -12,6 +12,7 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine"
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
 import { discussionHandoff } from "./discussion-handoff";
+import { DOOR_TOOL, serveDoor } from "./door";
 import { notebookAccess, notebookText } from "./notebook";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { notifyPendingApprovals, sendAlert, type Send } from "./notify";
@@ -80,6 +81,8 @@ export type RunnerDeps = {
    * discussion up to it (discussion-handoff.ts). Never passed on to the runs this one wakes.
    */
   discussionUpTo?: number;
+  /** The door's model call (door.ts, hq_ask_assistant). Default: the real `claude -p`. */
+  door?: SmallModelCall;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -352,6 +355,7 @@ export function buildPrompt(params: {
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ, run #${params.runId}.`,
     "Report through the hq tools: hq_submit for anything to approve. Never publish anything yourself.",
     "When a decision of the owner is truly needed to go on, ask with hq_ask (if you have it): concrete options, all your questions at once, then finish your turn; the answers wake you with a new task. Do not guess, and do not submit a deliverable at random hoping it is the right one. Do not overuse it: ask only what blocks you.",
+    "For a fact about the owner or the owner's other projects that is not in your folders, ask the assistant with hq_ask_assistant (if you have it): one short question, a short answer. It answers a question, it does not hand over files.",
     "When a deliverable offers variants to choose from (voices, seeds, titles...), attach the choice as `questions` to the hq_submit of that deliverable instead of a separate hq_ask: the owner sees both together, and the answers come back with the decision.",
     "A revision (a task of source revise) is about the item it names: keep that piece's subject and brief, and apply the note to it. If the note seems to ask for a different subject or a new piece, do not start one: ask with hq_ask (or, without it, say so in your report) whether the owner wants to change the subject.",
     "MyHQ closes your task with your final message when your run ends: do not call hq_task_update for that. Call it only when you are blocked (status blocked, with a note saying why).",
@@ -1116,6 +1120,10 @@ async function execute(p: ExecuteParams): Promise<void> {
           db.prepare("UPDATE runs SET session_id = ? WHERE id = ?").run(event.sessionId, run.id);
         }
         storeEvent(db, run, event);
+        // The agent asks the assistant (hq_ask_assistant): its request is answered as soon as the HQ server records it (door.ts).
+        if (event.type === "tool_call" && event.name === DOOR_TOOL) {
+          void serveDoor({ config, db, env: agentEnv(process.env, {}), call: p.deps.door, expectRun: run.id });
+        }
         if (event.type === "tool_result") {
           void notifyPendingApprovals(db, p.send, p.deps.env);
           wake(p);

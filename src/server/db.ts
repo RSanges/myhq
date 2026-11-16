@@ -863,6 +863,40 @@ CREATE INDEX IF NOT EXISTS supervisor_closes_closed ON supervisor_closes (closed
       { table: "approvals", column: "filed_path", type: "TEXT" },
     ],
   },
+  {
+    version: 29,
+    sql: `
+-- The door to the assistant (door.ts, hq_ask_assistant): one row per question
+-- of an agent, written pending by the HQ MCP server and filled by the app:
+-- status (pending, answering, done, owner, expired, failed), verdict
+-- (answered, refused, needs_owner, closed, granted, denied), the answer or the
+-- reason, the item put to the owner for a needs_owner, and what the calls
+-- cost. Rows are never deleted. Idempotent, as the migrations after 14.
+CREATE TABLE IF NOT EXISTS door_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  run_id INTEGER,
+  question TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  verdict TEXT,
+  answer TEXT,
+  reason TEXT,
+  error TEXT,
+  approval_id INTEGER,
+  model TEXT,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS door_requests_status ON door_requests (status, id);
+CREATE INDEX IF NOT EXISTS door_requests_approval ON door_requests (approval_id);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

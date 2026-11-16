@@ -7,6 +7,7 @@ import { HqError } from "./errors";
 import { parseDecisionHistory, type DecisionRecord } from "./decision-history";
 import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithAction } from "./feed";
 import { AGENT_PROPOSAL, applyAgentProposal } from "./agent-proposal";
+import { denyDoorRequest, DOOR_TYPE, grantDoorRequest } from "./door";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
 import {
   answersLines,
@@ -144,6 +145,7 @@ export function decideApproval(
   let relayFor: HqConfig | null = null;
   let command: { config: HqConfig; agent: Agent; row: ApprovalRow } | null = null;
   let wakeFor: HqConfig | null = decision.decision === "revise" ? (config ?? null) : null;
+  let door = false;
   // An item of an archived room waits out of the desk: nothing would carry out the decision.
   const archived = db
     .prepare(`SELECT 1 FROM approvals WHERE id = ? AND NOT (${liveItem()})`)
@@ -153,6 +155,8 @@ export function decideApproval(
   }
   if (decision.decision === "approved") {
     const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+    // An open door (door.ts): the answer is asked once the decision is committed (below).
+    door = row?.status === "pending" && row.type === DOOR_TYPE;
     if (row?.status === "pending" && row.type === QUESTION_TYPE) {
       // The answers wake the agent (a task of its own, below); nothing else happens on approval.
       if (decision.answers) wakeFor = config ?? null;
@@ -162,7 +166,7 @@ export function decideApproval(
     if (row?.status === "pending" && row.type === AGENT_PROPOSAL) {
       applyAgentProposal(config ?? getConfig(), db, JSON.parse(row.payload) as unknown);
     }
-    if (row?.status === "pending" && row.type !== QUESTION_TYPE) {
+    if (row?.status === "pending" && row.type !== QUESTION_TYPE && row.type !== DOOR_TYPE) {
       const cfg = config ?? getConfig();
       const agent = agentOf(cfg, row);
       const wanted = agent?.onApproval ?? null;
@@ -189,6 +193,10 @@ export function decideApproval(
       const isQuestion = row.type === QUESTION_TYPE;
       if (isQuestion && decision.decision === "revise") {
         throw new HqError("QUESTION_NOT_REVISABLE", 409, `Approval #${id} is a question: answer it or reject it, it is not sent back.`);
+      }
+      // A question of an agent to the assistant (door.ts) is opened or refused, never sent back.
+      if (row.type === DOOR_TYPE && decision.decision === "revise") {
+        throw new HqError("DOOR_NOT_REVISABLE", 409, `Approval #${id} asks to open the assistant's door: approve it or reject it.`);
       }
       const stored = JSON.parse(row.payload) as Record<string, unknown>;
       // The questions an answer is for: the item's own (hq_ask) or those attached to a deliverable (hq_submit).
@@ -247,6 +255,14 @@ export function decideApproval(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL, payload = COALESCE(?, payload) WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), answered?.payload ?? null, id);
+      if (row.type === DOOR_TYPE && row.status === "pending") {
+        // The agent hears of it in its mailbox (door.ts), never as a decision of its briefing.
+        db.prepare("UPDATE approvals SET seen_by_agent_at = ? WHERE id = ?").run(at, id);
+        if (decision.decision === "rejected") {
+          denyDoorRequest(db, id, note);
+          wakeFor = config ?? null;
+        }
+      }
       if (answered && isQuestion) {
         db.prepare(
           `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
@@ -301,6 +317,23 @@ export function decideApproval(
           wakeAgents(cfg, db, deps);
         } catch (error) {
           console.error(`[approvals] wake after the command of #${id} failed`, error);
+        }
+      },
+    });
+  }
+  if (door && config) {
+    // The call again with the sensitive folders, in the background; its answer wakes the agent as a message.
+    void grantDoorRequest({
+      config,
+      db,
+      env: agentEnv(process.env, {}),
+      call: deps.door,
+      approvalId: id,
+      wake: () => {
+        try {
+          wakeAgents(config, db, deps);
+        } catch (error) {
+          console.error(`[approvals] wake after the door answer of #${id} failed`, error);
         }
       },
     });

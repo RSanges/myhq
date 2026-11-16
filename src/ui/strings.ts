@@ -63,6 +63,7 @@ export const strings = {
       room_proposal: "Salle",
       agent_proposal: "Agent",
       question: "Question",
+      assistant_question: "Question à l'assistant",
     } as Record<string, string>,
     age: {
       now: "à l'instant",
@@ -2013,5 +2014,42 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     /** The line of a desk item that MyHQ filed: « Rangé dans shop/2026-11-acme-sign/devis/... ». */
     filed: (path: string) => `Rangé dans ${path}`,
     units: { b: "o", kb: "Ko", mb: "Mo", gb: "Go" },
+  },
+  /** The door to the assistant (door.ts, hq_ask_assistant): the owner's item, the agent's mailbox, the settings page. */
+  door: {
+    itemTitle: (agent: string) => `${agent} demande l'accès à un dossier sensible`,
+    itemBody: (p: { agent: string; room: string; question: string; reason: string }) =>
+      `${p.agent} (${p.room}) a posé cette question à l'assistant :
+
+> ${p.question.replace(/\s+/g, " ")}
+
+L'assistant ne répond qu'avec ton accord : ${p.reason}
+
+Approuver ouvre les dossiers sensibles pour cette seule question, et la réponse part à l'agent dans sa boîte. Rejeter lui dit non.`,
+    granted: (id: number, question: string, answer: string) =>
+      `Réponse de l'assistant à ta question n° ${id} (« ${question} »), avec l'accord du propriétaire : ${answer}`,
+    grantedNoAnswer: (id: number, question: string, reason: string) =>
+      `Le propriétaire a accepté ta question n° ${id} à l'assistant (« ${question} »), mais l'assistant n'a pas de réponse : ${reason}. Continue sans cette information.`,
+    denied: (id: number, question: string, note: string | null) =>
+      `Le propriétaire n'a pas ouvert l'accès pour ta question n° ${id} à l'assistant (« ${question} ») : continue sans cette information.${note ? ` Sa note : ${note}` : ""}`,
+    closedReason: "la porte de l'assistant est fermée",
+    settings: {
+      title: "Porte de l'assistant",
+      body: "Un agent qui a besoin d'un fait sur toi ou tes autres projets le demande à l'assistant, qui lit tes dossiers à sa place et répond en une à trois phrases, jamais un fichier. Une question sans lien avec son rôle est refusée, une question sur un dossier sensible t'est posée sur le bureau.",
+      closed: "Fermée : aucune clé door dans assistant.json.",
+      week: (calls: number, cost: string) => `Sur 7 jours : ${calls} ${calls === 1 ? "question" : "questions"}, ${cost} $ en tout.`,
+      requests: "Dernières questions à l'assistant",
+      empty: "Aucune question pour l'instant.",
+      verdict: {
+        answered: "Répondu",
+        refused: "Refusé",
+        needs_owner: "Posé au propriétaire",
+        closed: "Porte fermée",
+        granted: "Répondu avec accord",
+        denied: "Refusé par le propriétaire",
+      } as Record<string, string>,
+      status: { pending: "En attente", answering: "En cours", expired: "Sans réponse à temps", failed: "Échec" } as Record<string, string>,
+      cost: (usd: string) => `${usd} $`,
+    },
   },
 } as const;

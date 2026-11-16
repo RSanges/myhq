@@ -8,6 +8,7 @@ import { wakeOnboarding } from "./onboarding";
 import { purgeLeftoverMcpConfigs } from "./claude-engine";
 import { recoverInterruptedRuns } from "./runner";
 import { recoverInterruptedQuestions } from "./agent-questions";
+import { recoverDoorRequests } from "./door";
 
 const globalForApp = globalThis as unknown as {
   __myhqStarted?: Set<string>;
@@ -70,6 +71,8 @@ export function app(): { config: HqConfig; db: Db } {
       if (recovered.runs > 0) console.warn(`[myhq] ${recovered.runs} interrupted run(s) marked as cancelled`);
       const questions = recoverInterruptedQuestions(db);
       if (questions > 0) console.warn(`[myhq] ${questions} interrupted question(s) to agents marked as failed`);
+      const door = recoverDoorRequests(db);
+      if (door > 0) console.warn(`[myhq] ${door} interrupted question(s) to the assistant marked as failed`);
       if (recovered.requeued + recovered.blocked > 0) {
         console.warn(
           `[myhq] tasks of runs no longer in progress: ${recovered.requeued} back in the queue, ${recovered.blocked} run instruction(s) blocked`,

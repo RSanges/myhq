@@ -158,6 +158,24 @@ export const settingsViewSchema = z.object({
       }),
     ),
   }),
+  /** The door to the assistant (assistant.json `door`, door.ts): open or closed, and its latest requests, newest first. */
+  door: z.object({
+    enabled: z.boolean(),
+    week: z.object({ calls: z.number(), costUsd: z.number() }),
+    requests: z.array(
+      z.object({
+        id: z.number(),
+        room: z.string(),
+        agent: z.string(),
+        question: z.string(),
+        status: z.string(),
+        verdict: z.string().nullable(),
+        text: z.string(),
+        costUsd: z.number(),
+        at: z.string(),
+      }),
+    ),
+  }),
   /** Problems found in myhq.json, one line each; the keys concerned fall back to their defaults. */
   errors: z.array(z.string()),
 });
