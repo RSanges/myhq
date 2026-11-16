@@ -709,8 +709,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
   const at = now();
   const insert = db.prepare(
     `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, decision_note,
-         decided_at, seen_by_agent_at, for_room, drawer, order_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         decided_at, seen_by_agent_at, for_room, drawer, order_name, created_at, subject_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT subject_id FROM runs WHERE id = ?))`,
   );
   // The item and the copies of its files are one: a failed copy leaves neither.
   // Immediate: the check for a duplicate and the insert see the same queue.
@@ -736,6 +736,8 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
         parsed.drawer ?? null,
         parsed.order ?? null,
         at,
+        // The item belongs to the subject of the run that submits it (subjects.ts).
+        ctx.runId,
       );
       const id = Number(result.lastInsertRowid);
       // MyHQ keeps its database in the data directory of the home.
@@ -791,10 +793,10 @@ export function hqAsk(db: Db, ctx: HqContext, args: Args<"hq_ask">): AskResult {
       if (twin) return { id: twin.id, duplicate: twin.status };
       const result = db
         .prepare(
-          `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, created_at, subject_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, (SELECT subject_id FROM runs WHERE id = ?))`,
         )
-        .run(ctx.room, ctx.agentId, ctx.runId, QUESTION_TYPE, parsed.title, body, JSON.stringify(payload), at);
+        .run(ctx.room, ctx.agentId, ctx.runId, QUESTION_TYPE, parsed.title, body, JSON.stringify(payload), at, ctx.runId);
       return { id: Number(result.lastInsertRowid), duplicate: null };
     })
     .immediate();

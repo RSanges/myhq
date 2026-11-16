@@ -61,6 +61,8 @@ export type RunRow = {
   reason: string | null;
   /** JSON array of the shared resources (agents[].resources) the run holds while it runs. */
   resources: string;
+  /** The subject of the agent the run works on (subjects.ts), null: the general subject. */
+  subject_id: number | null;
 };
 
 export type EventRow = {
@@ -98,6 +100,8 @@ export type TaskRow = {
   /** For a message: the room and the agent that sent it (the requester of an order to a shared room). */
   from_room: string | null;
   from_agent: string | null;
+  /** The subject of the agent the task belongs to (subjects.ts), null: the general subject. */
+  subject_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -128,6 +132,8 @@ export type ApprovalRow = {
   order_name: string | null;
   /** Where MyHQ filed the approved item, relative to the root of the room folders, null: not filed. */
   filed_path: string | null;
+  /** The subject of the run that submitted it (subjects.ts), null: the general subject. */
+  subject_id: number | null;
   created_at: string;
 };
 
@@ -861,6 +867,36 @@ CREATE INDEX IF NOT EXISTS supervisor_closes_closed ON supervisor_closes (closed
       { table: "approvals", column: "drawer", type: "TEXT" },
       { table: "approvals", column: "order_name", type: "TEXT" },
       { table: "approvals", column: "filed_path", type: "TEXT" },
+    ],
+  },
+  {
+    version: 28,
+    // The subjects of an agent (subjects.ts): the topics the owner has going
+    // with it, one tab each on its sheet. A subject without a title takes the
+    // first message of the owner in it. subject_id, on a question, a task, a
+    // run and an item, says which subject it belongs to; NULL is the general
+    // subject of the agent (everything from before, and everything that names
+    // no subject). revise_id on a proposal: the item the answer proposes to
+    // revise instead of starting a run (run-proposal.ts). Idempotent, as the
+    // migrations after 14.
+    sql: `
+CREATE TABLE IF NOT EXISTS subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  title TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'archived')),
+  created_at TEXT NOT NULL,
+  archived_at TEXT
+);
+CREATE INDEX IF NOT EXISTS subjects_agent ON subjects (room, agent_id, status);
+`,
+    columns: [
+      { table: "agent_questions", column: "subject_id", type: "INTEGER" },
+      { table: "tasks", column: "subject_id", type: "INTEGER" },
+      { table: "runs", column: "subject_id", type: "INTEGER" },
+      { table: "approvals", column: "subject_id", type: "INTEGER" },
+      { table: "question_proposals", column: "revise_id", type: "INTEGER" },
     ],
   },
 ];

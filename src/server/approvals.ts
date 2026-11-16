@@ -23,6 +23,7 @@ import { startApprovalCommand } from "./approval-command";
 import { fileApproval } from "./room-folders";
 import { loadHome, type Agent } from "./rooms";
 import { agentEnv, wakeAgents, type RunnerDeps } from "./runner";
+import { reopenSubject, settleSubject } from "./subjects";
 import { deliverRelays, hasRelays } from "./supervisor";
 
 export const decisionSchema = z
@@ -247,34 +248,39 @@ export function decideApproval(
         `UPDATE approvals SET status = ?, decision_note = ?, annotations = ?, decided_at = ?,
            decision_history = ?, seen_by_agent_at = NULL, payload = COALESCE(?, payload) WHERE id = ?`,
       ).run(decision.decision, note, JSON.stringify(annotations), at, JSON.stringify(history), answered?.payload ?? null, id);
+      // The tasks below belong to the subject of the item (subjects.ts): the run that takes them works on it.
       if (answered && isQuestion) {
         db.prepare(
-          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
-           VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,
-        ).run(row.room, row.agent_id, id, answered.task, at, at);
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?, ?)`,
+        ).run(row.room, row.agent_id, id, answered.task, row.subject_id, at, at);
       }
       if (decision.decision === "revise") {
         db.prepare(
-          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
-           VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?)`,
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'revise', ?, ?, 'pending', ?, ?, ?)`,
         ).run(
           row.room,
           row.agent_id,
           id,
           revisionTaskText(id, row.title, row.type, decision.note || null, annotations, answered?.lines),
+          row.subject_id,
           at,
           at,
         );
+        // A subject that had closed itself opens again: its work goes on.
+        reopenSubject(db, row.subject_id);
       }
       if (decision.decision === "approved" && (taskFor || queueTaskFor)) {
         db.prepare(
-          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
-           VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?)`,
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?, ?)`,
         ).run(
           row.room,
           row.agent_id,
           id,
           answered ? `${strings.tasks.executeApproved(id, row.title)}\n${answered.lines.join("\n")}` : strings.tasks.executeApproved(id, row.title),
+          row.subject_id,
           at,
           at,
         );
@@ -304,6 +310,11 @@ export function decideApproval(
         }
       },
     });
+  }
+  // An approval may be what closes the subject of the item, once its command is started and nothing of it is left to do.
+  if (decision.decision === "approved") {
+    const item = db.prepare("SELECT subject_id FROM approvals WHERE id = ?").get(id) as { subject_id: number | null };
+    settleSubject(db, item.subject_id);
   }
   if (wakeFor) {
     // The decision stands whatever happens next: a busy agent or the daily

@@ -136,6 +136,7 @@ test("an answer that proposes a run starts nothing: the proposal waits, the thre
     state: "pending",
     runId: null,
     decidedAt: null,
+    reviseId: null,
   });
   assert.equal(runs(db).length, 0, "no run without the owner's click");
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n, 0, "no task either");
@@ -245,7 +246,7 @@ test("the next question gives the agent what became of its proposal", async () =
     room: { name: "demo" } as never,
     agent: { id: "scout", name: "Scout" } as never,
     question: "Et alors ?",
-    previous: [{ question: "Fais-le", answer: "Ok.", proposal: { task: "Do it", state: "launched", runId: 9, decidedAt: null } }],
+    previous: [{ question: "Fais-le", answer: "Ok.", proposal: { task: "Do it", state: "launched", runId: 9, decidedAt: null, reviseId: null } }],
     memory: "",
     today: "",
   });

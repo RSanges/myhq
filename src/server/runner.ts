@@ -35,6 +35,7 @@ import { toTelegramMessages } from "../assistant/text";
 import { realRoomFolder, RECEIVED, roomFolder, roomFoldersRoot, roomOrderedFrom } from "./room-folders";
 import { loadHome, syncHome, type Agent, type Room } from "./rooms";
 import { skillTools, syncSkills } from "./skills";
+import { settleSubject } from "./subjects";
 import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
@@ -79,6 +80,13 @@ export type RunnerDeps = {
    * discussion up to it (discussion-handoff.ts). Never passed on to the runs this one wakes.
    */
   discussionUpTo?: number;
+  /**
+   * The subject the run works on (subjects.ts): the one of the proposal that started it
+   * (decideProposal), or of the task that woke it (wakeAgents); null: the general one.
+   * Left out: the subject of the oldest pending task it claims, else the general one.
+   * Never passed on to the runs this one wakes.
+   */
+  subject?: number | null;
 };
 
 /** End reason of a run stopped at its start because an MCP server it declares is not connected. */
@@ -452,7 +460,8 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
     motive: request.reason ?? deps.motive ?? "manual",
     briefing: true,
     roomFolders: true,
-    prompt: (runId, mailbox, folders) =>
+    subjectId: deps.subject,
+    prompt: (runId, mailbox, folders, subjectId) =>
       buildPrompt({
         room,
         agent,
@@ -468,6 +477,7 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
           agentId: agent.id,
           mailbox,
           upToQuestionId: deps.discussionUpTo,
+          subjectId,
         }),
       }),
   });
@@ -540,6 +550,8 @@ export type WakeCandidate = {
   /** For a message: who sent it. */
   from_room: string | null;
   from_agent: string | null;
+  /** The subject of the task (subjects.ts): the run it wakes works on it. Null: the general one. */
+  subject_id?: number | null;
 };
 
 /** Whether a task of this source wakes the agent: every one does unless the agent opted out (`queue`). */
@@ -574,7 +586,11 @@ export function wakesAgent(agent: Agent, source: WakeCandidate["source"]): boole
  * message from an agent wakes its recipient at most once per
  * `config.messageWakeIntervalMs` per pair of agents (see `pairWokeRecently`):
  * the next ones wait, and the scheduler's tick wakes them once the window is
- * over. Never throws for a busy agent or the cap; returns the runs started.
+ * over. The run woken works on the subject of the task that woke it and
+ * takes only that subject's tasks (launchRun). A run counts against the tasks
+ * of its own subject only: the tasks of another subject it left pending still
+ * wake the agent once it ends, and a failing subject is not woken in a loop.
+ * Never throws for a busy agent or the cap; returns the runs started.
  */
 export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): RunRow[] {
   // A supervisor's hq_run_stop is applied here: on the tool result of that very call.
@@ -585,12 +601,12 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
   const relaunched = startRelaunchRequests(config, db, deps);
   const candidates = db
     .prepare(
-      `SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent FROM tasks t
+      `SELECT t.id, t.room, t.agent_id, t.source, t.from_room, t.from_agent, t.subject_id FROM tasks t
        WHERE t.status = 'pending' AND t.source IN ('approval', 'message', 'revise', 'chat')
          AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
-           AND r.started_at >= t.created_at AND r.status <> 'cancelled')
+           AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status <> 'cancelled')
          AND (SELECT COUNT(*) FROM runs r WHERE r.room = t.room AND r.agent_id = t.agent_id
-           AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1
+           AND r.subject_id IS t.subject_id AND r.started_at >= t.created_at AND r.status = 'cancelled') <= 1
        ORDER BY t.id`,
     )
     .all() as WakeCandidate[];
@@ -627,7 +643,7 @@ export function wakeAgents(config: HqConfig, db: Db, deps: RunnerDeps = {}): Run
     done.add(key);
     try {
       const request = { room: candidate.room, agent: agent.id, task: WAKE_TASK, reason: candidate.source };
-      started.push(startRun(request, { ...deps, config }));
+      started.push(startRun(request, { ...deps, config, subject: candidate.subject_id ?? null }));
     } catch (error) {
       // A busy agent, a busy resource or the cap: the task waits, and the end of the run that holds them wakes it again.
       if (error instanceof HqError && WAITS.has(error.code)) continue;
@@ -714,9 +730,14 @@ export function launchRun(params: {
   task: string;
   /** Stored on the run (`runs.reason`); null for a run started by hand or a routine. */
   reason?: string | null;
-  /** Only these pending tasks of the agent go into the run's mailbox. Default: all of them. */
+  /** Only these pending tasks of the agent go into the run's mailbox. Default: all of them. Either way, those of its subject only. */
   claimIds?: number[];
-  prompt: (runId: number, mailbox: TaskRow[], folders: RunFolders) => string;
+  /**
+   * The subject the run works on (subjects.ts), null: the general one. Left out: the subject
+   * of the oldest pending task it would claim, else the general one.
+   */
+  subjectId?: number | null;
+  prompt: (runId: number, mailbox: TaskRow[], folders: RunFolders, subjectId: number | null) => string;
   /** The run reads the room folders (runFolders): the runs of room agents. MyHQ's own agents (the reception room is no room of the home) get none. */
   roomFolders?: boolean;
   /** 1 for the automatic retry of a run stopped for an MCP server not connected; there is no second one. */
@@ -728,7 +749,7 @@ export function launchRun(params: {
 }): RunRow {
   const { config, room, agent, task } = params;
   // The motive is this run's own: the runs it wakes get theirs.
-  const deps: RunnerDeps = { ...params.deps, motive: undefined, discussionUpTo: undefined };
+  const deps: RunnerDeps = { ...params.deps, motive: undefined, discussionUpTo: undefined, subject: undefined };
   if (runnerState().stopping) {
     throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: the run of "${agent.id}" starts after the restart.`);
   }
@@ -769,27 +790,32 @@ export function launchRun(params: {
         );
       }
       const at = now();
+      const only = params.claimIds;
+      const among = only ? ` AND id IN (${only.map(() => "?").join(", ")})` : "";
+      // One subject per run: the one it is given, else the one of the oldest task it would claim.
+      const oldest = db
+        .prepare(`SELECT subject_id FROM tasks WHERE room = ? AND agent_id = ? AND status = 'pending'${among} ORDER BY id LIMIT 1`)
+        .get(room.name, agent.id, ...(only ?? [])) as { subject_id: number | null } | undefined;
+      const subject = params.subjectId !== undefined ? params.subjectId : (oldest?.subject_id ?? null);
       const runId = Number(
         db
           .prepare(
-            "INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason, resources) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
+            `INSERT INTO runs (room, agent_id, engine, task, status, started_at, reason, resources, subject_id)
+             VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
           )
-          .run(room.name, agent.id, engine.name, task, at, params.reason ?? null, JSON.stringify(agent.resources))
+          .run(room.name, agent.id, engine.name, task, at, params.reason ?? null, JSON.stringify(agent.resources), subject)
           .lastInsertRowid,
       );
       db.prepare(
-        `INSERT INTO tasks (room, agent_id, source, text, status, run_id, created_at, updated_at)
-         VALUES (?, ?, 'manual', ?, 'in_progress', ?, ?, ?)`,
-      ).run(room.name, agent.id, task, runId, at, at);
-      const only = params.claimIds;
+        `INSERT INTO tasks (room, agent_id, source, text, status, run_id, subject_id, created_at, updated_at)
+         VALUES (?, ?, 'manual', ?, 'in_progress', ?, ?, ?, ?)`,
+      ).run(room.name, agent.id, task, runId, subject, at, at);
       const claimed = db
         .prepare(
           `UPDATE tasks SET status = 'in_progress', run_id = ?, updated_at = ?
-           WHERE room = ? AND agent_id = ? AND status = 'pending'${
-             only ? ` AND id IN (${only.map(() => "?").join(", ")})` : ""
-           } RETURNING *`,
+           WHERE room = ? AND agent_id = ? AND status = 'pending' AND subject_id IS ?${among} RETURNING *`,
         )
-        .all(runId, at, room.name, agent.id, ...(only ?? [])) as TaskRow[];
+        .all(runId, at, room.name, agent.id, subject, ...(only ?? [])) as TaskRow[];
       return {
         run: db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as RunRow,
         mailbox: claimed.sort((a, b) => a.id - b.id),
@@ -805,7 +831,7 @@ export function launchRun(params: {
   // The room folders are read-only, like every --add-dir (write-guard.ts).
   const readDirs = [...(folders.own ? [folders.own] : []), ...folders.workedFor.map((each) => each.path)];
   const runAgent = readDirs.length > 0 ? { ...agent, addDirs: [...agent.addDirs, ...readDirs] } : agent;
-  const prompt = params.prompt(run.id, mailbox, folders);
+  const prompt = params.prompt(run.id, mailbox, folders, run.subject_id);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
   const retry = (params.attempt ?? 0) === 0 ? () => launchRun({ ...params, attempt: 1 }) : null;
   const execution = execute({
@@ -1199,6 +1225,8 @@ async function execute(p: ExecuteParams): Promise<void> {
     }
   })();
 
+  // The end of a run may be what closes a subject whose work is validated.
+  settleSubject(db, run.subject_id);
   wake(p);
   await notifyPendingApprovals(db, p.send, p.deps.env);
   // What the bot sends on its own goes into the conversation MyHQ keeps, so

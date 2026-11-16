@@ -5,6 +5,7 @@ import { strings } from "../ui/strings";
 import type { Env, HqConfig } from "./config";
 import { now, type ApprovalRow, type Db } from "./db";
 import type { Agent } from "./rooms";
+import { settleSubject } from "./subjects";
 
 // An approved item executed without a model turn: an agent with
 // `onApproval: "command"` names a command of its home (`approvalCommand`,
@@ -152,20 +153,22 @@ export function startApprovalCommand(p: {
         const note = result.note ?? strings.tasks.commandDone;
         db.transaction(() => {
           db.prepare(
-            `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, note, created_at, updated_at)
-             VALUES (?, ?, 'approval', ?, ?, 'done', ?, ?, ?)`,
-          ).run(row.room, row.agent_id, row.id, text, note, at, at);
+            `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, note, subject_id, created_at, updated_at)
+             VALUES (?, ?, 'approval', ?, ?, 'done', ?, ?, ?, ?)`,
+          ).run(row.room, row.agent_id, row.id, text, note, row.subject_id ?? null, at, at);
           db.prepare("UPDATE approval_commands SET ok = 1, note = ?, ended_at = ? WHERE approval_id = ?").run(note, at, row.id);
         }).immediate();
+        // The item is executed: its subject may be done with.
+        settleSubject(db, row.subject_id ?? null);
         return;
       }
       const error = result.error.slice(0, ERROR_MAX);
       console.error(`[approvals] the approval command of item #${row.id} failed: ${error}; the agent executes it`);
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
-           VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?)`,
-        ).run(row.room, row.agent_id, row.id, strings.tasks.executeAfterCommand(row.id, row.title, error), at, at);
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'approval', ?, ?, 'pending', ?, ?, ?)`,
+        ).run(row.room, row.agent_id, row.id, strings.tasks.executeAfterCommand(row.id, row.title, error), row.subject_id ?? null, at, at);
         db.prepare("UPDATE approval_commands SET ok = 0, error = ?, ended_at = ? WHERE approval_id = ?").run(error, at, row.id);
       }).immediate();
       p.wake();

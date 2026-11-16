@@ -11,6 +11,11 @@
 //   (decideProposal): the exchanges of the current discussion up to and
 //   including the question whose answer proposed the run.
 //
+// Those are the rules of the general subject (subjects.ts), restricted to its
+// own exchanges. A run of another subject gets the exchanges of that subject,
+// all of them (up to the proposing question for a run it proposed): the
+// subject is the topic, its whole discussion is the brief.
+//
 // Only this agent's own exchanges of the room (same room, same agent id), done,
 // answered, not cleared. Built when the run starts, never when the revision is
 // decided, so that what was said in between counts. Pure but for the reads.
@@ -55,39 +60,50 @@ function renderExchange(each: Exchange): string {
 /**
  * The block of the discussion for the prompt of a run of this agent, or null
  * when no exchange applies (the prompt is then left as it always was).
- * `upToQuestionId` is the question whose answer proposed the run, if any.
+ * `upToQuestionId` is the question whose answer proposed the run, if any;
+ * `subjectId` the subject of the run, null or left out: the general one.
  */
 export function discussionHandoff(
   db: Db,
-  params: { room: string; agentId: string; mailbox: readonly TaskRow[]; upToQuestionId?: number },
+  params: { room: string; agentId: string; mailbox: readonly TaskRow[]; upToQuestionId?: number; subjectId?: number | null },
 ): string | null {
-  const since = revisionSince(db, params.mailbox);
+  const subject = params.subjectId ?? null;
   const upTo = params.upToQuestionId;
   const wanted: string[] = [];
-  const args: (string | number)[] = [params.room, params.agentId];
-  if (since !== null) {
-    wanted.push("q.started_at >= ?");
-    args.push(since);
-  }
-  if (upTo !== undefined) {
-    wanted.push("q.id <= ?");
-    args.push(upTo);
+  const args: (string | number | null)[] = [params.room, params.agentId, subject];
+  if (subject !== null) {
+    wanted.push(upTo !== undefined ? "q.id <= ?" : "1 = 1");
+    if (upTo !== undefined) args.push(upTo);
+  } else {
+    const since = revisionSince(db, params.mailbox);
+    if (since !== null) {
+      wanted.push("q.started_at >= ?");
+      args.push(since);
+    }
+    if (upTo !== undefined) {
+      wanted.push("q.id <= ?");
+      args.push(upTo);
+    }
   }
   if (wanted.length === 0) return null;
   const rows = db
     .prepare(
       `SELECT q.id, q.question, q.answer, q.started_at FROM agent_questions q
-       WHERE q.room = ? AND q.agent_id = ? AND q.status = 'done' AND q.answer IS NOT NULL AND q.cleared_at IS NULL
-         AND (${wanted.join(" OR ")}) ORDER BY q.id`,
+       WHERE q.room = ? AND q.agent_id = ? AND q.subject_id IS ? AND q.status = 'done' AND q.answer IS NOT NULL
+         AND q.cleared_at IS NULL AND (${wanted.join(" OR ")}) ORDER BY q.id`,
     )
     .all(...args) as Exchange[];
   if (rows.length === 0) return null;
-
+  const title =
+    subject === null
+      ? null
+      : (db.prepare("SELECT title FROM subjects WHERE id = ?").get(subject) as { title: string | null } | undefined)?.title;
+  const intro = title ? `${INTRO}\n\nThe subject of this run: "${title}".` : INTRO;
   const rendered = rows.map(renderExchange);
   // The oldest go first; the newest always stays, whatever its size.
   let first = 0;
-  const length = () => INTRO.length + 120 + rendered.slice(first).reduce((sum, text) => sum + text.length + 2, 0);
+  const length = () => intro.length + 120 + rendered.slice(first).reduce((sum, text) => sum + text.length + 2, 0);
   while (first < rendered.length - 1 && length() > HANDOFF_BLOCK_CHARS) first++;
   const left = first > 0 ? [`(${first} earlier exchange${first === 1 ? "" : "s"} left out to keep this short.)`] : [];
-  return [INTRO, ...left, ...rendered.slice(first)].join("\n\n");
+  return [intro, ...left, ...rendered.slice(first)].join("\n\n");
 }

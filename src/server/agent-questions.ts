@@ -9,9 +9,19 @@ import { ZERO_USAGE, type Engine, type RunEvent, type RunInput, type Usage } fro
 import { HqError } from "./errors";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
 import { languageName } from "./onboarding";
+import { QUESTION_TYPE } from "./questions";
 import type { Agent, Room } from "./rooms";
-import { parseRunProposal, RUN_PROPOSAL_TAG } from "./run-proposal";
+import { decideApproval, decisionSchema } from "./approvals";
+import { parseRunProposal, REVISION_PROPOSAL_TAG, RUN_PROPOSAL_TAG } from "./run-proposal";
 import { agentEnv, findAgent, isStopping, startRun, todayLine, type RunnerDeps } from "./runner";
+import {
+  otherSubjects,
+  readSubject,
+  reopenSubject,
+  subjectItems,
+  subjectTitleFrom,
+  type SubjectContext,
+} from "./subjects";
 
 // Questions of the owner to an agent (docs/architecture.md, "Questions to an
 // agent"). The agent answers with its own role, memory, model and effort, in
@@ -121,6 +131,8 @@ export function activeRunOf(db: Db, room: string, agentId: string): ActiveRun | 
 
 export const askSchema = z.strictObject({
   question: z.string().trim().min(1).max(QUESTION_MAX_CHARS),
+  /** The subject the question is asked in (subjects.ts); null or left out: the general one. */
+  subject: z.number().int().positive().nullable().optional(),
 });
 
 export const QUESTION_STATUSES = ["running", "done", "failed"] as const;
@@ -136,8 +148,12 @@ export type ProposalState = (typeof PROPOSAL_STATES)[number];
 export const proposalActionSchema = z.strictObject({ action: z.enum(["launch", "dismiss"]) });
 export type ProposalAction = z.infer<typeof proposalActionSchema>["action"];
 
-/** The run an answer proposes (`question_proposals`, migration 20). */
-export type ProposalDto = { task: string; state: ProposalState; runId: number | null; decidedAt: string | null };
+/**
+ * The run an answer proposes (`question_proposals`, migration 20), or the
+ * revision of an item (`reviseId`, migration 28): `task` is then the note of
+ * that revision, and `runId` the revision run once one started.
+ */
+export type ProposalDto = { task: string; state: ProposalState; runId: number | null; decidedAt: string | null; reviseId: number | null };
 
 export type QuestionRow = {
   id: number;
@@ -160,16 +176,20 @@ export type QuestionRow = {
   started_at: string;
   ended_at: string | null;
   cleared_at: string | null;
+  /** The subject it was asked in (subjects.ts), null: the general one. */
+  subject_id: number | null;
   /** The run its answer proposes, joined from `question_proposals` (QUESTION_SELECT); absent or null: none. */
   proposal_task?: string | null;
   proposal_state?: ProposalState | null;
   proposal_run_id?: number | null;
   proposal_decided_at?: string | null;
+  proposal_revise_id?: number | null;
 };
 
 /** Selects questions as `q` with the run their answer proposes; append a WHERE clause. */
 const QUESTION_SELECT = `SELECT q.*, p.task AS proposal_task, p.state AS proposal_state, p.run_id AS proposal_run_id,
-  p.decided_at AS proposal_decided_at FROM agent_questions q LEFT JOIN question_proposals p ON p.question_id = q.id`;
+  p.decided_at AS proposal_decided_at, p.revise_id AS proposal_revise_id
+  FROM agent_questions q LEFT JOIN question_proposals p ON p.question_id = q.id`;
 
 /** A question as the API gives it. */
 export type QuestionDto = {
@@ -204,6 +224,7 @@ export function toQuestion(row: QuestionRow): QuestionDto {
             state: row.proposal_state,
             runId: row.proposal_run_id ?? null,
             decidedAt: row.proposal_decided_at ?? null,
+            reviseId: row.proposal_revise_id ?? null,
           }
         : null,
   };
@@ -238,33 +259,43 @@ export async function questionsIdle(): Promise<void> {
   while (state.executing.size > 0) await Promise.allSettled([...state.executing]);
 }
 
-/** The question of this agent in progress, if any. */
-function runningQuestion(db: Db, room: string, agentId: string): QuestionRow | undefined {
+/** The question of this agent in progress in this subject (null: the general one), if any. */
+function runningQuestion(db: Db, room: string, agentId: string, subject: number | null): QuestionRow | undefined {
   return db
-    .prepare("SELECT * FROM agent_questions WHERE room = ? AND agent_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
-    .get(room, agentId) as QuestionRow | undefined;
+    .prepare(
+      "SELECT * FROM agent_questions WHERE room = ? AND agent_id = ? AND subject_id IS ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+    )
+    .get(room, agentId, subject) as QuestionRow | undefined;
 }
 
-/** The current discussion with an agent (since its last reset), oldest first, the latest DISCUSSION_LIMIT. */
-export function readDiscussion(db: Db, room: string, agentId: string): QuestionRow[] {
+/**
+ * The current discussion with an agent in a subject (null: the general one,
+ * since its last reset), oldest first, the latest DISCUSSION_LIMIT.
+ */
+export function readDiscussion(db: Db, room: string, agentId: string, subject: number | null = null): QuestionRow[] {
   const rows = db
-    .prepare(`${QUESTION_SELECT} WHERE q.room = ? AND q.agent_id = ? AND q.cleared_at IS NULL ORDER BY q.id DESC LIMIT ?`)
-    .all(room, agentId, DISCUSSION_LIMIT) as QuestionRow[];
+    .prepare(
+      `${QUESTION_SELECT} WHERE q.room = ? AND q.agent_id = ? AND q.subject_id IS ? AND q.cleared_at IS NULL ORDER BY q.id DESC LIMIT ?`,
+    )
+    .all(room, agentId, subject, DISCUSSION_LIMIT) as QuestionRow[];
   return rows.reverse();
 }
 
 /**
- * A new discussion: the questions of the current one leave the sheet (and
- * the context given to the agent), their rows stay for the meter. Refused
- * while a question is in progress. Returns how many questions were cleared.
+ * A new discussion, in the general subject only (a subject is archived, never
+ * reset): its questions leave the sheet (and the context given to the agent),
+ * their rows stay for the meter. Refused while a question of the general
+ * subject is in progress. Returns how many questions were cleared.
  */
 export function resetDiscussion(db: Db, room: string, agentId: string): number {
   return db
     .transaction(() => {
-      const busy = runningQuestion(db, room, agentId);
+      const busy = runningQuestion(db, room, agentId, null);
       if (busy) throw busyError(agentId, busy.id);
       return db
-        .prepare("UPDATE agent_questions SET cleared_at = ? WHERE room = ? AND agent_id = ? AND cleared_at IS NULL")
+        .prepare(
+          "UPDATE agent_questions SET cleared_at = ? WHERE room = ? AND agent_id = ? AND subject_id IS NULL AND cleared_at IS NULL",
+        )
         .run(now(), room, agentId).changes;
     })
     .immediate();
@@ -274,7 +305,7 @@ function busyError(agentId: string, questionId: number): HqError {
   return new HqError(
     "QUESTION_BUSY",
     409,
-    `Agent "${agentId}" is already answering a question (#${questionId}): one question at a time per agent.`,
+    `Agent "${agentId}" is already answering a question (#${questionId}) in this subject: one question at a time per subject.`,
   );
 }
 
@@ -318,6 +349,16 @@ export function questionSystemText(language: string, web = false): string {
     "",
     "The owner reads your sentence and the task, and confirms before anything starts: nothing runs without them. One block at most, only for work, never for a plain question. When you cannot tell, answer and ask whether they want you to start a run.",
     "",
+    "### A change to an item you delivered",
+    "",
+    `When the owner asks to change something in an item you delivered in this discussion (one of the items of this subject listed below, pending or already decided), do not propose a new run: propose to revise that item. Say in one short sentence that you propose this revision, which starts only once the owner confirms it, then end your answer with this block instead, with the number of the item, alone on its last lines, outside any code block:`,
+    "",
+    `<${REVISION_PROPOSAL_TAG} item="12">`,
+    "The note of the revision, in the language of your answer: your own recap of what the owner asks to change in that item, complete and self-contained, with the details of the discussion that matter.",
+    `</${REVISION_PROPOSAL_TAG}>`,
+    "",
+    "Once the owner confirms, MyHQ sends the item back to you for a revision with that note, and the run that revises it gets this discussion. Only an item of the list below; for a new piece, or when the owner asks for a different subject, propose a run.",
+    "",
     "### What follows this discussion",
     "",
     "This discussion is handed to the run that revises an item you delivered, and to a run you propose here: what was agreed here is not lost. So never ask the owner to copy or repeat what was agreed into a task or a note. The task of a proposed run is still a self-contained recap of what was agreed.",
@@ -330,6 +371,15 @@ function proposalNote(proposal: ProposalDto): string {
     proposal.task.length > QUESTION_CONTEXT_PROPOSAL_CHARS
       ? `${proposal.task.slice(0, QUESTION_CONTEXT_PROPOSAL_CHARS)}... [cut]`
       : proposal.task;
+  if (proposal.reviseId !== null) {
+    const fate =
+      proposal.state === "launched"
+        ? `The owner confirmed it: item #${proposal.reviseId} went back to you for a revision.`
+        : proposal.state === "dismissed"
+          ? "The owner set it aside, to talk about it first."
+          : "The owner has not decided yet.";
+    return `[You proposed to revise item #${proposal.reviseId}: "${task}". ${fate}]`;
+  }
   const fate =
     proposal.state === "launched"
       ? `The owner started it (run #${proposal.runId ?? "?"}).`
@@ -361,7 +411,7 @@ function runStateText(run: ActiveRun | null, checkedAt: string): string {
   }
   lines.push(
     `This run is still going: never say you have no run in progress or that run #${run.id} ended. When the owner asks where you stand, say it runs and what it is doing or waiting for, as far as the lines above show, without inventing more.`,
-    `Do not propose a run (no block): MyHQ refuses a second run of an agent while one runs. If the owner asks for work, say it can be started once run #${run.id} ends.`,
+    `Do not propose a run (no ${RUN_PROPOSAL_TAG} block): MyHQ refuses a second run of an agent while one runs. If the owner asks for work, say it can be started once run #${run.id} ends. A revision of an item (a ${REVISION_PROPOSAL_TAG} block) can still be proposed: it waits for the end of run #${run.id}.`,
   );
   return lines.join("\n");
 }
@@ -377,12 +427,26 @@ export function buildQuestionPrompt(params: {
   run?: ActiveRun | null;
   /** When the run state was read. */
   checkedAt?: string;
+  /** The subject the question is asked in (subjects.ts); null or left out: the general one. */
+  subject?: { title: string | null } | null;
+  /** The agent's other open subjects; left out: none. */
+  subjects?: readonly SubjectContext[];
+  /** The deliverable items of this subject, newest first: what a revision may name; left out: not given. */
+  items?: readonly { id: number; type: string; title: string; status: string }[];
   memory: string;
   today: string;
 }): string {
   const lines = [
     `You are ${params.agent.name} (agent "${params.agent.id}") in room "${params.room.name}" of MyHQ. The owner asks you a question: this is not a run.`,
   ];
+  const others = params.subjects ?? [];
+  if (params.subject) {
+    lines.push(
+      `This discussion is your subject ${params.subject.title ? `"${params.subject.title}"` : "(no title yet)"} with the owner: one of the topics you have going with them, each in its own tab, with its own exchanges, runs and items.`,
+    );
+  } else if (others.length > 0) {
+    lines.push("This discussion is your general one with the owner; your other subjects with them are listed below.");
+  }
   if (params.previous.length > 0) {
     lines.push("", "The discussion so far:");
     for (const exchange of params.previous) {
@@ -396,6 +460,26 @@ export function buildQuestionPrompt(params: {
   }
   lines.push("", "The owner's question:", params.question);
   if (params.run !== undefined) lines.push("", runStateText(params.run, params.checkedAt ?? now()));
+  if (params.items) {
+    if (params.items.length === 0) {
+      lines.push("", "You have delivered no item in this subject yet: there is nothing to revise here.");
+    } else {
+      lines.push("", "The items you delivered in this subject, newest first (a revision names one of them):");
+      for (const item of params.items) lines.push(`- #${item.id} "${item.title}" (${item.type}, ${item.status})`);
+    }
+  }
+  if (others.length > 0) {
+    lines.push("", "Your other open subjects with the owner, each a discussion of its own:");
+    for (const other of others) {
+      const title = other.title ? `"${other.title}"` : "(no title yet)";
+      const work = other.working ? "a run of yours is going on it" : "no run on it";
+      const item = other.lastItem ? `its latest item: #${other.lastItem.id} "${other.lastItem.title}" (${other.lastItem.status})` : "no item yet";
+      lines.push(`- ${title} (subject #${other.id}): ${work}; ${item}.`);
+    }
+    lines.push(
+      "When the owner's message clearly belongs to one of these other subjects, say so in one sentence (name that subject, so the owner can write there), then answer anyway.",
+    );
+  }
   lines.push("", params.memory, "", params.today);
   return lines.join("\n");
 }
@@ -409,17 +493,25 @@ function homeLanguage(home: string): string {
 }
 
 /**
- * Asks an agent a question: records it (`running`) and lets the agent answer
- * in the background. Refused while the app stops, and while the agent answers
- * another one (QUESTION_BUSY): one at a time per agent. A run of the agent in
- * progress does not refuse it: the agent is told about that run, and its
- * answer proposes no run then (`startRun` would refuse it, AGENT_BUSY).
- * Returns the question as recorded.
+ * Asks an agent a question in one of its subjects (`subject`, null or left
+ * out: the general one): records it (`running`) and lets the agent answer in
+ * the background. Refused while the app stops, and while the agent answers
+ * another one in the same subject (QUESTION_BUSY): one at a time per subject.
+ * A message in an archived subject opens it again, and the first message in a
+ * subject without a title gives it one. A run of the agent in progress does
+ * not refuse it: the agent is told about that run, and its answer proposes no
+ * run then (`startRun` would refuse it, AGENT_BUSY). Returns the question as
+ * recorded.
  */
-export function askAgent(request: { room: string; agent: string; question: string }, deps: QuestionDeps = {}): QuestionRow {
+export function askAgent(
+  request: { room: string; agent: string; question: string; subject?: number | null },
+  deps: QuestionDeps = {},
+): QuestionRow {
   const config = deps.config ?? getConfig();
   const { room, agent } = findAgent(config, request.room, request.agent);
-  const question = askSchema.parse({ question: request.question }).question;
+  const parsed = askSchema.parse({ question: request.question, subject: request.subject });
+  const question = parsed.question;
+  const subject = parsed.subject ?? null;
   if (isStopping()) {
     throw new HqError("SHUTTING_DOWN", 503, `MyHQ is stopping: ask "${agent.id}" again after the restart.`);
   }
@@ -427,23 +519,30 @@ export function askAgent(request: { room: string; agent: string; question: strin
   const engine = deps.engine ?? new ClaudeEngine(config.claudeBin);
   const { row, previous } = db
     .transaction(() => {
-      const busy = runningQuestion(db, room.name, agent.id);
+      if (subject !== null) {
+        const found = readSubject(db, room.name, agent.id, subject);
+        reopenSubject(db, found.id);
+        if (found.title === null) db.prepare("UPDATE subjects SET title = ? WHERE id = ?").run(subjectTitleFrom(question), found.id);
+      }
+      const busy = runningQuestion(db, room.name, agent.id, subject);
       if (busy) throw busyError(agent.id, busy.id);
       const answered = (
         db
           .prepare(
             `${QUESTION_SELECT}
-             WHERE q.room = ? AND q.agent_id = ? AND q.cleared_at IS NULL AND q.status = 'done' AND q.answer IS NOT NULL
+             WHERE q.room = ? AND q.agent_id = ? AND q.subject_id IS ? AND q.cleared_at IS NULL AND q.status = 'done'
+               AND q.answer IS NOT NULL
              ORDER BY q.id DESC LIMIT ?`,
           )
-          .all(room.name, agent.id, QUESTION_CONTEXT_EXCHANGES) as QuestionRow[]
+          .all(room.name, agent.id, subject, QUESTION_CONTEXT_EXCHANGES) as QuestionRow[]
       ).map((each) => ({ question: each.question, answer: each.answer ?? "", proposal: toQuestion(each).proposal }));
       const id = Number(
         db
           .prepare(
-            "INSERT INTO agent_questions (room, agent_id, question, status, engine, model, started_at) VALUES (?, ?, ?, 'running', ?, ?, ?)",
+            `INSERT INTO agent_questions (room, agent_id, question, status, engine, model, started_at, subject_id)
+             VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
           )
-          .run(room.name, agent.id, question, engine.name, agent.model, now()).lastInsertRowid,
+          .run(room.name, agent.id, question, engine.name, agent.model, now(), subject).lastInsertRowid,
       );
       return {
         row: db.prepare("SELECT * FROM agent_questions WHERE id = ?").get(id) as QuestionRow,
@@ -528,6 +627,7 @@ async function answerQuestion(p: {
       empty: "Your memory: empty.",
       heading: "Your memory, kept between runs (read only here):",
     });
+    const subject = row.subject_id;
     const prompt = buildQuestionPrompt({
       room,
       agent,
@@ -535,6 +635,9 @@ async function answerQuestion(p: {
       previous: p.previous,
       run: activeRunOf(db, room.name, agent.id),
       checkedAt: now(),
+      subject: subject === null ? null : readSubject(db, room.name, agent.id, subject),
+      subjects: otherSubjects(db, room.name, agent.id, subject),
+      items: subjectItems(db, room.name, agent.id, subject),
       memory,
       today: todayLine(new Date(), liveConfig(config).timeZone, homeLanguage(config.home)),
     });
@@ -628,13 +731,35 @@ async function answerQuestion(p: {
   ).changes;
   // Recorded once the answer is: a question closed meanwhile (the app stopped) proposes nothing,
   // and neither does one answered while the agent has a run in progress, which the agent lock would refuse.
-  if (closed > 0 && parsed?.task && !activeRunOf(db, room.name, agent.id)) {
-    db.prepare("INSERT OR IGNORE INTO question_proposals (question_id, task, state, created_at) VALUES (?, ?, 'pending', ?)").run(
-      row.id,
-      parsed.task,
-      now(),
-    );
+  // A revision waits for that run instead: it is kept, when it names an item it may revise.
+  const revise = parsed?.revise;
+  const proposes = revise !== undefined ? revisable(db, row, revise) : !activeRunOf(db, room.name, agent.id);
+  if (closed > 0 && parsed?.task && proposes) {
+    db.prepare(
+      "INSERT OR IGNORE INTO question_proposals (question_id, task, state, created_at, revise_id) VALUES (?, ?, 'pending', ?, ?)",
+    ).run(row.id, parsed.task, now(), revise ?? null);
   }
+}
+
+/**
+ * Whether a revision proposed in answer to `question` may name this item: a
+ * deliverable of the same agent and the same subject (subjectItems: no item
+ * of questions, no informational one), pending or already decided. Any other
+ * number proposes nothing: the answer stays a plain answer.
+ */
+function revisable(db: Db, question: QuestionRow, itemId: number): boolean {
+  const item = db
+    .prepare("SELECT room, agent_id, subject_id, type, status FROM approvals WHERE id = ?")
+    .get(itemId) as { room: string; agent_id: string; subject_id: number | null; type: string; status: string } | undefined;
+  return (
+    item !== undefined &&
+    item.room === question.room &&
+    item.agent_id === question.agent_id &&
+    item.subject_id === question.subject_id &&
+    item.type !== QUESTION_TYPE &&
+    item.status !== "unseen" &&
+    item.status !== "seen"
+  );
 }
 
 /** A question of this agent with the run its answer proposes, or undefined. */
@@ -651,7 +776,13 @@ function readQuestion(db: Db, room: string, agentId: string, id: number): Questi
  * same way, and the proposal then stays pending), with the agent's task;
  * « On en parle d'abord » (`dismiss`) sets it aside. This is the only way a
  * proposed run starts: an answer never starts one by itself. A proposal is
- * decided once (PROPOSAL_DECIDED).
+ * decided once (PROPOSAL_DECIDED). The run carries the subject the question
+ * was asked in (subjects.ts).
+ *
+ * A proposed revision (`reviseId`) is confirmed the same way, and is then the
+ * « revise » decision on that item with the agent's note (decideApproval, its
+ * checks and its wake-up, as the desk's button), instead of a run started by
+ * hand: the revision run, when the agent is woken at once, is the one returned.
  */
 export function decideProposal(
   request: { room: string; agent: string; questionId: number; action: ProposalAction },
@@ -671,8 +802,25 @@ export function decideProposal(
   }
   // Everything below is synchronous: no other request of this process decides it in between.
   let run: RunRow | null = null;
-  if (request.action === "launch") {
-    run = startRun({ room: room.name, agent: agent.id, task: proposal.task }, { ...deps, config, discussionUpTo: question.id });
+  if (request.action === "launch" && proposal.reviseId !== null) {
+    decideApproval(db, proposal.reviseId, decisionSchema.parse({ decision: "revise", note: proposal.task }), config, deps);
+    run =
+      (db
+        .prepare(
+          `SELECT r.* FROM tasks t JOIN runs r ON r.id = t.run_id
+           WHERE t.source = 'revise' AND t.ref_id = ? AND t.status = 'in_progress' ORDER BY t.id DESC LIMIT 1`,
+        )
+        .get(proposal.reviseId) as RunRow | undefined) ?? null;
+    db.prepare("UPDATE question_proposals SET state = 'launched', run_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
+      run?.id ?? null,
+      now(),
+      question.id,
+    );
+  } else if (request.action === "launch") {
+    run = startRun(
+      { room: room.name, agent: agent.id, task: proposal.task },
+      { ...deps, config, discussionUpTo: question.id, subject: question.subject_id },
+    );
     db.prepare("UPDATE question_proposals SET state = 'launched', run_id = ?, decided_at = ? WHERE question_id = ? AND state = 'pending'").run(
       run.id,
       now(),

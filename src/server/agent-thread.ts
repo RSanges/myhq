@@ -1,13 +1,16 @@
 import { readDiscussion, toQuestion, type QuestionDto } from "./agent-questions";
 import type { ApprovalStatus, Db, RunRow, RunStatus } from "./db";
 import { QUESTION_TYPE } from "./questions";
+import { readSubject, subjectTabs, toSubject, type SubjectDto, type SubjectTabDto } from "./subjects";
 
 // The thread of an agent's sheet (docs/architecture.md, "The sheet of an
 // agent"): one chronological view of what the owner and the agent said and
-// did, read from the tables that already hold it, never copied. The owner's
-// questions and their answers (since the last « Nouvelle discussion »), the
-// agent's latest runs with the steps it announced (`hq_status`) and the latest
-// items it submitted, its questions (`hq_ask`) among them.
+// did in one subject (subjects.ts; null: the general one), read from the
+// tables that already hold it, never copied. The owner's questions and their
+// answers (since the last « Nouvelle discussion » for the general subject),
+// the agent's latest runs of that subject with the steps it announced
+// (`hq_status`) and the latest items they submitted, its questions (`hq_ask`)
+// among them; with the tabs of the sheet, one per open subject.
 
 /** The latest runs of the agent the thread shows. */
 export const THREAD_RUNS = 15;
@@ -47,7 +50,15 @@ export type ThreadEntry =
   | { kind: "run"; at: string; run: ThreadRun }
   | { kind: "item"; at: string; item: ThreadItem };
 
-export type ThreadDto = { entries: ThreadEntry[]; busy: boolean };
+export type ThreadDto = {
+  entries: ThreadEntry[];
+  /** A question of this subject waits for its answer. */
+  busy: boolean;
+  /** The subject read, null: the general one. */
+  subject: SubjectDto | null;
+  /** The tabs: the general subject, then the open ones. */
+  subjects: SubjectTabDto[];
+};
 
 /** At the same time, a question comes before the run and the item it led to. */
 const KIND_ORDER: Record<ThreadEntry["kind"], number> = { question: 0, run: 1, item: 2 };
@@ -55,17 +66,18 @@ const KIND_ORDER: Record<ThreadEntry["kind"], number> = { question: 0, run: 1, i
 const entryId = (entry: ThreadEntry): number =>
   entry.kind === "question" ? entry.question.id : entry.kind === "run" ? entry.run.id : entry.item.id;
 
-/** The thread of an agent, oldest first. */
-export function readThread(db: Db, room: string, agentId: string): ThreadDto {
-  const questions = readDiscussion(db, room, agentId).map(toQuestion);
+/** The thread of an agent in a subject (null: the general one; SUBJECT_NOT_FOUND for one of another agent), oldest first. */
+export function readThread(db: Db, room: string, agentId: string, subjectId: number | null = null): ThreadDto {
+  const subject = subjectId === null ? null : toSubject(readSubject(db, room, agentId, subjectId));
+  const questions = readDiscussion(db, room, agentId, subjectId).map(toQuestion);
   const runs = db
-    .prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? ORDER BY id DESC LIMIT ?")
-    .all(room, agentId, THREAD_RUNS) as RunRow[];
+    .prepare("SELECT * FROM runs WHERE room = ? AND agent_id = ? AND subject_id IS ? ORDER BY id DESC LIMIT ?")
+    .all(room, agentId, subjectId, THREAD_RUNS) as RunRow[];
   const items = db
     .prepare(
-      "SELECT id, type, title, status, created_at FROM approvals WHERE room = ? AND agent_id = ? ORDER BY id DESC LIMIT ?",
+      "SELECT id, type, title, status, created_at FROM approvals WHERE room = ? AND agent_id = ? AND subject_id IS ? ORDER BY id DESC LIMIT ?",
     )
-    .all(room, agentId, THREAD_ITEMS) as { id: number; type: string; title: string; status: ApprovalStatus; created_at: string }[];
+    .all(room, agentId, subjectId, THREAD_ITEMS) as { id: number; type: string; title: string; status: ApprovalStatus; created_at: string }[];
 
   const statusesOf = db.prepare("SELECT text, created_at FROM run_statuses WHERE run_id = ? ORDER BY id DESC LIMIT ?");
   const countOf = db.prepare("SELECT COUNT(*) AS n FROM run_statuses WHERE run_id = ?");
@@ -113,5 +125,10 @@ export function readThread(db: Db, room: string, agentId: string): ThreadDto {
   entries.sort(
     (a, b) => a.at.localeCompare(b.at) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || entryId(a) - entryId(b),
   );
-  return { entries, busy: questions.some((question) => question.status === "running") };
+  return {
+    entries,
+    busy: questions.some((question) => question.status === "running"),
+    subject,
+    subjects: subjectTabs(db, room, agentId),
+  };
 }
