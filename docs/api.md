@@ -1481,7 +1481,8 @@ Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
 A question of the owner to an agent, answered by the agent without a run (no
 agent lock, no daily cap, nothing in `runs`, nobody woken), read-only, and
 metered (`architecture.md`, "Questions to an agent"). One discussion per
-agent. A question has this shape:
+subject of the agent (see "Subjects" below; the general subject when none is
+named). A question has this shape:
 
 ```json
 {
@@ -1505,41 +1506,51 @@ failed), `interrupted` (the app stopped during it). `model` is the one the CLI
 reported, the agent's alias until then. `proposal` is the run the answer
 proposes when the message asked for work (`architecture.md`, "A task or a
 discussion"), null otherwise: `{ "task": "...", "state": "pending", "runId":
-null, "decidedAt": null }`, `state` being `pending`, `launched` (with
-`runId`) or `dismissed`. The answer never holds the block of the proposal.
+null, "decidedAt": null, "reviseId": null }`, `state` being `pending`,
+`launched` (with `runId`) or `dismissed`. With `reviseId`, the answer proposes
+to revise that item instead of a run, and `task` is the note of the revision
+(`runId`: the revision run, once one started). The answer never holds the
+block of the proposal.
 
 #### `GET /api/rooms/[room]/agents/[agent]/ask`
 
-The current discussion (since the last reset), oldest first, the latest 50.
+The current discussion of a subject (`?subject=<id>`; left out, the general
+subject since its last reset), oldest first, the latest 50.
 
 ```json
 { "agent": { "room": "demo", "id": "scout", "name": "Scout" }, "questions": [{ "...": "question shape" }], "busy": false }
 ```
 
-`busy`: a question waits for its answer. Errors: `ROOM_NOT_FOUND`,
-`ROOM_INVALID`, `AGENT_NOT_FOUND`.
+`busy`: a question waits for its answer. Errors: `INVALID_INPUT` (a subject
+that is not a positive integer), `ROOM_NOT_FOUND`, `ROOM_INVALID`,
+`AGENT_NOT_FOUND`, `SUBJECT_NOT_FOUND`.
 
 #### `POST /api/rooms/[room]/agents/[agent]/ask`
 
-Body: `{ "question": "How do you make your videos?" }` (trimmed, 1 to 4000
-characters). Response `202` with the question as recorded, `running`: the
-agent answers in the background, read the discussion again for the answer.
+Body: `{ "question": "How do you make your videos?", "subject": 4 }` (the
+question trimmed, 1 to 4000 characters; `subject` optional, null or left out:
+the general subject). Response `202` with the question as recorded,
+`running`: the agent answers in the background, read the discussion again for
+the answer. A question in an archived subject opens it again; the first one in
+a subject without a title gives it its title.
 
 ```json
 { "question": { "id": 8, "status": "running", "answer": null, "...": "question shape" } }
 ```
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`,
-`AGENT_NOT_FOUND`, `QUESTION_BUSY` (the agent answers another question),
-`SHUTTING_DOWN`. A run in progress and the daily cap never refuse a question.
+`AGENT_NOT_FOUND`, `SUBJECT_NOT_FOUND`, `QUESTION_BUSY` (the agent answers
+another question in the same subject), `SHUTTING_DOWN`. A run in progress and
+the daily cap never refuse a question.
 
 #### `DELETE /api/rooms/[room]/agents/[agent]/ask`
 
-« Nouvelle discussion »: the questions leave the discussion (and the context
-the agent gets); their rows stay, so their cost stays in `/api/usage`.
+« Nouvelle discussion », in the general subject only (a subject is archived,
+never reset): its questions leave the discussion (and the context the agent
+gets); their rows stay, so their cost stays in `/api/usage`.
 Response `200`: `{ "cleared": 2 }`, how many questions were cleared. Errors:
 `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_BUSY` (a
-question is in progress: wait for its answer).
+question of the general subject is in progress: wait for its answer).
 
 #### `POST /api/rooms/[room]/agents/[agent]/ask/[question]/proposal`
 
@@ -1547,8 +1558,13 @@ The owner's decision on the run an answer proposes: the only way such a run
 starts. Body: `{ "action": "launch" }` (« Lancer le tour ») or
 `{ "action": "dismiss" }` (« On en parle d'abord »). `launch` starts the run
 with the proposal's task as `POST /api/runs` does from the desk (no
-`reason`), and answers `202`; `dismiss` answers `200`. Both give the
-question as it is now and the run, or null:
+`reason`; the run works on the question's subject), and answers `202`;
+`dismiss` answers `200`. For a proposed revision (`reviseId`), `launch` is the
+`revise` decision on that item with the proposal's note, as
+`PATCH /api/approvals/[id]` takes it: the revision run is returned when the
+agent was woken at once, null when it waits (a run in progress,
+`onRevise: "queue"`, the cap). Both give the question as it is now and the
+run, or null:
 
 ```json
 { "question": { "id": 8, "proposal": { "task": "...", "state": "launched", "runId": 13, "decidedAt": "..." }, "...": "question shape" }, "run": { "...": "run shape" } }
@@ -1559,16 +1575,51 @@ Errors: `INVALID_JSON`, `INVALID_INPUT` (no `action`, another value, a
 `ROOM_INVALID`, `AGENT_NOT_FOUND`, `QUESTION_NOT_FOUND`,
 `PROPOSAL_NOT_FOUND` (the answer proposes no run), `PROPOSAL_DECIDED`
 (already launched or set aside), and for `launch` the refusals of a run
-(`AGENT_BUSY`, `RESOURCE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`):
-the proposal then stays `pending`.
+(`AGENT_BUSY`, `RESOURCE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`), or
+for a revision the refusals of a decision (`ROOM_ARCHIVED`,
+`APPROVAL_ALREADY_DECIDED`...): the proposal then stays `pending`.
+
+### Subjects
+
+The topics the owner has going with an agent, one tab each on its sheet
+(`architecture.md`, "The sheet of an agent"). A subject has this shape:
+
+```json
+{ "id": 4, "title": "Shop sign", "status": "open", "createdAt": "...", "archivedAt": null }
+```
+
+`title` is null until the owner's first message in it gives one (cut to 60
+characters); `status` is `open` or `archived`. The general subject of the
+agent has no row: it is what names no subject.
+
+#### `GET /api/rooms/[room]/agents/[agent]/subjects`
+
+The open subjects, oldest first; with `?archived=1` the archived ones
+instead, the latest archived first (30 at most): `{ "subjects": [...] }`.
+Errors: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`.
+
+#### `POST /api/rooms/[room]/agents/[agent]/subjects`
+
+Opens a subject. Body: `{}` or `{ "title": "Shop sign" }` (trimmed, 1 to 60
+characters). Response `201`: `{ "subject": {...} }`. Errors: `INVALID_JSON`,
+`INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`.
+
+#### `PATCH /api/rooms/[room]/agents/[agent]/subjects/[subject]`
+
+Renames (`{ "title": "..." }`), archives (`{ "status": "archived" }`) or
+reopens (`{ "status": "open" }`) a subject, one or both. Response `200`:
+`{ "subject": {...} }`. Errors: `INVALID_JSON`, `INVALID_INPUT` (neither
+field, another status, a `subject` that is not a positive integer),
+`ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `SUBJECT_NOT_FOUND`.
 
 ### `GET /api/rooms/[room]/agents/[agent]/thread`
 
-The thread of the agent's sheet, oldest first (`architecture.md`, "The sheet
-of an agent"): the current discussion (since the last reset, the latest 50
-questions), the latest 15 runs of the agent and the latest 20 items it
-submitted, read from their own tables. At the same time, a question comes
-before a run, a run before an item.
+The thread of the agent's sheet in one subject (`?subject=<id>`; left out,
+the general subject), oldest first (`architecture.md`, "The sheet of an
+agent"): the current discussion of that subject (the general one since its
+last reset, the latest 50 questions), the latest 15 runs of the agent on that
+subject and the latest 20 items they submitted, read from their own tables.
+At the same time, a question comes before a run, a run before an item.
 
 ```json
 {
@@ -1589,15 +1640,24 @@ before a run, a run before an item.
       "item": { "id": 31, "type": "report", "title": "...", "status": "pending", "question": false, "createdAt": "..." }
     }
   ],
-  "busy": false
+  "busy": false,
+  "subject": null,
+  "subjects": [
+    { "id": null, "title": null, "working": false, "waiting": true },
+    { "id": 4, "title": "Shop sign", "working": true, "waiting": false }
+  ]
 }
 ```
 
-`at` is when the question was asked, the run started or the item was
+`subject`: the subject read (its shape above), null for the general one.
+`subjects`: the tabs, the general subject (`id` null) first, then the open
+subjects; `working`, a run of the agent goes on it; `waiting`, an item of it
+waits for a decision. `at` is when the question was asked, the run started or the item was
 submitted. `statuses`: what the agent said it was doing during the run
 (`hq_status`), oldest first, the latest 12; `statusCount`: how many in all. `item.question`: an item of questions (`hq_ask`, type `question`).
-`busy`: a question waits for its answer. Errors: `ROOM_NOT_FOUND`,
-`ROOM_INVALID`, `AGENT_NOT_FOUND`.
+`busy`: a question of this subject waits for its answer. Errors:
+`INVALID_INPUT`, `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`,
+`SUBJECT_NOT_FOUND`.
 
 ### `GET /api/routines`
 

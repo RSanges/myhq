@@ -60,7 +60,20 @@ the start event too: when a server listed there is not `connected`, the run
 is stopped at once, before its first event is read, and fails with the end
 reason `mcp_not_connected`; it is started again once, a few seconds later,
 with the same task and the tasks it had claimed. Only a second failure (or a
-retry that cannot start) is alerted, like any other failed run. The prompt of
+retry that cannot start) is alerted, like any other failed run.
+
+**One subject per run.** A run works on one subject of its agent
+(`runs.subject_id`, see "The sheet of an agent"; null is the general subject)
+and claims the pending tasks of that subject only (`launchRun`): the subject
+it is given (the proposal that started it, the task that woke it), else the
+subject of the oldest pending task it would claim (among `claimIds` when it
+has them), else the general one. Its own instruction is a task of that
+subject, and what it submits or asks (`hq_submit`, `hq_ask`: the HQ server
+reads the subject of `HQ_RUN_ID`) belongs to it. The agent lock does not
+change: one run per agent at a time, whatever its subject; the tasks of the
+other subjects wait for the next run (see "Wake-ups").
+
+The prompt of
 a room agent's run gives what MyHQ already knows, so that the agent spends no
 model call to ask for it: the user's new decisions on its submissions (marked
 seen, as `hq_read_decisions` does; given back when the run stops before it
@@ -381,6 +394,28 @@ approval's effects: when the agent already executed the item (`onApproval:
 "task"`, its task done), the desk says so (`actionDone`) and warns that the
 action, a sent mail for example, cannot be undone.
 
+**The subject of an item.** An item belongs to the subject of the run that
+submitted it (`approvals.subject_id`), and the tasks its decisions give the
+agent (`revise`, `approval`, the answers to an item of questions) belong to
+the same subject, so the run that takes them works on it. A revise opens that
+subject again if it was archived. The owner can also ask for a revision from
+the subject's tab: the agent proposes it there (see "A change to an item"
+under "Questions to an agent"), and the owner's yes is this same revise
+decision, with the note the agent wrote.
+
+**A subject closes itself.** A subject other than the general one is archived
+once its work is definitively validated (`settleSubject`,
+`src/server/subjects.ts`): its latest deliverable (neither an item of
+questions nor an informational one) is approved, the task that approval gave
+the agent, if any, is done (and its approval command has ended), nothing of
+the subject is pending or running (a task, a run, an item, a question), and
+the owner has written nothing in it since the approval. It is checked where
+those states change: after an approval, at the end of a run of the subject,
+at the end of an approval command. A rejected latest deliverable keeps it
+open. A new message of the owner in it, or a revise of one of its items,
+opens it again. It is the one place where a subject ends, so what else goes
+with that end belongs there.
+
 **The discussion follows the revision.** A run never sees the owner's
 discussion with the agent (see "Questions to an agent"), yet what was agreed
 there is part of the revision: a note such as « as agreed » says nothing alone.
@@ -400,7 +435,10 @@ visible mark), the block holds 24000 characters at most: the oldest exchanges go
 first and the block says how many were left out. No exchange, no block: the
 prompt is unchanged. Every run is also told that the body of a submission starts
 with the readings and choices it made alone where the owner's words left a
-doubt.
+doubt. These are the rules of the general subject, restricted to its own
+exchanges; a run of another subject gets every exchange of that subject
+(those of a run proposed in it, up to the proposing question), whatever the
+reason of the run, with the same bounds and the title of the subject.
 
 **Informational items.** An item of a `notifyTypes` type (a mail alert, a brief)
 asks for no decision, but it must not vanish either, so it has its own
@@ -1054,6 +1092,11 @@ each run. Consequences:
   task waits (see "The daily cap" below).
 - A run that fails gives its mailbox tasks back; they are older than that run,
   so the agent is not woken again in a loop: they wait for its next run.
+- A run takes the tasks of one subject (see "A run"): the run woken works on
+  the subject of the task that woke it, and a run counts against the tasks of
+  its own subject only. The tasks of another subject it left pending wake the
+  agent once it ends, and a failing subject is not woken in a loop, while the
+  other subjects still are.
 - A run interrupted because MyHQ stopped (`cancelled`, see "Stopping and
   restarting") does not count, once: the tasks it gives back wake the agent
   again after the restart. A task whose resumed run is interrupted again (two
@@ -1470,15 +1513,21 @@ role followed by a « Question mode » block: the owner asks, this is not a task
 answer in the home's language, short and concrete, from what you know and what
 you can read; you write nothing, submit nothing, send nothing; a request for
 work is proposed as a run, never done (see "A task or a discussion" below).
-The user message names the agent, gives the earlier exchanges of the
+The user message names the agent and the subject the question is asked in
+(see "The discussion" below), gives the earlier exchanges of that subject's
 discussion (the last 10 answered ones, each answer cut to 2000 characters,
 with what became of the run it proposed), the question
 (4000 characters at most, zod), the agent's run state read from `runs` when
 the question is asked (`activeRunOf`: no run in progress, or the run that
 holds the agent lock with its id, reason, start, task cut to 1000 characters
 and its last 3 `hq_status` steps), given as the source of truth above the
-memory, which may say a run ended while it still runs, then the agent's memory
-(as a run's briefing gives it, `memoryText`) and the date line.
+memory, which may say a run ended while it still runs, the deliverable items
+of the subject (the latest 10, with their number, type and status: what a
+revision may name), the agent's other open subjects (each with its title,
+whether a run goes on it, and its latest item with its status) with the rule
+that a message which clearly belongs to one of them is said so in one
+sentence, then answered anyway, then the agent's memory (as a run's briefing
+gives it, `memoryText`) and the date line.
 
 **Read only, by configuration.** The prompt is not the guard:
 
@@ -1515,7 +1564,7 @@ memory, which may say a run ended while it still runs, then the agent's memory
 run and the feed do not change, the daily cap does not count it, nothing is
 woken at its end, and the agent lock is not taken (a question is answered
 while the agent works). The guards are its own: one question at a time per
-agent (`QUESTION_BUSY`, 409), none while the app stops (`SHUTTING_DOWN`), and
+subject of the agent (`QUESTION_BUSY`, 409), none while the app stops (`SHUTTING_DOWN`), and
 5 minutes at most: past that the process is killed and the question ends
 `failed` with `timeout`, its tokens still recorded. A question the app's stop
 or a crash left `running` is closed `failed` (`interrupted`) at the next start,
@@ -1533,10 +1582,21 @@ the whiteboard adds them to the cost of the day and of the week, and the
 meter lists them as « Questions aux agents ». The raw output is kept as
 `data/runs/questions/<id>.jsonl`.
 
-**The discussion.** One per agent: its questions since the last « Nouvelle
-discussion » (`DELETE` on the same route), oldest first. A reset only sets
-`cleared_at`: the rows stay, so their cost stays in the meter, and a reset is
-refused while a question is in progress. The sheet reads its thread again
+**The discussion.** One per subject of the agent (`subjects`, migration 28,
+`src/server/subjects.ts`): the owner has several topics going with the same
+agent, each a tab of its sheet, and a question names its subject
+(`subject` in the body; left out, the general subject, which has no row:
+everything from before the subjects, and everything that names none, the
+routines, the messages between agents, the chat, a run started by hand). A
+subject is opened by the owner (`POST .../subjects`), with a title or
+without: then the owner's first message in it gives one, cut to 60
+characters; it is renamed, archived or reopened (`PATCH .../subjects/<id>`),
+and archives itself once its work is validated (see "The approval cycle"). It
+is never reset: a message in an archived subject opens it again. The general
+subject keeps « Nouvelle discussion » (`DELETE` on the same route): its
+questions since the last one, oldest first. A reset only sets `cleared_at`:
+the rows stay, so their cost stays in the meter, and a reset is refused while
+a question of the general subject is in progress. The sheet reads its thread again
 every 2 seconds while a question waits, and shows « <agent> réfléchit à ta
 question… »; the floor does not animate it.
 
@@ -1597,7 +1657,35 @@ agent so: it says the run is still going and what it does or waits for as far
 as its steps show, proposes no run, and says the work can be started once that
 run ends. The server does not rely on it: a block in an answer that closes
 while the agent has a run in progress is dropped, and no proposal is recorded.
-The message is not queued for that run.
+The message is not queued for that run. A revision (below) is the exception:
+it waits for the end of that run instead, so it may still be proposed.
+
+**A change to an item.** When the owner asks to change something in an item
+the agent delivered in this subject (one of the items its prompt lists,
+pending or already decided), the agent proposes no run but a revision of that
+item: one sentence, then a block that names the item and holds the note of
+the revision, the agent's own recap of what the owner asked:
+
+```text
+Je propose de reprendre l'enseigne.
+
+<revision-proposal item="12">
+Bordure de 2 mm, le reste inchangé.
+</revision-proposal>
+```
+
+`parseRunProposal` reads both blocks, the last complete one of either kind
+being the proposal; a revision block needs its `item` and holds 5000
+characters at most, as the note of a decision. The proposal is kept only when
+the item is a deliverable of the same agent and the same subject (no item of
+questions, no informational one): `question_proposals.revise_id` (migration
+28), the note in `task`. The card says « C'est une retouche de l'item #12 »
+with « Demander la retouche »; the owner's yes is the `revise` decision on
+that item with that note (`decideApproval`, the same checks and the same
+wake-up as the desk's button, which keeps working as before), and the run
+that revises it works on the subject and gets its discussion. The owner no
+longer writes a separate revision note: they write in the tab, the agent
+rewords, they say yes.
 
 **The discussion follows the task.** The question mode block tells the agent
 that its discussion is handed to the run that revises an item it delivered and
@@ -1609,7 +1697,9 @@ passes the id of the question whose answer proposed the run to `startRun`
 (`RunnerDeps.discussionUpTo`, never persisted and never passed on to the runs
 this one wakes): the prompt gets the exchanges of the current discussion, not
 cleared, up to and including that question; what was asked after the proposal
-is left out. Same bounds as for a revision.
+is left out. Same bounds as for a revision. The run carries the subject the
+question was asked in (`RunnerDeps.subject`), so its prompt gets that
+subject's exchanges only, and what it delivers lands in that subject.
 
 ### The write guard
 
@@ -2626,7 +2716,17 @@ messaging app:
   activity, « Réfléchit à ta question… », « Dort », « Disponible », a failed
   last run, a shared resource it waits for: `sheetState` of
   `agent-thread-model.ts`, pure).
-- **One thread**, oldest first: the owner's messages and the agent's answers
+- **The tabs**, one per subject (see "Questions to an agent", the
+  discussion): « Général » first, then the open subjects by their title
+  (« Nouveau sujet » until the first message gives one), each with a mark
+  while a run goes on it and another while an item of it waits for the
+  owner; « + » opens a new subject and selects it; « Archivés » folds the
+  archived ones, read when it opens, and one of them is read in its own tab
+  until another is chosen (writing in it reopens it). Under the tabs, a
+  subject other than « Général » can be renamed and archived, or reopened
+  when it is archived. The tabs are given with the thread (`subjectTabs` of
+  `agent-thread-model.ts`, pure, from the thread's `subjects`).
+- **One thread per subject**, oldest first: the owner's messages and the agent's answers
   (questions to the agent, see "Questions to an agent"), its runs in one line
   each (time, status, duration, cost and the end of its summary; unfolded,
   the whole summary, its task and a link to the run on the desk; the steps it
@@ -2635,17 +2735,20 @@ messaging app:
   submitted (title, status, a link to the desk) and its questions (`hq_ask`)
   that wait for the owner, with « Répondre ». A day line separates the days.
   The server aggregates it (`readThread` of `src/server/agent-thread.ts`,
-  `GET /api/rooms/<room>/agents/<agent>/thread`) from the tables that hold
-  each of them, without copying anything: the discussion since its last
-  reset, the latest 15 runs and the latest 20 items. The interface turns it
+  `GET /api/rooms/<room>/agents/<agent>/thread?subject=<id>`) from the tables
+  that hold each of them, without copying anything: the subject's discussion
+  (the general one since its last reset), the latest 15 runs of the subject
+  and the latest 20 items they submitted. The interface turns it
   into lines (`threadLines`, pure). It is read again when the agent's last run
   starts or ends, when one of its items comes or is decided, at each new
   status of the agent (a moment after its tool call, for the server to store
-  it), and every 2 seconds while a question waits for its answer.
+  it), when another tab is chosen (never showing the thread of the previous
+  one meanwhile), and every 2 seconds while a question waits for its answer.
 - **One field at the bottom**, « Écris à <agent> », and a send button: Enter
   sends, Shift+Enter goes to the next line. Each message is a question to the
-  agent. « Nouvelle discussion » takes the messages and answers out of the
-  thread (`cleared_at`); its runs and items stay.
+  agent, in the subject of the tab. « Nouvelle discussion », on « Général »
+  only, takes its messages and answers out of the thread (`cleared_at`); its
+  runs and items stay.
 - **The gear** opens the technical side instead of the thread: a run without
   a task (« Lancer un tour », the role's usual work), the role file, model,
   tools and resources, the routines and their arming switch, and the journal
