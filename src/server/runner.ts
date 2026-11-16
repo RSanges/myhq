@@ -11,7 +11,7 @@ import { getDbAt, now, queueOrder, type Db, type RunRow, type RunStatus, type Ta
 import { ZERO_USAGE, type Engine, type RunEvent, type RunInput } from "./engine";
 import { HqError } from "./errors";
 import { exitProcess } from "./exit";
-import { discussionHandoff, heardFrom } from "./discussion-handoff";
+import { runDiscussion } from "./discussion-handoff";
 import { DOOR_TOOL, DOOR_WAIT_MS, serveDoor } from "./door";
 import { notebookAccess, notebookText } from "./notebook";
 import { DEFAULT_LANGUAGE, readHomeLanguage } from "./export";
@@ -505,9 +505,9 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
       const db = getDbAt(config.dbPath);
       const scope = { room: room.name, agentId: agent.id, mailbox, upToQuestionId: deps.discussionUpTo, subjectId };
       // Read now, when the run starts: what was said since the revision was decided counts.
-      const discussion = discussionHandoff(db, scope);
       // From here on, what the owner and the agent say in this subject reaches the run at its hq_status (hearOwner).
-      db.prepare("UPDATE runs SET heard_up_to = ? WHERE id = ?").run(heardFrom(db, scope), runId);
+      const { block: discussion, heardUpTo } = runDiscussion(db, scope);
+      db.prepare("UPDATE runs SET heard_up_to = ? WHERE id = ?").run(heardUpTo, runId);
       return buildPrompt({
         room,
         agent,

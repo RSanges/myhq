@@ -28,10 +28,11 @@
 // mode: every exchange of the run's subject answered after the block was built
 // reaches the run at its next hq_status (`hearOwner`), once. The cursor is
 // `runs.heard_up_to`, the highest exchange id the run has been given: set with
-// the block (`heardFrom`), from the same reads, then advanced by each
-// delivery. Within a subject one question runs at a time and ids grow, so a
-// question still running when the block is built has an id above the cursor
-// and is delivered once answered: no gap, no duplicate.
+// the block (`runDiscussion`: the highest exchange of the block, never below
+// `heardFrom`), then advanced by each delivery. Within a subject one question
+// runs at a time and ids grow, so a question still running when the block is
+// built has an id above the cursor and is delivered once answered: no gap, no
+// duplicate.
 
 import type { Db, TaskRow } from "./db";
 
@@ -140,16 +141,45 @@ export function hearOwner(db: Db, runId: number): string | null {
   return [HEARD_INTRO, ...given, ...more].join("\n\n");
 }
 
+type Scope = { room: string; agentId: string; mailbox: readonly TaskRow[]; upToQuestionId?: number; subjectId?: number | null };
+
 /**
  * The block of the discussion for the prompt of a run of this agent, or null
  * when no exchange applies (the prompt is then left as it always was).
  * `upToQuestionId` is the question whose answer proposed the run, if any;
  * `subjectId` the subject of the run, null or left out: the general one.
  */
-export function discussionHandoff(
-  db: Db,
-  params: { room: string; agentId: string; mailbox: readonly TaskRow[]; upToQuestionId?: number; subjectId?: number | null },
-): string | null {
+export function discussionHandoff(db: Db, params: Scope): string | null {
+  return runDiscussion(db, params).block;
+}
+
+/**
+ * The block of the discussion and the cursor of the run (`runs.heard_up_to`),
+ * from one read: the cursor is the highest exchange the block holds, never
+ * lower than `heardFrom`, so that no exchange reaches the run twice (in its
+ * prompt, then at its hq_status). The exchanges between `heardFrom` and that
+ * highest one are in the block too (a run of the general subject that takes
+ * a revision and a proposal kept as a task), so that none is skipped either.
+ */
+export function runDiscussion(db: Db, params: Scope): { block: string | null; heardUpTo: number } {
+  const from = heardFrom(db, params);
+  const rows = handoffRows(db, params);
+  const last = rows.length > 0 ? rows[rows.length - 1]!.id : 0;
+  if (last <= from) return { block: renderBlock(db, params, rows), heardUpTo: from };
+  const between = db
+    .prepare(
+      `SELECT id, question, answer, started_at FROM agent_questions
+       WHERE room = ? AND agent_id = ? AND subject_id IS ? AND status = 'done' AND answer IS NOT NULL
+         AND cleared_at IS NULL AND id > ? AND id < ? ORDER BY id`,
+    )
+    .all(params.room, params.agentId, params.subjectId ?? null, from, last) as Exchange[];
+  const known = new Set(rows.map((row) => row.id));
+  const all = [...rows, ...between.filter((row) => !known.has(row.id))].sort((a, b) => a.id - b.id);
+  return { block: renderBlock(db, params, all), heardUpTo: last };
+}
+
+/** The exchanges the rules above give a run, oldest first; none when no rule applies. */
+function handoffRows(db: Db, params: Scope): Exchange[] {
   const subject = params.subjectId ?? null;
   const upTo = params.upToQuestionId ?? queuedProposalUpTo(params.mailbox);
   const wanted: string[] = [];
@@ -168,15 +198,20 @@ export function discussionHandoff(
       args.push(upTo);
     }
   }
-  if (wanted.length === 0) return null;
-  const rows = db
+  if (wanted.length === 0) return [];
+  return db
     .prepare(
       `SELECT q.id, q.question, q.answer, q.started_at FROM agent_questions q
        WHERE q.room = ? AND q.agent_id = ? AND q.subject_id IS ? AND q.status = 'done' AND q.answer IS NOT NULL
          AND q.cleared_at IS NULL AND (${wanted.join(" OR ")}) ORDER BY q.id`,
     )
     .all(...args) as Exchange[];
+}
+
+/** The block of these exchanges, null when there is none. */
+function renderBlock(db: Db, params: Scope, rows: Exchange[]): string | null {
   if (rows.length === 0) return null;
+  const subject = params.subjectId ?? null;
   const title =
     subject === null
       ? null
