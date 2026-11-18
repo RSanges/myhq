@@ -19,7 +19,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.0.3",
-    "next": "16.4.4",
+    "next": "16.4.6",
     "pixi.js": "8.22.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -36,7 +36,7 @@
     "@types/three": "0.186.0",
     "esbuild": "^0.28.2",
     "eslint": "^9",
-    "eslint-config-next": "16.4.4",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
