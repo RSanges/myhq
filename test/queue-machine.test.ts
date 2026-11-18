@@ -390,7 +390,7 @@ test("a routine of an agent the machine cannot take is skipped, as for a busy ag
 
 // --- The reasons of the queue ------------------------------------------------------------------
 
-test("GET /api/queue reasons: agent busy on run #n, a resource held, the daily cap, waits by design, in the words of the Standard", async () => {
+test("GET /api/queue reasons: agent busy on run #n, a resource held, the daily cap, in the words of the Standard; a wait by design is not in the queue", async () => {
   const { config, db } = home([agent("busy"), agent("holder", { resources: ["gpu"] }), agent("painter", { resources: ["gpu"] }), agent("calm", { onMessage: "queue" })]);
   const { engine, release } = holdingEngine(["busy", "holder"]);
   const deps = { config, engine, send: async () => true };
@@ -405,7 +405,7 @@ test("GET /api/queue reasons: agent busy on run #n, a resource held, the daily c
   const reasons = Object.fromEntries(queueOf(db, config).map((entry) => [entry.agentId, entry.reason]));
   assert.equal(reasons.busy, r.afterRun(busyRun.id));
   assert.equal(reasons.painter, r.resource("gpu", holderRun.id, "demo / holder"));
-  assert.equal(reasons.calm, r.byDesign);
+  assert.equal(reasons.calm, undefined, "a message that waits for its agent's next run is not queued");
   // The daily cap, for what would start.
   release();
   await waitForRun(db, busyRun.id);

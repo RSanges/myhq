@@ -801,9 +801,7 @@ machine is not read).
 - `cause` is a cause of the Standard (`busy`, `resource`, `machine`, `veto`, `neverFits`,
   `cap`, `stopping`, `pingPong`, `givenBack`, `interruptedTwice`, `noWake`,
   `notWoken`, `unknownAgent`) or one of the queue's own: `afterRun` (the end of
-  its agent's run in progress takes it), `byDesign` (it waits for the agent's
-  next run on purpose: `"queue"`, a message the portier or its sender let
-  wait), `behind` (it would start, but an earlier task waits for the same
+  its agent's run in progress takes it), `behind` (it would start, but an earlier task waits for the same
   resource or the same kind of memory: it passes after it). `reason` is the
   French sentence.
 - `machine.vramUsedGb` and `vramTotalGb` are `null` when the GPU cannot be read.

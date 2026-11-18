@@ -7,9 +7,11 @@ import { HqError } from "./errors";
 import { declaresNeeds, readMachine, scarceOf, type MachineRead, type MachineReading } from "./machine";
 import type { Home } from "./rooms";
 
-// The queue: every pending task, in the one order of the home (queueOrder:
-// the owner's places first, then the oldest first), each with why it waits,
-// in the words of the Standard (blocked.ts, taskWait). The wake-ups serve it
+// The queue: every pending task that waits for its turn, in the one order of
+// the home (queueOrder: the owner's places first, then the oldest first), each
+// with why it waits, in the words of the Standard (blocked.ts, taskWait). A
+// task that waits by design for its agent's next run is not in it: nothing
+// holds it back, and no place in the queue would start it. The wake-ups serve it
 // in that order (wakeAgents), and a task that waits for a shared resource or
 // for the machine keeps what its agent needs: a later task of another agent
 // that needs the same thing waits behind it ("behind"), while a task that
@@ -32,7 +34,7 @@ export type QueueEntry = {
   since: string;
   /** The owner placed it (`queue_rank`); false: automatic order. */
   placed: boolean;
-  /** Why it waits: a cause of the Standard (`busy`, `resource`, `machine`, `cap`...), or `afterRun`, `byDesign`, `behind`. */
+  /** Why it waits: a cause of the Standard (`busy`, `resource`, `machine`, `cap`...), or `afterRun`, `behind`. */
   cause: string;
   reason: string;
 };
@@ -46,13 +48,13 @@ const oneLine = (text: string): string => {
   return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX).trimEnd()}...` : line;
 };
 
-/** Every pending task, in the order of the queue, with why it waits. */
+/** Every pending task that waits for its turn, in the order of the queue, with why it waits. */
 export function listQueue(db: Db, config: HqConfig, home: Home, read: MachineRead = readMachine): QueueEntry[] {
   const tasks = db.prepare(`SELECT * FROM tasks WHERE status = 'pending' ORDER BY ${queueOrder()}`).all() as TaskRow[];
   const title = db.prepare("SELECT title FROM subjects WHERE id = ?");
   // What an earlier task waits for, and which task: the later ones that need it wait behind it (as in wakeAgents).
   const held = new Map<string, number>();
-  return tasks.map((task) => {
+  const entries = tasks.map((task) => {
     const room = home.rooms.find((each) => each.name === task.room) ?? null;
     const agent = room?.agents.find((each) => each.id === task.agent_id) ?? null;
     let wait: TaskWait = taskWait(db, config, home, task, agent, read);
@@ -83,6 +85,7 @@ export function listQueue(db: Db, config: HqConfig, home: Home, read: MachineRea
       reason: wait.reason,
     };
   });
+  return entries.filter((entry) => entry.cause !== "byDesign");
 }
 
 /** GET /api/queue: the queue, and the reading of the machine when an agent of the home declares needs. */

@@ -1142,9 +1142,10 @@ asked is the one exception, below).
 `listQueue`) gives every pending task in that order with its room, agent,
 subject, its text on one line, since when, whether the owner placed it, and
 why it waits: the reasons of the Standard (`taskWait`, `src/server/blocked.ts`,
-the same function), plus three that are not a block: `afterRun` (the end of
-its agent's run in progress takes it), `byDesign` (`"queue"`, a message its
-sender or the portier let wait) and `behind`. `POST /api/queue` moves a task
+the same function), plus two that are not a block: `afterRun` (the end of
+its agent's run in progress takes it) and `behind`. A task that waits by design
+for its agent's next run (`"queue"`, a message its sender or the portier let
+wait) is left out: no place in the queue would start it. `POST /api/queue` moves a task
 first, up, down or back to automatic order (`moveInQueue`: the tasks from the
 head down to the ones moved get places, so the rest keeps its order; a `down`
 that makes a task the last sends it to the end for good; `updated_at`
