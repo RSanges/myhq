@@ -77,6 +77,8 @@ export const strings = {
       days: (n: number) => `il y a ${n} j`,
     },
     emptyHistory: "Aucun item traité pour l'instant.",
+    /** The number of an item, the one agents and reports name it by. */
+    itemNumber: (id: number) => `n° ${id}`,
     submittedBy: (agent: string, room: string) => `Apporté par ${agent} (${room})`,
     emptyBody: "(sans contenu)",
     openLink: "Ouvrir le lien",

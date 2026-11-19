@@ -252,7 +252,7 @@ test("GET /api/desk: the default desk with its counts, items, spines and links",
 
   const pile = byId.signer!;
   assert.equal(pile.count, 2);
-  assert.deepEqual(pile.items.map((item) => item.title), ["Réponse au fil", "Proposition"], "oldest first");
+  assert.deepEqual(pile.items.map((item) => item.title), ["Proposition", "Réponse au fil"], "newest first, like a pile");
   assert.equal(pile.items[0]!.href, `/bureau/signer#approval-${pile.items[0]!.ref!.id}`);
   assert.deepEqual(
     pile.spines!.map((spine) => [spine.room, spine.color]),

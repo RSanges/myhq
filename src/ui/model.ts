@@ -194,11 +194,11 @@ export function resourceWait(agent: TeamAgent, agents: readonly TeamAgent[]): st
   );
 }
 
-/** Pending items, oldest first. */
+/** Pending items, newest first: a pile, the last one put down is on top. */
 export function selectPending(model: Model): Approval[] {
   return Object.values(model.approvals)
     .filter((approval) => approval.status === "pending")
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
 }
 
 /** Informational items waiting for a look (« À regarder »), oldest first. */

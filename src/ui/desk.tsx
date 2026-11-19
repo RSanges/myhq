@@ -128,6 +128,7 @@ function DeskItem({
           />
           <span className="max-w-[40%] shrink-0 truncate text-xs text-muted sm:max-w-40">{who.name}</span>
           <Badge tone="neutral">{typeLabel(approval.type)}</Badge>
+          <span className="shrink-0 text-xs text-muted tabular-nums">{strings.desk.itemNumber(approval.id)}</span>
           <span className="order-1 flex min-w-0 basis-full gap-x-1.5 sm:order-none sm:basis-0 sm:flex-1">
             <span
               className={`min-w-0 font-semibold ${open ? "break-words" : "max-w-[60%] shrink-0 truncate"}`}

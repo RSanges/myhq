@@ -393,7 +393,7 @@ function readCore(db: Db, home: Home, source: CoreSource, objectId: string, conf
   }
   const count = coreCount(db, home, source, config, at, seenAt);
   if (source === "approvals") {
-    const rows = db.prepare(`SELECT * FROM approvals WHERE status = 'pending' AND ${liveItem()} ORDER BY created_at, id`).all() as ApprovalRow[];
+    const rows = db.prepare(`SELECT * FROM approvals WHERE status = 'pending' AND ${liveItem()} ORDER BY created_at DESC, id DESC`).all() as ApprovalRow[];
     return { count, items: rows.map((row) => approvalItem(row, objectId, colors, null)) };
   }
   if (source === "summaries") {
