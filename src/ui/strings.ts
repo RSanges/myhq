@@ -82,6 +82,7 @@ export const strings = {
     submittedBy: (agent: string, room: string) => `Apporté par ${agent} (${room})`,
     emptyBody: "(sans contenu)",
     loadingItem: "Chargement...",
+    loadItemFailed: (reason: string) => `Impossible de charger l'item : ${reason}`,
     openLink: "Ouvrir le lien",
     copy: {
       idle: "Copier le texte",

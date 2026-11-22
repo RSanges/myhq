@@ -71,6 +71,8 @@ type ItemProps = {
   flash: boolean;
   who: Who;
   now: number;
+  /** Why the whole item could not be loaded (a summarised item of the history), null otherwise. */
+  loadError: string | null;
 };
 
 /**
@@ -189,9 +191,12 @@ function ApprovalContent({
   showControls = true,
   annotations,
   onAnnotations,
+  loadError = null,
 }: {
   approval: Approval;
   showControls?: boolean;
+  /** Shown instead of the body of a summarised item that could not be loaded. */
+  loadError?: string | null;
   annotations: readonly Annotation[];
   onAnnotations?: (next: Annotation[]) => void;
 }) {
@@ -207,7 +212,11 @@ function ApprovalContent({
         <Attachments files={approval.files} annotations={annotations} onAnnotations={onAnnotations} focus={focus} />
       )}
       {approval.light ? (
-        <p className="text-sm text-muted">{strings.desk.loadingItem}</p>
+        loadError ? (
+          <ErrorNote>{strings.desk.loadItemFailed(loadError)}</ErrorNote>
+        ) : (
+          <p className="text-sm text-muted">{strings.desk.loadingItem}</p>
+        )
       ) : approval.body.trim() === "" ? (
         <p className="text-sm text-muted">{strings.desk.emptyBody}</p>
       ) : (
@@ -637,6 +646,7 @@ function HistoryCard({
             approval={approval}
             showControls={approval.status !== "approved"}
             annotations={approval.annotations}
+            loadError={item.loadError}
           />
         </>
       )}
@@ -692,7 +702,7 @@ function WatchCard({ approval, dispatch, item }: { approval: Approval; dispatch:
   return (
     <DeskItem approval={approval} {...item}>
       <ApprovalHeader approval={approval} who={item.who} />
-      <ApprovalContent approval={approval} annotations={approval.annotations} />
+      <ApprovalContent approval={approval} annotations={approval.annotations} loadError={item.loadError} />
       {asking ? (
         <div className="space-y-2">
           <label htmlFor={fieldId} className="block text-sm font-medium">
@@ -778,7 +788,16 @@ function useFolds(
       return { name: agent?.name ?? approval.agentId, color, room };
     };
   }, [agents]);
-  const setOpen = (id: number, open: boolean) =>
+  // Items whose whole content failed to load, with the reason: folding one forgets it, so that unfolding tries again.
+  const [failed, setFailed] = useState<ReadonlyMap<number, string>>(new Map());
+  const forget = (ids: Iterable<number>) =>
+    setFailed((current) => {
+      const next = new Map(current);
+      for (const id of ids) next.delete(id);
+      return next.size === current.size ? current : next;
+    });
+  const setOpen = (id: number, open: boolean) => {
+    if (!open) forget([id]);
     setOpenIds((current) => {
       if (current.has(id) === open) return current;
       const next = new Set(current);
@@ -786,6 +805,7 @@ function useFolds(
       else next.delete(id);
       return next;
     });
+  };
   // An id the items do not hold is ignored. The hash stays in the address, so later refreshes of the data change nothing.
   if (target && handled !== target.nonce) {
     setHandled(target.nonce);
@@ -810,14 +830,14 @@ function useFolds(
   const loading = useRef(new Set<number>());
   useEffect(() => {
     for (const approval of items) {
-      if (!approval.light || !openIds.has(approval.id) || loading.current.has(approval.id)) continue;
+      if (!approval.light || !openIds.has(approval.id) || loading.current.has(approval.id) || failed.has(approval.id)) continue;
       loading.current.add(approval.id);
       fetchApproval(approval.id)
         .then((whole) => dispatch({ type: "approval", approval: whole }))
-        .catch(() => undefined)
+        .catch((error: unknown) => setFailed((current) => new Map(current).set(approval.id, errorText(error))))
         .finally(() => loading.current.delete(approval.id));
     }
-  }, [items, openIds, dispatch]);
+  }, [items, openIds, failed, dispatch]);
 
   const itemProps = (approval: Approval): ItemProps => ({
     open: openIds.has(approval.id),
@@ -826,12 +846,14 @@ function useFolds(
     flash: flash?.id === approval.id,
     who: whoById(approval),
     now,
+    loadError: failed.get(approval.id) ?? null,
   });
 
   /** « Tout déplier / Tout replier » acts on what is on screen. */
   const allOpen = (shown: readonly Approval[]) => shown.length > 0 && shown.every((approval) => openIds.has(approval.id));
   const toggleAll = (shown: readonly Approval[]) => {
     const open = allOpen(shown);
+    if (open) forget(shown.map((approval) => approval.id));
     setOpenIds((current) => {
       const next = new Set(current);
       for (const approval of shown) {
