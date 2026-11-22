@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Annotation } from "@/server/annotations";
 import { parseChoices, parseQuestionPayload, QUESTION_TYPE, type Question } from "@/server/questions";
 import { AnnotatedBody } from "./annotated-body";
 import { Attachments, type PointFocus } from "./attachments";
-import { askAboutItem, decideApproval, errorText, markSeen } from "./api";
+import { askAboutItem, decideApproval, errorText, fetchApproval, markSeen } from "./api";
 import { HandoverControls } from "./copy-button";
 import { approvalAnchor, resolveApprovalLink, type DeskTab } from "./deep-link";
 import { excerpt } from "./excerpt";
@@ -206,7 +206,9 @@ function ApprovalContent({
       {approval.files && approval.files.length > 0 && (
         <Attachments files={approval.files} annotations={annotations} onAnnotations={onAnnotations} focus={focus} />
       )}
-      {approval.body.trim() === "" ? (
+      {approval.light ? (
+        <p className="text-sm text-muted">{strings.desk.loadingItem}</p>
+      ) : approval.body.trim() === "" ? (
         <p className="text-sm text-muted">{strings.desk.emptyBody}</p>
       ) : (
         <AnnotatedBody source={approval.body} annotations={annotations} onChange={onAnnotations} onPoint={showPoint} />
@@ -755,6 +757,7 @@ const NO_ANNOTATIONS: Annotation[] = [];
 function useFolds(
   items: readonly Approval[],
   agents: readonly TeamAgent[],
+  dispatch: Dispatch,
   target: DeepLinkTarget | null,
   onHit?: (hit: { id: number; tab: DeskTab | null }) => void,
 ) {
@@ -802,6 +805,19 @@ function useFolds(
     const timer = window.setTimeout(() => setFlash(null), FLASH_MS);
     return () => window.clearTimeout(timer);
   }, [flash]);
+
+  // The history of the state sends summarised items: an unfolded one is loaded whole, once.
+  const loading = useRef(new Set<number>());
+  useEffect(() => {
+    for (const approval of items) {
+      if (!approval.light || !openIds.has(approval.id) || loading.current.has(approval.id)) continue;
+      loading.current.add(approval.id);
+      fetchApproval(approval.id)
+        .then((whole) => dispatch({ type: "approval", approval: whole }))
+        .catch(() => undefined)
+        .finally(() => loading.current.delete(approval.id));
+    }
+  }, [items, openIds, dispatch]);
 
   const itemProps = (approval: Approval): ItemProps => ({
     open: openIds.has(approval.id),
@@ -851,7 +867,7 @@ export function Desk({
   title?: string;
 }) {
   const [tab, setTab] = useState<Tab>("pending");
-  const folds = useFolds([...pending, ...unseen, ...history], agents, target, (hit) => {
+  const folds = useFolds([...pending, ...unseen, ...history], agents, dispatch, target, (hit) => {
     if (hit.tab) setTab(hit.tab);
   });
   // Remarks made on pending items, kept here (not in the cards) until the decision is sent: a tab switch or a refresh keeps them.
@@ -993,7 +1009,7 @@ export function WatchDesk({
 }) {
   const t = strings.deskModules.courrier;
   const [newestFirst, setNewestFirst] = useState(false);
-  const folds = useFolds([...unseen, ...seen], agents, target);
+  const folds = useFolds([...unseen, ...seen], agents, dispatch, target);
   const sorted = useMemo(() => {
     const list = [...unseen].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
     return newestFirst ? list.reverse() : list;

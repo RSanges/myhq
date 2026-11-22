@@ -321,6 +321,11 @@ export async function decideApproval(id: number, decision: Decision): Promise<Ap
   return (await request(`/api/approvals/${id}`, approvalResponseSchema, jsonInit("PATCH", decision))).approval;
 }
 
+/** The whole item, which the history of the state only summarises. */
+export async function fetchApproval(id: number): Promise<Approval> {
+  return (await request(`/api/approvals/${id}`, approvalResponseSchema)).approval;
+}
+
 /** « Vu »: the item leaves « À regarder » and stays in the history. */
 export async function markSeen(id: number): Promise<Approval> {
   return (await request(`/api/approvals/${id}/seen`, approvalResponseSchema, { method: "POST" })).approval;

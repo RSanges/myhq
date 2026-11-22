@@ -81,6 +81,7 @@ export const strings = {
     itemNumber: (id: number) => `n° ${id}`,
     submittedBy: (agent: string, room: string) => `Apporté par ${agent} (${room})`,
     emptyBody: "(sans contenu)",
+    loadingItem: "Chargement...",
     openLink: "Ouvrir le lien",
     copy: {
       idle: "Copier le texte",

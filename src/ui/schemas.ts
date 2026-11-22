@@ -88,6 +88,8 @@ export const approvalSchema = z.object({
   filedPath: z.string().nullable().optional(),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
+  /** The history of the state sends the items summarised (body cut, no payload or files): the whole item is loaded when opened. */
+  light: z.boolean().optional(),
 });
 
 /** What a routine's schedule says, without wording (the server's CronSummary, docs/api.md). */
