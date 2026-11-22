@@ -429,7 +429,11 @@ restart.
 - `approvals.pending`: every pending item, oldest first. `approvals.unseen`:
   every informational item not yet seen (« À regarder »), oldest first.
   `approvals.history`: the 100 most recently handled items (decided, or seen),
-  newest first.
+  newest first, **summarised**: each has `"light": true`, its `body` is cut to
+  400 characters, and `payload` (a room proposal keeps `room.name`), `files`,
+  `annotations` and `decisionHistory` are empty. Load the whole item with
+  `GET /api/approvals/[id]`. `pending` and `unseen` items are whole, and so are
+  the items the stream sends.
 - `recent.events` (last 200) and `recent.messages` (last 100), oldest first.
 - `assistant.polling`: true while this process reads the Telegram bot's updates
   (`HQ_TELEGRAM_POLLING=true`, lock taken, polling loop running).
@@ -886,6 +890,15 @@ are returned as empty strings.
 Errors: `ROADMAP_NOT_FOUND` (404) when the file is missing, is not JSON or
 fails validation (the reason is also logged by the server). The file is watched,
 and every change is announced as a `roadmap` event on `GET /api/events`.
+
+### `GET /api/approvals/[id]`
+
+The whole item, as the Approval shape (no `light`): what the history of
+`GET /api/state` only summarises.
+
+Response `200`: `{ "approval": { ...Approval shape } }`.
+
+Errors: `INVALID_INPUT` (id not a positive integer), `APPROVAL_NOT_FOUND` (404).
 
 ### `PATCH /api/approvals/[id]`
 
