@@ -108,6 +108,11 @@ export type ApprovalDto = {
   filedPath: string | null;
   decidedAt: string | null;
   createdAt: string;
+  /**
+   * Set on the items of `approvals.history` in `GET /api/state`: `body` is cut, `payload`, `files`,
+   * `annotations` and `decisionHistory` are left out. `GET /api/approvals/<id>` gives the whole item.
+   */
+  light?: true;
 };
 
 /** An approval row, with whether its execution task is done (see `APPROVAL_SELECT`). */
@@ -190,6 +195,28 @@ export const toApproval = (r: ApprovalRowWithAction): ApprovalDto => ({
   decidedAt: r.decided_at,
   createdAt: r.created_at,
 });
+
+/** Characters of the body kept in a summarised item: enough for the first line of its folded card. */
+export const LIGHT_BODY_CHARS = 400;
+
+/**
+ * The item as the history of the state sends it: what its folded card and its
+ * badges read, without the heavy fields it only shows once opened. The payload
+ * of a room proposal keeps the room's name, which its folded title shows.
+ */
+export function toLightApproval(a: ApprovalDto): ApprovalDto {
+  const room = a.type === "room_proposal" ? a.payload.room : undefined;
+  const name = room && typeof room === "object" && "name" in room ? room.name : undefined;
+  return {
+    ...a,
+    body: a.body.slice(0, LIGHT_BODY_CHARS),
+    payload: name === undefined ? {} : { room: { name } },
+    files: [],
+    annotations: [],
+    decisionHistory: [],
+    light: true,
+  };
+}
 
 export type FeedItem =
   | { seq: number; kind: "run"; data: RunDto }
@@ -454,4 +481,9 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
         .map(toMessage),
     },
   };
+}
+
+/** The state as `GET /api/state` sends it: the handled items of the history summarised (`toLightApproval`). */
+export function lightState(state: StateDto): StateDto {
+  return { ...state, approvals: { ...state.approvals, history: state.approvals.history.map(toLightApproval) } };
 }
