@@ -368,11 +368,12 @@ export type BriefNotice = "none" | "empty" | "missing";
 /**
  * Whether a room should show that it has no brief to give a studio (an
  * information, the room works as before), read now. Null for a shared room:
- * it serves the others, its brief would reach no one; null too for a brief
- * with text.
+ * it serves the others, its brief would reach no one; null for the
+ * supervisor's room (an agent with `supervisor: true`): no studio works for
+ * it; null too for a brief with text.
  */
 export function briefNotice(room: Room): BriefNotice | null {
-  if (room.shared) return null;
+  if (room.shared || room.agents.some((agent) => agent.supervisor)) return null;
   if (!room.brief) return "none";
   try {
     return fs.readFileSync(room.brief.file, "utf8").trim() === "" ? "empty" : null;

@@ -345,7 +345,9 @@ colours, its tone, its logo rules) and say where its reference files live:
   the state and its card on the settings page says « Sans fiche ». It is an
   information, not an error: the room works, a studio just gets no brief
   from it. Shared rooms are never listed: they serve the others, and a brief
-  is only given by the room a studio works for. (A declared file that is
+  is only given by the room a studio works for. Nor is the supervisor's room
+  (one with an agent marked `"supervisor": true`): no studio works for it.
+  (A declared file that is
   missing when the room loads still makes the room invalid, as above.)
 - **The limit.** A reference reaches the studio as an `--add-dir`: the write
   guard refuses the editing tools there, but a studio agent that has `Bash`

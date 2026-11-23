@@ -309,7 +309,7 @@ test("brief: a brief file reached through a link out of the room directory makes
 
 // --- A project room without a brief (briefNotice) ---------------------------------------
 
-test("brief notice: a project room without a brief, or with an empty one, is reported in the state and the settings, and stays valid", () => {
+test("brief notice: a project room without a brief, or with an empty one, is reported in the state and the settings, and stays valid; not a shared room nor the supervisor's", () => {
   const config = briefHome({ file: "brief.md" });
   fs.mkdirSync(path.join(config.home, "rooms", "studio", "roles"), { recursive: true });
   fs.writeFileSync(path.join(config.home, "rooms", "studio", "roles", "scout.md"), "You are a test agent.\n");
@@ -320,6 +320,12 @@ test("brief notice: a project room without a brief, or with an empty one, is rep
   fs.mkdirSync(path.join(config.home, "rooms", "plain", "roles"), { recursive: true });
   fs.writeFileSync(path.join(config.home, "rooms", "plain", "roles", "scout.md"), "You are a test agent.\n");
   fs.writeFileSync(path.join(config.home, "rooms", "plain", "room.json"), JSON.stringify({ name: "plain", targetRepo: "x", agents: [agent] }));
+  fs.mkdirSync(path.join(config.home, "rooms", "watch", "roles"), { recursive: true });
+  fs.writeFileSync(path.join(config.home, "rooms", "watch", "roles", "scout.md"), "You are a test agent.\n");
+  fs.writeFileSync(
+    path.join(config.home, "rooms", "watch", "room.json"),
+    JSON.stringify({ name: "watch", targetRepo: "x", agents: [{ ...agent, supervisor: true }] }),
+  );
   const db = getDbAt(config.dbPath);
   const notices = () => {
     const home = loadHome(config.home);
@@ -329,10 +335,11 @@ test("brief notice: a project room without a brief, or with an empty one, is rep
     const settings = buildSettingsView(config, db, {}).rooms.map((room) => [room.name, room.briefNotice]);
     return { state, settings };
   };
-  // demo has a brief with text, studio is shared (it serves the others): neither is reported.
+  // demo has a brief with text, studio is shared (it serves the others), watch is the supervisor's room
+  // (no studio works for it): none of them is reported.
   assert.deepEqual(notices(), {
     state: [{ room: "plain", reason: "none" }],
-    settings: [["demo", null], ["plain", "none"], ["studio", null]],
+    settings: [["demo", null], ["plain", "none"], ["studio", null], ["watch", null]],
   });
   fs.writeFileSync(path.join(config.home, "rooms", "demo", "brief.md"), "  \n\n");
   assert.deepEqual(notices().state, [

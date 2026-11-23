@@ -1013,9 +1013,11 @@ requesting room's rules instead of a bare sentence.
   `privateDirs` folder.
 - **A room without a brief.** `briefNotice` (`rooms.ts`) reads, for each room
   of the home, whether it has a brief to give: `none`, `empty` or `missing`,
-  null for a brief with text and for any shared room (the simplest rule the
-  model allows: a brief is given by the room a studio works for, and a
-  shared room serves the others). `getState` lists them in
+  null for a brief with text, for any shared room and for the supervisor's
+  room, one with an agent marked `supervisor` (the simplest rule the model
+  allows: a brief is given by the room a studio works for, a shared room
+  serves the others, and no studio works for the supervisor's room).
+  `getState` lists them in
   `roomsWithoutBrief` beside `invalidRooms`, the settings view gives each
   room its `briefNotice`. Nothing is stored.
 - **Asking the keeper.** `syncHome` mirrors `brief.keeper` into

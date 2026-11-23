@@ -393,8 +393,9 @@ restart.
   `hq_status`, `tool` from the run's events, `hq_status` itself left out).
   `null` between runs. After the snapshot, the `tool_call` events of the
   stream keep it up to date (see `architecture.md`, "The activity bubble").
-- `roomsWithoutBrief`: the rooms that are not shared and have no brief to give
-  a studio (`home-layout.md`, "The room brief"): `reason` is `"none"` (no
+- `roomsWithoutBrief`: the rooms that are not shared, have no agent with
+  `"supervisor": true` (no studio works for the supervisor's room) and have
+  no brief to give a studio (`home-layout.md`, "The room brief"): `reason` is `"none"` (no
   `brief` in `room.json`), `"empty"` (its file holds only blank lines) or
   `"missing"` (its file cannot be read now). An information: the room works
   as before. A shared room is never listed, it serves the others.
