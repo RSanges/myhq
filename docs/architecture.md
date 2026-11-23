@@ -1212,8 +1212,9 @@ asked is the one exception, below).
 `listQueue`) gives every pending task in that order with its room, agent,
 subject, its text on one line, since when, whether the owner placed it, and
 why it waits: the reasons of the Standard (`taskWait`, `src/server/blocked.ts`,
-the same function), plus two that are not a block: `afterRun` (the end of
-its agent's run in progress takes it) and `behind`. A task that waits by design
+the same function), plus those that are not a block: `afterRun` (the end of
+its agent's run in progress takes it), `behind`, and `machine` or `veto`
+when memory or the veto command holds it (below). A task that waits by design
 for its agent's next run (`"queue"`, a message its sender or the portier let
 wait) is left out: no place in the queue would start it. `POST /api/queue` moves a task
 first, up, down or back to automatic order (`moveInQueue`: the tasks from the
@@ -1360,10 +1361,16 @@ that a later task could not take a resource an earlier one waited for
 (test/queue-machine.test.ts proves it, and the rest of the suite runs
 unchanged).
 
-The Standard and the supervisor know the new waits: a task stuck behind the
-machine for more than 15 minutes is listed with the cause `machine` or
-`veto`, and both resolve themselves (`entryRule`: `wait`); `neverFits` does
-not (above).
+The Standard and the queue tell the new waits apart. A task held back only
+by memory that other runs take (cause `machine`) or by the home's veto
+command, asked or saying to wait (cause `veto`), starts on its own once that
+changes: `taskWait` gives it as a wait (`stuck: false`), like `afterRun`, so
+it is in the queue with its reason (« elle repart dès que la machine le
+permet ») and never on the Standard, where the owner could close it a
+minute before it would have started. Two machine waits stay on the Standard
+after 15 minutes: `neverFits` (above), and a GPU that cannot be read
+(`vramUnknown`, cause `machine`), since nothing says it will be read again
+(no `nvidia-smi`); `entryRule` gives the latter `wait`.
 
 ### Wake-ups
 

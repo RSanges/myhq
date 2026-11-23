@@ -210,8 +210,13 @@ export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, ag
     const machine = agent ? machineCheck({ config, db, room: task.room, agent, read }) : null;
     // A need above the machine's total never starts: it holds nothing, and waits for the owner.
     if (machine?.kind === "machine" && machine.shortfall.kind === "tooBig") return { ...why("neverFits", shortfallReason(machine.shortfall)), holds: [] };
-    if (machine?.kind === "machine") return { ...why("machine", shortfallReason(machine.shortfall)), holds: machine.holds };
-    if (machine?.kind === "veto") return why("veto", machine.reason === null ? r.vetoAsking : r.veto(machine.reason));
+    // A GPU that cannot be read may never be read again (no nvidia-smi): the owner has to know.
+    if (machine?.kind === "machine" && machine.shortfall.kind === "vramUnknown") {
+      return { ...why("machine", shortfallReason(machine.shortfall)), holds: machine.holds };
+    }
+    // Memory taken by other runs, or the home's veto command asked or saying to wait: it starts on its own once that changes.
+    if (machine?.kind === "machine") return { ...waits("machine", shortfallReason(machine.shortfall)), holds: machine.holds };
+    if (machine?.kind === "veto") return waits("veto", machine.reason === null ? r.vetoAsking : r.veto(machine.reason));
     if (!overdue && task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
       const candidate: WakeCandidate = {
