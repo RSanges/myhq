@@ -9,7 +9,7 @@ import { Meter } from "./meter";
 import { QueuePanel } from "./queue-panel";
 import { RoutineJournal } from "./routine-journal";
 import { SiteNav } from "./site-nav";
-import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
+import { pendingTitle, selectAgents, selectHistory, selectPending, selectUnseen, unwatchedUnseen } from "./model";
 import { strings } from "./strings";
 import { Team } from "./team";
 import { buttonClass, ErrorNote } from "./ui";
@@ -17,6 +17,7 @@ import { useDeepLink } from "./use-deep-link";
 import { useDesk } from "./use-desk";
 import { useHq } from "./use-hq";
 import { useMediaQuery } from "./use-media-query";
+import { UnwatchedNotice, WatchCount } from "./watch-count";
 
 export function Dashboard() {
   const { model, dispatch, connection, loadError, usageFailed, retry, subscribeChat, subscribeDesk } = useHq();
@@ -28,6 +29,7 @@ export function Dashboard() {
   const unseen = useMemo(() => selectUnseen(model), [model]);
   const history = useMemo(() => selectHistory(model), [model]);
   const agents = useMemo(() => selectAgents(model), [model]);
+  const unwatched = useMemo(() => unwatchedUnseen(unseen, desk.desk?.objects ?? null), [unseen, desk.desk]);
 
   useEffect(() => {
     document.title = pendingTitle(strings.desk.pageTitle, pending.length, unseen.length);
@@ -44,6 +46,7 @@ export function Dashboard() {
         <h1 className="text-xl font-semibold">{strings.app.title}</h1>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <SiteNav current="desk" />
+          <WatchCount unseen={unseen} />
           <p role="status" className="flex items-center gap-2 text-sm text-muted">
             <span aria-hidden className={`inline-block size-2 rounded-full ${connectionTone}`} />
             {strings.app.connection[connection]}
@@ -53,6 +56,8 @@ export function Dashboard() {
       </header>
 
       <DeskHub desk={desk.desk} narrow={!wide} />
+
+      {model.loaded && <UnwatchedNotice items={unwatched} />}
 
       <QueuePanel subscribe={subscribeDesk} />
 

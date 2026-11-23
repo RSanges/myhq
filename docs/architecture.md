@@ -485,6 +485,19 @@ conversation panel) with the item's id, type, title, agent, room and body
 not answer (budget, timeout) leaves the item in « À regarder » and the reason is
 shown.
 
+The count of the tab title is also shown in the header of the floor and of
+the desk, « 1 à regarder » (`src/ui/watch-count.tsx`, `WatchCount`), as a
+plain link to the oldest of them (`watchHref`: `/bureau#approval-<id>`): the
+desk follows the deep link to its card in « À regarder », so what the title
+counts is one click away from both pages. A type of `notifyTypes` that no
+tray of the desk watches (`unwatchedUnseen` in `src/ui/model.ts`: no tray
+whose sources are all `watch:` covers it, the rule of the tray page) is shown
+on no tile and, on the floor, nowhere: on the desk, the items of such types
+are also named right under the tiles (`UnwatchedNotice`), each a link to its
+card, instead of being found only in the list at the bottom. The simplest of
+the two ways (a fallback tile would change the desk the owner arranged in
+`myhq.json`).
+
 On the desk, a pending item has **one main button** next to a discreet
 « Refuser ». With no general comment and no remark on a passage it reads
 « Approuver » and approves; as soon as the field « Commentaire pour l'agent

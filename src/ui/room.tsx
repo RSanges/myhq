@@ -23,6 +23,7 @@ import { FLOOR_MODEL, snapshotRoom } from "./room-model";
 import { createRoomStore, type RoomStore } from "./room-store";
 import { strings } from "./strings";
 import { SiteNav } from "./site-nav";
+import { WatchCount } from "./watch-count";
 import { buttonClass, ErrorNote } from "./ui";
 import { fetchChatTurn } from "./api";
 import { useDesk } from "./use-desk";
@@ -190,7 +191,8 @@ export function RoomPage() {
 
   // The tab says how many items wait, as the desk's did when it was the home page.
   const waiting = useMemo(() => selectPending(model).length, [model]);
-  const unseen = useMemo(() => selectUnseen(model).length, [model]);
+  const unseenItems = useMemo(() => selectUnseen(model), [model]);
+  const unseen = unseenItems.length;
   useEffect(() => {
     document.title = pendingTitle(t.pageTitle, waiting, unseen);
   }, [waiting, unseen]);
@@ -324,6 +326,7 @@ export function RoomPage() {
     <div className="wall-page room-page chat-main" inert={chat.open && !wide}>
       <header className="room-top">
         <SiteNav current="floor" />
+        <WatchCount unseen={unseenItems} />
         {/* The nav already says "L'étage": the title shows only when it adds a room name, and stays for screen readers. */}
         <h1 className={title === strings.nav.floor ? "sr-only" : "room-title wall-display"}>{title}</h1>
         {model.loaded && single && roomNames.length > 0 && (

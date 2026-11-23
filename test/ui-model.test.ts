@@ -13,8 +13,10 @@ import {
   selectAgents,
   selectHistory,
   selectPending,
+  unwatchedUnseen,
   upsertById,
   viewEvent,
+  watchHref,
 } from "../src/ui/model";
 import type { Approval, HqEvent, Message, Run, State } from "../src/ui/schemas";
 import { stateSchema } from "../src/ui/schemas";
@@ -338,4 +340,23 @@ test("a parallel agent's run that ends while another still runs leaves the agent
   assert.equal(selectAgents(model)[0]!.lastRun?.id, 7, "an older run that ended changes nothing");
   model = reducer(model, { type: "run", run: run({ id: 7, status: "done" }) });
   assert.equal(selectAgents(model)[0]!.state, "idle");
+});
+
+test("watchHref: the count of items to look at leads to the oldest of them on the desk", () => {
+  assert.equal(watchHref([]), null);
+  const first = approval({ id: 7, status: "unseen", informational: true });
+  const second = approval({ id: 9, status: "unseen", informational: true });
+  assert.equal(watchHref([first, second]), "/bureau#approval-7");
+});
+
+test("unwatchedUnseen: an unseen item whose type no tray of the desk watches is the one hidden under the rest", () => {
+  const brief = approval({ id: 1, type: "brief", status: "unseen", informational: true });
+  const alert = approval({ id: 2, type: "mail_alert", status: "unseen", informational: true });
+  const tray = { object: "tray" as const, source: "watch:brief" };
+  assert.deepEqual(unwatchedUnseen([brief, alert], [tray]).map((each) => each.id), [2]);
+  assert.deepEqual(unwatchedUnseen([brief, alert], [tray, { object: "tray" as const, source: "watch:*" }]), [], "watch:* watches every type");
+  // A pile or a tray that mixes watch sources with others does not show the items to look at (desk-module.tsx).
+  assert.deepEqual(unwatchedUnseen([brief], [{ object: "pile" as const, source: "watch:brief" }]).map((each) => each.id), [1]);
+  assert.deepEqual(unwatchedUnseen([brief], [{ object: "tray" as const, source: "watch:brief+approvals" }]).map((each) => each.id), [1]);
+  assert.deepEqual(unwatchedUnseen([brief], null), [], "no desk yet: nothing to tell apart (no notice that flashes while it loads)");
 });

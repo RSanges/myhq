@@ -9,7 +9,7 @@ import { markDeskSeen } from "./api";
 import { AgendaView, ItemsView, JournalView, StandardView } from "./desk-module-views";
 import { formatClock } from "./format";
 import { PostitsView } from "./postits-view";
-import { selectAgents, selectHistory, selectPending, selectUnseen } from "./model";
+import { coreSources, isWatchTray, matchesTypes, selectAgents, selectHistory, selectPending, selectUnseen, watchTypes } from "./model";
 import { RECEPTION_ROOM } from "./reception";
 import type { Approval, DeskObject } from "./schemas";
 import { strings } from "./strings";
@@ -22,17 +22,6 @@ import { useMediaQuery } from "./use-media-query";
 
 const t = strings.deskModules;
 
-/** The core sources of an object, as GET /api/desk names them (`watch:brief+summaries`). */
-const coreSources = (object: DeskObject): string[] => (object.source === "command" ? [] : object.source.split("+"));
-
-/** The types of the watch sources of an object; `null` in the list stands for `watch:*`. */
-function watchTypes(object: DeskObject): (string | null)[] {
-  return coreSources(object)
-    .filter((source) => source.startsWith("watch:"))
-    .map((source) => (source === "watch:*" ? null : source.slice("watch:".length)));
-}
-
-const matchesTypes = (types: (string | null)[]) => (approval: Approval) => types.some((type) => type === null || type === approval.type);
 
 /** A command of the home that failed: what happened, in French, and a way to try again. */
 export function CommandError({ object, onRetry }: { object: DeskObject; onRetry: () => void }) {
@@ -203,7 +192,7 @@ function ModuleBody({
     }
     return <Desk title={t.signer.section} pending={pending} unseen={[]} history={history} agents={agents} dispatch={dispatch} target={target} />;
   }
-  if (object.object === "tray" && types.length > 0 && sources.every((source) => source.startsWith("watch:"))) {
+  if (isWatchTray(object)) {
     if (!model.loaded) return <p className="text-sm text-muted">{t.loading}</p>;
     const seen = history.filter((approval) => approval.informational && matchesTypes(types)(approval));
     return <WatchDesk unseen={unseen} seen={seen} agents={agents} dispatch={dispatch} target={target} />;

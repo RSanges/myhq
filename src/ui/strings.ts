@@ -48,6 +48,9 @@ export const strings = {
     /** The section of the informational items (notifyTypes): alerts and briefs that stay until they are looked at. */
     watchTitle: (count: number) => `À regarder (${count})`,
     watchHint: "Rien à décider : marque chaque item comme vu quand tu l'as lu.",
+    /** Under the tiles: the items to look at that no tray of the desk watches. */
+    unwatchedTitle: (count: number) => `À regarder, sans tuile sur le bureau (${count})`,
+    unwatchedHint: "Aucune tuile du bureau ne surveille leur type : ils sont dans la liste « À regarder » plus bas.",
     seen: "Vu",
     askAssistant: (name: string) => `Demander à ${name}`,
     askLabel: (name: string) => `Ta demande pour ${name}`,

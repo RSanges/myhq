@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { DEFAULT_FLOOR_LAYOUT, type FloorLayoutMode } from "./floor-mode";
 import { RECEPTION_AGENT, RECEPTION_ROOM } from "./reception";
-import type { Agent, AgentRoutines, Approval, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
+import { approvalHash, DESK_PATH } from "./deep-link";
+import type { Agent, AgentRoutines, Approval, DeskObject, Firing, HqEvent, Message, Reception, Run, Scheduler, State, Usage } from "./schemas";
 import { strings } from "./strings";
 
 // Pure state of the page: a snapshot from /api/state, then upserts from the SSE
@@ -206,6 +207,37 @@ export function selectUnseen(model: Model): Approval[] {
   return Object.values(model.approvals)
     .filter((approval) => approval.status === "unseen")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+}
+
+/** The core sources of a desk object, as GET /api/desk names them (`watch:brief+summaries`). */
+export const coreSources = (object: Pick<DeskObject, "source">): string[] => (object.source === "command" ? [] : object.source.split("+"));
+
+/** The types of the watch sources of a desk object; `null` in the list stands for `watch:*`. */
+export function watchTypes(object: Pick<DeskObject, "source">): (string | null)[] {
+  return coreSources(object)
+    .filter((source) => source.startsWith("watch:"))
+    .map((source) => (source === "watch:*" ? null : source.slice("watch:".length)));
+}
+
+export const matchesTypes = (types: (string | null)[]) => (approval: Approval) => types.some((type) => type === null || type === approval.type);
+
+/** Whether a desk object is a tray that shows the items to look at of its types (desk-module.tsx, WatchDesk). */
+export const isWatchTray = (object: Pick<DeskObject, "object" | "source">): boolean =>
+  object.object === "tray" && watchTypes(object).length > 0 && coreSources(object).every((source) => source.startsWith("watch:"));
+
+/**
+ * The items to look at that no tray of the desk shows: on the desk page, only its list at the bottom holds them.
+ * None while the desk is not loaded (null).
+ */
+export function unwatchedUnseen(unseen: readonly Approval[], objects: readonly Pick<DeskObject, "object" | "source">[] | null): Approval[] {
+  if (objects === null) return [];
+  const trays = objects.filter(isWatchTray).map(watchTypes);
+  return unseen.filter((approval) => !trays.some((types) => matchesTypes(types)(approval)));
+}
+
+/** Where the count of items to look at leads: the oldest of them on the desk page, or null when there is none. */
+export function watchHref(unseen: readonly Approval[]): string | null {
+  return unseen.length > 0 ? `${DESK_PATH}${approvalHash(unseen[0]!.id)}` : null;
 }
 
 /** Handled items, most recently handled first. */
