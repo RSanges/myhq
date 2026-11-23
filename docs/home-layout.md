@@ -325,6 +325,13 @@ colours, its tone, its logo rules) and say where its reference files live:
   keeper, or another agent than the keeper, is refused with the reason. The
   keeper's role should say that it keeps the brief and answers such
   questions.
+- **Updating it.** The keeper does not edit the file: it proposes the whole
+  new text with `hq_submit` type `room_brief`, `payload`
+  `{ "text": "<the whole new brief>", "summary": "<what changes>" }`. The
+  item waits on the desk like any other, its body showing the summary and
+  the full text. Approving it writes the file and keeps the old one beside it
+  (`brief.md.<YYYYMMDD-HHMMSS>.bak`); rejecting it changes nothing. Only the
+  room's keeper may submit it, for its own room.
 - **A draft when the room is created.** Approving a room proposal of the
   receptionist also writes a brief draft in the new room: headings to fill
   in (the project, its audience, its tone, its visual identity and where its

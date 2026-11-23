@@ -9,6 +9,7 @@ import { APPROVAL_SELECT, toApproval, type ApprovalDto, type ApprovalRowWithActi
 import { AGENT_PROPOSAL, applyAgentProposal } from "./agent-proposal";
 import { denyDoorRequest, DOOR_TYPE, grantDoorRequest } from "./door";
 import { applyRoomProposal, ROOM_PROPOSAL } from "./proposal";
+import { applyRoomBrief, ROOM_BRIEF } from "./room-brief";
 import {
   answersLines,
   answersNote,
@@ -167,6 +168,8 @@ export function decideApproval(
     if (row?.status === "pending" && row.type === AGENT_PROPOSAL) {
       applyAgentProposal(config ?? getConfig(), db, JSON.parse(row.payload) as unknown);
     }
+    // The keeper's new brief is written now, and only now (room-brief.ts).
+    if (row?.status === "pending" && row.type === ROOM_BRIEF) applyRoomBrief(config ?? getConfig(), row);
     if (row?.status === "pending" && row.type !== QUESTION_TYPE && row.type !== DOOR_TYPE) {
       const cfg = config ?? getConfig();
       const agent = agentOf(cfg, row);

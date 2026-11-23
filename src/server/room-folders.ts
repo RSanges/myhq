@@ -7,6 +7,7 @@ import { isInside, liveConfig, type HqConfig } from "./config";
 import type { ApprovalRow, Db } from "./db";
 import { NOTIFICATION_NOTE, readHomeSettings } from "./home-settings";
 import { ROOM_PROPOSAL } from "./proposal";
+import { ROOM_BRIEF } from "./room-brief";
 import { QUESTION_TYPE } from "./questions";
 import { dayKey, wallTime } from "./time";
 
@@ -392,7 +393,7 @@ function freeStem(dir: string, stem: string, exts: readonly string[]): string {
 }
 
 /** The types that are never filed: they hold no delivery. */
-const NEVER_FILED: readonly string[] = [QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL];
+const NEVER_FILED: readonly string[] = [QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL, ROOM_BRIEF];
 
 /**
  * What an approved item, not filed yet, would file: its files, the drawer it

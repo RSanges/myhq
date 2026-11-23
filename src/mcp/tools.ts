@@ -25,6 +25,7 @@ import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStat
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { MESSAGE_EXPECTS } from "../server/portier";
 import { normalizeRoomProposal, ROOM_PROPOSAL } from "../server/proposal";
+import { normalizeRoomBrief, ROOM_BRIEF } from "../server/room-brief";
 import { CHOICES_KEY, QUESTION_TYPE, questionsSchema, renderQuestionsBody } from "../server/questions";
 import { idSchema, loadHome, type Home } from "../server/rooms";
 import {
@@ -670,7 +671,7 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
     );
   }
   const filing = parsed.drawer !== undefined || parsed.order !== undefined;
-  if (filing && (supervisor || [QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL].includes(parsed.type))) {
+  if (filing && (supervisor || [QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL, ROOM_BRIEF].includes(parsed.type))) {
     throw new ToolError(`drawer and order are for a deliverable MyHQ files once approved: not for type "${parsed.type}". Leave them out.`);
   }
   // A shared room delivers to the room that ordered: the item goes to that room's pile.
@@ -724,10 +725,21 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
       throw new ToolError(`agent_proposal: room "${proposal.room}" already has an agent "${proposal.agent.id}": pick another id.`);
     }
   }
+  if (parsed.type === ROOM_BRIEF) {
+    // The keeper of its room's brief alone proposes a new one; MyHQ writes it on approval (room-brief.ts).
+    const keeper = roomInfo(db, ctx.room)?.brief_keeper ?? null;
+    if (keeper === null) throw new ToolError(`Room "${ctx.room}" has no brief keeper: its room.json declares no brief, or no keeper for it.`);
+    if (keeper !== ctx.agentId) throw new ToolError(`Only the keeper of the brief of room "${ctx.room}" ("${keeper}") submits room_brief.`);
+    try {
+      ({ body, payload } = normalizeRoomBrief(parsed.payload ?? {}, parsed.body));
+    } catch (error) {
+      throw new ToolError((error as Error).message);
+    }
+  }
   // The recipients of onApprove are checked now, so that the agent can fix them within the same run.
   const relays = relayMessages(db, ctx, parsed.onApprove);
   if (parsed.questions) {
-    if (parsed.type === QUESTION_TYPE || parsed.type === ROOM_PROPOSAL || parsed.type === AGENT_PROPOSAL) {
+    if ([QUESTION_TYPE, ROOM_PROPOSAL, AGENT_PROPOSAL, ROOM_BRIEF].includes(parsed.type)) {
       throw new ToolError(`questions are for an ordinary deliverable: not for type "${parsed.type}" (to only ask, use hq_ask).`);
     }
     payload = { ...(payload ?? {}), [CHOICES_KEY]: { questions: parsed.questions } };
@@ -754,6 +766,7 @@ export function hqSubmit(db: Db, ctx: HqContext, args: Args<"hq_submit">): Submi
     supervisor ||
     (parsed.type !== ROOM_PROPOSAL &&
       parsed.type !== AGENT_PROPOSAL &&
+      parsed.type !== ROOM_BRIEF &&
       ctx.home !== undefined &&
       readNotifyTypes(ctx.home).includes(parsed.type));
   if (informational && parsed.questions) {

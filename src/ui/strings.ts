@@ -1334,6 +1334,7 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       WORKTREE_FAILED: "Le worktree Git de l'agent n'a pas pu être créé : rien n'a été écrit. Le détail est dans le journal.",
       AGENT_EXISTS: "Cette salle a déjà un agent de cet identifiant : rien n'a été écrit. Refuse la proposition ou demande un autre identifiant.",
       AGENT_PROPOSAL_INVALID: "La proposition d'agent est invalide : rien n'a été écrit. Le détail est dans le journal.",
+      ROOM_BRIEF_INVALID: "La nouvelle fiche ne peut pas être écrite (salle changée, fiche ou responsable retirés) : rien n'a été écrit. Refuse-la ou fais-la refaire.",
       CHAT_NOT_CONFIGURED: "La conversation n'est pas configurée (section chat de assistant.json).",
       EXPORT_NOT_CONFIGURED: "L'export quotidien n'est pas configuré (export.dir dans myhq.json).",
       TASK_NOT_FOUND: "Tâche introuvable.",
@@ -2044,6 +2045,8 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         "(à compléter : l'agent qui tient la fiche, `keeper` de `brief`, et ce qui passe par toi)",
         "",
       ].join("\n"),
+    /** What MyHQ appends to the keeper's text in the body of a `room_brief` item. */
+    body: { summary: "Ce qui change", text: "Nouvelle fiche (remplace la fiche entière à l'approbation)" },
   },
   /** The receptionist's agent proposals (type `agent_proposal`): a missing agent, proposed for a need. */
   agentProposal: {

@@ -58,6 +58,7 @@ Every error has the same shape and an HTTP status:
 | `WORKTREE_FAILED` | 422 | Approving a room proposal, or an agent proposal, whose agent worktree cannot be created. Nothing is written; the item stays pending. |
 | `AGENT_EXISTS` | 409 | Approving an agent proposal whose room already has an agent of that id, or a role file of that name. Nothing is written; the item stays pending. |
 | `AGENT_PROPOSAL_INVALID` | 422 | Approving an agent proposal that fails validation, or that would make its room invalid (for example a working directory outside the home). Nothing is written; the item stays pending. An agent proposal for a room the home no longer has is `ROOM_NOT_FOUND` (422). |
+| `ROOM_BRIEF_INVALID` | 422 | Approving a `room_brief` whose room is gone or invalid, declares no brief any more, or whose submitter no longer keeps it. Nothing is written; the item stays pending. |
 | `SPRITE_NOT_FOUND` | 404 | `GET /api/sprites/<room>/<agent>` (or `?sheet=iso`) for an agent that declares no such sheet, or whose file is missing, too large, or not a PNG or WebP. |
 | `EXPORT_NOT_CONFIGURED` | 404 | `POST /api/export` while the home has no `export.dir` in `myhq.json`. |
 | `SETTINGS_FILE_INVALID` | 409 | A save of the settings page that writes `myhq.json` while the file is not valid JSON or not a JSON object. Nothing is written; the file is left for the user to fix. |
@@ -268,6 +269,7 @@ Payloads the interface and the assistant act on:
 | `pull_request`, `blog_post` | `{ "branch": "hq/<agent>-<slug>", "sha": "...", "title": "...", "summary": "..." }` | The branch, the commit, and the `git push` and `gh pr create` commands are handed to the user. Nothing is pushed or merged. |
 | `question` | `{ "context"?: "...", "questions": [{ "question": "...", "header"?: "...", "options": [{ "label": "...", "description"?: "..." }], "multiSelect"?: true }], "answers"?: [{ "options": [1], "other"?: "..." }] }` (from `hq_ask`; `answers` once answered, one per question) | Answering it (`approved` with `answers`) wakes the agent with its questions and the answers; see `PATCH /api/approvals/[id]`. |
 | `room_proposal` | `{ "room": {room.json}, "roles": { "<agent>": { "template": "...", "content": "..." } }, "claudeMd": "..." }` (completed by `hq_submit`, see `architecture.md` section 3) | The room is written in the home (otherwise the approval fails with `ROOM_EXISTS`, `PROPOSAL_INVALID` or `WORKTREE_FAILED`), then the `CLAUDE.md` block is handed to the user. |
+| `room_brief` | `{ "text": "...", "summary": "..." }` (the whole new brief and what changed; submitted only by the keeper of its room's brief) | The old brief is kept beside it as `<file>.<YYYYMMDD-HHMMSS>.bak` (UTC), then the new text replaces it atomically (otherwise the approval fails with `ROOM_BRIEF_INVALID`). A rejection writes nothing. |
 
 ### Firing
 

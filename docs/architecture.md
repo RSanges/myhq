@@ -670,6 +670,18 @@ the home (`ROOM_NOT_FOUND`), an id or a role file already taken
 for example a working directory outside the home) leave the room exactly as
 it was, and the item stays pending with the error, as for a room proposal.
 
+#### Room briefs
+
+A `room_brief` item is the keeper's proposal of a new brief for its own room
+(see "The room brief"). Approving it, and nothing else, writes the file
+(`room-brief.ts`, `applyRoomBrief`): the home is loaded again, the room must
+still declare a brief whose keeper is the item's agent, the old file is
+copied beside it (`<file>.<YYYYMMDD-HHMMSS>.bak`, UTC, never over an existing
+copy), then the new text replaces it through `writeTextAtomic`. Otherwise
+`ROOM_BRIEF_INVALID`, nothing is written and the item stays pending. A
+rejection or a revision writes nothing. The item is never filed in the room
+folders.
+
 #### Executing an approved item
 
 An agent whose `room.json` sets `onApproval: "task"` acts on its own approved
@@ -1006,6 +1018,14 @@ requesting room's rules instead of a bare sentence.
   `message` task (same waking, same answer to the studio), its text
   labelled « Question about the brief of room "<room>", which you keep ».
   The brief block of the studio's prompt names the keeper and this call.
+- **Updating it.** The keeper never writes the brief (it lies in `rooms/`,
+  out of its reach anyway): it submits `hq_submit` type `room_brief` with
+  `payload` `{ text, summary }`. `hq_submit` refuses it from any agent but
+  the room's `brief_keeper`, refuses `drawer`, `order` and `questions`, never
+  makes it informational, and `normalizeRoomBrief` checks the payload with
+  zod, replaces dashes and appends the summary and the whole text to the
+  body, so that the owner approves exactly what will be written. Writing it
+  is the approval's (see "Room briefs" in the approval queue).
 - **Limits.** Only for an agent of a shared room. An origin named only by
   messages from a supervisor (`supervisor: true` in the home) gives its folder
   but not its brief, so that a relaunch does not carry the supervisor's own
