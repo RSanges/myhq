@@ -2749,9 +2749,14 @@ is itself submitted to the user's approval.
    `{{audience}}`, `{{features}}`, `{{autonomy}}`, `{{guardrails}}`; a list
    becomes a Markdown list; em and en dashes are replaced), and the
    `CLAUDE.md` block. The stored item carries the final files, and its body
-   shows the full `room.json`, every role and the block: the user approves
-   exactly what will be written. On approval, MyHQ writes `rooms/<name>/`
-   (never over an existing room), loads it back, creates the worktree of each
+   shows the full `room.json`, every role, the block and the brief draft
+   (below): the user approves exactly what will be written. On approval,
+   MyHQ writes `rooms/<name>/` (never over an existing room), with a brief
+   draft (`room-brief.ts`, `briefDraft`: generic headings, the room's name,
+   repository and agents filled in, no model called) at the room's
+   `brief.file`, or at `brief.md` which `room.json` then does not declare, so
+   that the room shows as without a brief until the owner fills it in and
+   declares it; loads it back, creates the worktree of each
    agent that has one (`git worktree add`, branch `hq/<agent>`), and syncs the
    home: the room is live without a restart. Rejection and revision work as
    for any item (a revision relaunches onboarding at once on the same

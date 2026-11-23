@@ -317,6 +317,14 @@ colours, its tone, its logo rules) and say where its reference files live:
   the drop folder of `assistant.json` (`dropDir`). Any of these makes the room
   invalid, with the reason. A reference missing on disk is allowed: a run
   skips it, with a line in the log.
+- **A draft when the room is created.** Approving a room proposal of the
+  receptionist also writes a brief draft in the new room: headings to fill
+  in (the project, its audience, its tone, its visual identity and where its
+  reference files are, what is forbidden, who validates), with the room's
+  name, repository and agents already there. It goes to the `brief.file` the
+  proposal declares, else to `brief.md`, which `room.json` then does not
+  declare: fill it in, then add `"brief": { "file": "brief.md" }`. It is
+  shown in the proposal's body, and never written over an existing file.
 - **A room without a brief shows.** A room that is not shared and has no
   `brief`, or whose brief file is empty, is listed in `roomsWithoutBrief` of
   the state and its card on the settings page says « Sans fiche ». It is an

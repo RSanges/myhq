@@ -12,7 +12,8 @@ import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
 import { ONBOARDING_AGENT, ONBOARDING_ROOM, startOnboarding, suggestRoomName, wakeOnboarding } from "../src/server/onboarding";
 import { normalizeRoomProposal } from "../src/server/proposal";
-import { loadHome } from "../src/server/rooms";
+import { briefDraft } from "../src/server/room-brief";
+import { briefNotice, loadHome } from "../src/server/rooms";
 import { roleTemplatesDir } from "../src/server/templates";
 import { makeHome, makeRepo, waitForRun } from "./helpers";
 
@@ -567,4 +568,38 @@ test("an agent of a proposed room that submits gets hq_items: a revision asks it
   assert.deepEqual(payload.room.agents[0]!.allowedTools, ["Read", "Edit", "Bash(git *)", "mcp__hq__*"]);
   assert.deepEqual(payload.room.agents[1]!.allowedTools, ["WebSearch", "mcp__hq__hq_submit", "mcp__hq__hq_items"]);
   assert.match(body, /"mcp__hq__hq_items"/, "the owner approves the room.json as it will be written");
+});
+
+test("approving a room proposal writes a brief draft beside room.json, filled with what MyHQ knows, and the room stays without a brief", () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const { approvalId } = hqSubmit(db, ctx, { type: "room_proposal", title: "t", body: "b", payload: proposal(targetRepo) });
+  const body = (db.prepare("SELECT body FROM approvals WHERE id = ?").get(approvalId) as { body: string }).body;
+  assert.match(body, /## brief\.md/, "the owner approves the draft with the room");
+  decideApproval(db, approvalId, { decision: "approved" }, config);
+  const roomDir = path.join(config.home, "rooms", "acme");
+  const draft = fs.readFileSync(path.join(roomDir, "brief.md"), "utf8");
+  assert.equal(draft, briefDraft({ name: "acme", targetRepo, agents: [{ id: "dev", name: "Dev" }, { id: "watch", name: "Watch" }] }));
+  for (const known of ["acme", targetRepo, "dev (Dev)", "watch (Watch)"]) assert.ok(draft.includes(known), known);
+  assert.ok(body.includes(draft.trim().split("\n")[0]!));
+  assert.doesNotMatch(draft, DASHES);
+  // A draft is not a brief: room.json does not declare it, the room shows as without one.
+  const room = loadHome(config.home).rooms.find((each) => each.name === "acme")!;
+  assert.equal(room.brief, null);
+  assert.equal(briefNotice(room), "none");
+});
+
+test("a room proposal that declares its brief gets the draft at that path, and the room loads with it", () => {
+  const { config, db, targetRepo, ctx } = setup();
+  const payload = proposal(targetRepo);
+  const { approvalId } = hqSubmit(db, ctx, {
+    type: "room_proposal",
+    title: "t",
+    body: "b",
+    payload: { ...payload, room: { ...payload.room, brief: { file: "docs/brief.md", keeper: "dev" } } },
+  });
+  decideApproval(db, approvalId, { decision: "approved" }, config);
+  const room = loadHome(config.home).rooms.find((each) => each.name === "acme")!;
+  assert.equal(room.brief?.file, path.join(config.home, "rooms", "acme", "docs", "brief.md"));
+  assert.match(fs.readFileSync(room.brief!.file, "utf8"), /acme/);
+  assert.equal(fs.existsSync(path.join(config.home, "rooms", "acme", "brief.md")), false);
 });

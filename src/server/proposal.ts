@@ -5,6 +5,7 @@ import { isInside, type HqConfig } from "./config";
 import { replaceDashes } from "./dashes";
 import type { Db } from "./db";
 import { HqError } from "./errors";
+import { BRIEF_DRAFT_FILE, briefDraft } from "./room-brief";
 import { idSchema, loadHome, loadRoom, roomFileSchema, syncHome, withItemsTool, type Room, type RoomFile } from "./rooms";
 import { instantiateRole, readRoleTemplate, roleValuesSchema, templateNameSchema } from "./templates";
 import { ensureWorktree, worktreeBranch } from "./worktree";
@@ -118,6 +119,8 @@ export function normalizeRoomProposal(
     ...ids.flatMap((id) => [`### ${id} (${content[id]!.template})`, fenced("markdown", content[id]!.content.trim())]),
     "## CLAUDE.md block",
     fenced("markdown", normalized.claudeMd),
+    `## ${normalized.room.brief?.file ?? BRIEF_DRAFT_FILE} (brief draft)`,
+    fenced("markdown", briefDraft(normalized.room).trim()),
   ];
   return { payload: normalized, body: sections.join("\n\n") };
 }
@@ -137,8 +140,10 @@ function checkPaths(home: string, room: RoomFile): void {
 }
 
 /**
- * Applies an approved room proposal: writes `rooms/<name>/room.json` and the
- * roles, never over an existing room, creates the worktrees, then syncs the
+ * Applies an approved room proposal: writes `rooms/<name>/room.json`, the
+ * roles and a brief draft (room-brief.ts: at the room's `brief.file`, else
+ * `brief.md`, which room.json then does not declare), never over an existing
+ * room or file, creates the worktrees, then syncs the
  * home (the room is live without a restart). Throws ROOM_EXISTS,
  * PROPOSAL_INVALID or WORKTREE_FAILED and leaves no room behind.
  */
@@ -170,6 +175,12 @@ export function applyRoomProposal(config: HqConfig, db: Db, payload: unknown): R
     fs.mkdirSync(path.join(dir, "roles"));
     for (const agent of room.agents) {
       fs.writeFileSync(path.join(dir, "roles", `${agent.id}.md`), roles[agent.id]!.content, "utf8");
+    }
+    // A brief file outside the room directory is left to loadRoom, which refuses it.
+    const draft = path.resolve(dir, room.brief?.file ?? BRIEF_DRAFT_FILE);
+    if (isInside(dir, draft)) {
+      fs.mkdirSync(path.dirname(draft), { recursive: true });
+      fs.writeFileSync(draft, briefDraft(room), { encoding: "utf8", flag: "wx" });
     }
     fs.writeFileSync(path.join(dir, "room.json"), `${JSON.stringify(room, null, 2)}\n`, "utf8");
     try {

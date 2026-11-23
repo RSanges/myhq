@@ -2006,6 +2006,45 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
     waitingFor: (resources: readonly string[]) =>
       `En attente : ${resources.join(", ")} occupé${resources.length > 1 ? "s" : ""}`,
   },
+  /** The room brief (room.json `brief`, room-brief.ts). */
+  roomBrief: {
+    /** The draft MyHQ writes when a room is created (applyRoomProposal): headings to fill, what MyHQ knows filled in. */
+    draft: (p: { title: string; name: string; targetRepo: string; agents: string[] }) =>
+      [
+        `# Fiche de la salle ${p.title}`,
+        "",
+        "> Brouillon proposé par MyHQ à la création de la salle. Complète chaque rubrique, efface ce qui ne sert pas, puis déclare la fiche dans room.json si ce n'est pas fait (\"brief\": { \"file\": \"brief.md\" }). Un studio qui travaille pour la salle la reçoit telle quelle.",
+        "",
+        "## Le projet",
+        "",
+        `- Salle : ${p.name}`,
+        `- Dépôt : ${p.targetRepo}`,
+        `- Agents : ${p.agents.join(", ")}`,
+        "- En une phrase : (à compléter)",
+        "",
+        "## Public",
+        "",
+        "(à compléter : pour qui, ce qu'ils attendent)",
+        "",
+        "## Ton",
+        "",
+        "(à compléter : comment on leur parle, les mots à employer ou à éviter)",
+        "",
+        "## Identité visuelle",
+        "",
+        "- Couleurs, typographies, logo : (à compléter)",
+        "- Fichiers de référence : (à compléter ; leurs dossiers vont dans `references` de `brief`, relatifs au home)",
+        "",
+        "## Interdits",
+        "",
+        "(à compléter)",
+        "",
+        "## Qui valide",
+        "",
+        "(à compléter : l'agent qui tient la fiche, `keeper` de `brief`, et ce qui passe par toi)",
+        "",
+      ].join("\n"),
+  },
   /** The receptionist's agent proposals (type `agent_proposal`): a missing agent, proposed for a need. */
   agentProposal: {
     /** Title of the item: French for a French home, English otherwise. */
