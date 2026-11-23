@@ -1036,6 +1036,15 @@ CREATE INDEX IF NOT EXISTS benches_open ON benches (closed_at, room, agent_id);
       { table: "machine_vetoes", column: "note_task_id", type: "INTEGER" },
     ],
   },
+  {
+    version: 34,
+    // The keeper of a room's brief (room.json `brief.keeper`), mirrored by
+    // syncHome: the agent another room may ask about that brief (hq_message
+    // `aboutBrief`). Null without a brief or a keeper. Idempotent, as the
+    // migrations after 14.
+    sql: "",
+    columns: [{ table: "rooms", column: "brief_keeper", type: "TEXT" }],
+  },
 ];
 
 function migrate(db: Db): void {

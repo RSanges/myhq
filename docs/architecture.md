@@ -149,7 +149,7 @@ room) and writes directly to SQLite. Twenty-three tools, all validated with zod:
 
 | Tool | Purpose |
 |---|---|
-| `hq_message(to, text, room?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
+| `hq_message(to, text, room?, aboutBrief?, expects?)` | Send a message to another agent: of the sender's room, or with `room` of a shared room or of a room that ordered from the sender's (see "Shared rooms"). `aboutBrief: true` asks the keeper of `room`'s brief (see "The room brief"). `expects` (`reply`, `action`, `none`) says whether it must wake the recipient (see "The portier"). |
 | `hq_submit(type, title, body, payload, forRoom?)` | Submit an item to the approval queue (an informational type of `notifyTypes` is stored `unseen` and waits under « À regarder », see section 5; `"urgent": true` in its payload sends its alert even during the quiet hours). `forRoom`: a shared room's delivery to the room that ordered it. `attachments`: files to validate with the item (see "Files joined to an item"). `onApprove`: messages MyHQ delivers itself when the item is approved (see "Executing an approved item"). `questions`: multiple-choice questions attached to the deliverable (see "Questions attached to a deliverable"). |
 | `hq_ask(title, context?, questions)` | Ask the owner questions when a decision of theirs is truly needed to go on (see "Questions from the agents"). `questions`: at least one (20 at most, a technical guard), each `{ question, header?, options: 2 to 6 of { label, description? }, multiSelect? }`. MyHQ always adds an « Autre » answer with free text. The agent finishes its turn after asking; the answers wake it with a new task. |
 | `hq_status(text, waiting?)` | Say in a few words what the agent is doing (60 characters at most, the home's language, no technical detail): at the start of the run and at each notable step. Stored with its time and its run (`run_statuses`, migration 21), it writes nothing else (see "The activity bubble"). It is also where the run hears the owner: when the owner and the agent exchanged in question mode, in the run's subject, since the run was last given those exchanges, the result carries them as `fromOwner` (see "Questions to an agent", "While the agent runs"); otherwise it is as always (`saved`, `text`, `at`, `waiting`). With `waiting: true` the text is the reason the agent waits, and the status is also marked in `run_waits` (migration 22) in the same transaction: the agent waits until its next status (see "The surveillance room"). |
@@ -993,6 +993,19 @@ requesting room's rules instead of a bare sentence.
   shared room serves the others). `getState` lists them in
   `roomsWithoutBrief` beside `invalidRooms`, the settings view gives each
   room its `briefNotice`. Nothing is stored.
+- **Asking the keeper.** `syncHome` mirrors `brief.keeper` into
+  `rooms.brief_keeper` (migration 34), since the HQ MCP server reads the
+  rooms from the database. `hq_message` with `aboutBrief: true` and `room`
+  goes through `assertMayAskKeeper` instead of `assertMayWrite`: another
+  room, whose `brief_keeper` is set (else "has no brief keeper"), `to` that
+  keeper (else the error names it) and still an agent of the room, asked by
+  a room it ordered from (`roomOrderedFrom`, the same rule as `hq_orders`)
+  or by the supervisor. The narrowest rule that serves the studio, which is
+  the one that receives the brief: a room that never ordered from the asker
+  has given it nothing to ask about. The keeper's task is an ordinary
+  `message` task (same waking, same answer to the studio), its text
+  labelled « Question about the brief of room "<room>", which you keep ».
+  The brief block of the studio's prompt names the keeper and this call.
 - **Limits.** Only for an agent of a shared room. An origin named only by
   messages from a supervisor (`supervisor: true` in the home) gives its folder
   but not its brief, so that a relaunch does not carry the supervisor's own

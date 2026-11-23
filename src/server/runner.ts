@@ -394,7 +394,7 @@ function briefBlock(room: string, brief: RunBrief): string {
     ...(brief.truncated ? [`(The brief is cut here: it is longer than ${BRIEF_MAX_CHARS} characters, the rest is not given.)`] : []),
     `--- End of the brief of room ${room} ---`,
     ...(brief.references.length > 0 ? [`Its reference folders, read-only for this run: ${brief.references.join(", ")}.`] : []),
-    `Apply it to the tasks of room ${room} only. If something it should say is missing, ask the agent who ordered, or set the task blocked: do not guess.`,
+    `Apply it to the tasks of room ${room} only. If something it should say is missing, ask ${brief.keeper ? `its keeper (hq_message to "${brief.keeper}", room "${room}", aboutBrief true) or ` : ""}the agent who ordered, or set the task blocked: do not guess.`,
   ].join("\n");
 }
 

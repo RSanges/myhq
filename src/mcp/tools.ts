@@ -150,6 +150,12 @@ export const inputs = {
       .describe(
         "Room of the recipient, when it is not yours: a shared room (see hq_rooms), or the room of an agent that ordered from your room. Default: your room.",
       ),
+    aboutBrief: z
+      .boolean()
+      .optional()
+      .describe(
+        "true: a question about the brief of `room` (another room), to the agent who keeps it (`to`, named in the brief block of your prompt). Only for a room that ordered from yours. It becomes a task of the keeper, labelled as a question on the brief.",
+      ),
     expects: z
       .enum(MESSAGE_EXPECTS)
       .optional()
@@ -416,9 +422,11 @@ export function toolErrorText(error: unknown): string {
  */
 const CURRENT_ROOM = "synced_at = (SELECT MAX(synced_at) FROM rooms)";
 
-function roomInfo(db: Db, name: string): { name: string; shared: number; orders: number } | undefined {
-  return db.prepare(`SELECT name, shared, orders FROM rooms WHERE name = ? AND ${CURRENT_ROOM}`).get(name) as
-    | { name: string; shared: number; orders: number }
+type RoomInfo = { name: string; shared: number; orders: number; brief_keeper: string | null };
+
+function roomInfo(db: Db, name: string): RoomInfo | undefined {
+  return db.prepare(`SELECT name, shared, orders, brief_keeper FROM rooms WHERE name = ? AND ${CURRENT_ROOM}`).get(name) as
+    | RoomInfo
     | undefined;
 }
 
@@ -452,18 +460,22 @@ function orderedFrom(db: Db, ctx: HqContext, room: string, agent: string): boole
  * always; to another room only when that room is shared (an order to a
  * studio), or when the recipient is an agent that ordered from this room (a
  * studio answering its requester). The task keeps the sender's room and agent.
+ * With `aboutBrief`, a question to the keeper of another room's brief
+ * (assertMayAskKeeper), labelled so in the keeper's task.
  */
 export function hqMessage(db: Db, ctx: HqContext, args: Args<"hq_message">) {
   const parsed = z.object(inputs.hq_message).parse(args);
   const room = parsed.room ?? ctx.room;
-  assertMayWrite(db, ctx, room, parsed.to);
+  if (parsed.aboutBrief) assertMayAskKeeper(db, ctx, room, parsed.to);
+  else assertMayWrite(db, ctx, room, parsed.to);
+  const text = parsed.aboutBrief ? `Question about the brief of room "${room}", which you keep: ${parsed.text}` : parsed.text;
   return db
     .transaction(() => ({
       messageId: writeMessage(
         db,
         { room: ctx.room, agentId: ctx.agentId, runId: ctx.runId },
         { room, agentId: parsed.to },
-        parsed.text,
+        text,
         parsed.expects,
       ),
     }))
@@ -490,6 +502,31 @@ function assertMayWrite(db: Db, ctx: HqContext, room: string, to: string): void 
   const target = db.prepare("SELECT id FROM agents WHERE room = ? AND id = ?").get(room, to);
   if (!target) throw new ToolError(`Unknown agent "${to}" in room "${room}".`);
   if (!elsewhere && to === ctx.agentId) throw new ToolError("An agent cannot write to itself.");
+}
+
+/**
+ * Whether this run's agent may ask `to` of `room` about that room's brief
+ * (hq_message `aboutBrief`): another room, whose brief has a keeper (rooms
+ * `brief_keeper`, mirrored from room.json) and `to` is that keeper, an agent
+ * the home still has; asked by a room it ordered from (a studio that works
+ * for it, as hq_orders checks it) or by the supervisor. A tool error otherwise.
+ */
+function assertMayAskKeeper(db: Db, ctx: HqContext, room: string, to: string): void {
+  if (room === ctx.room) throw new ToolError("aboutBrief is for the keeper of another room's brief: within your room, leave it out.");
+  const info = roomInfo(db, room);
+  if (!info) throw new ToolError(`Unknown room "${room}".`);
+  if (info.brief_keeper === null) {
+    throw new ToolError(`Room "${room}" has no brief keeper: its room.json declares no brief, or no keeper for it. Ask the agent who ordered instead.`);
+  }
+  if (to !== info.brief_keeper) {
+    throw new ToolError(`"${to}" does not keep the brief of room "${room}": its keeper is "${info.brief_keeper}".`);
+  }
+  if (!roomOrderedFrom(db, room, ctx.room) && !isSupervisor(db, ctx.room, ctx.agentId)) {
+    throw new ToolError(`You may ask about the brief of room "${room}" only when that room ordered from yours.`);
+  }
+  if (!db.prepare("SELECT 1 FROM agents WHERE room = ? AND id = ?").get(room, to)) {
+    throw new ToolError(`Unknown agent "${to}" in room "${room}".`);
+  }
 }
 
 /** The messages of hq_submit `onApprove`, their recipients checked as hq_message checks them. */

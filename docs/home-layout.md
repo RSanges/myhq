@@ -317,6 +317,14 @@ colours, its tone, its logo rules) and say where its reference files live:
   the drop folder of `assistant.json` (`dropDir`). Any of these makes the room
   invalid, with the reason. A reference missing on disk is allowed: a run
   skips it, with a line in the log.
+- **Asking the keeper.** A studio that works for the room (the room ordered
+  from it) may ask the keeper a question about the brief: `hq_message` with
+  `room`, `to` the keeper and `aboutBrief: true`. It becomes a task of the
+  keeper, labelled as a question on the brief; the keeper answers the
+  studio with an ordinary `hq_message`. A room without a brief or without a
+  keeper, or another agent than the keeper, is refused with the reason. The
+  keeper's role should say that it keeps the brief and answers such
+  questions.
 - **A draft when the room is created.** Approving a room proposal of the
   receptionist also writes a brief draft in the new room: headings to fill
   in (the project, its audience, its tone, its visual identity and where its

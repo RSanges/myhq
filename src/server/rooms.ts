@@ -700,9 +700,9 @@ export function toPosix(p: string): string {
 export function syncHome(db: Db, home: Home): void {
   const at = now();
   const upsertRoom = db.prepare(
-    `INSERT INTO rooms (name, target_repo, shared, orders, synced_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO rooms (name, target_repo, shared, orders, brief_keeper, synced_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET target_repo = excluded.target_repo, shared = excluded.shared,
-       orders = excluded.orders, synced_at = excluded.synced_at`,
+       orders = excluded.orders, brief_keeper = excluded.brief_keeper, synced_at = excluded.synced_at`,
   );
   const upsertAgent = db.prepare(
     `INSERT INTO agents (room, id, name, model, role_path, synced_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -722,7 +722,14 @@ export function syncHome(db: Db, home: Home): void {
     db.prepare("DELETE FROM supervisors").run();
     for (const room of home.rooms) for (const agent of room.agents) if (agent.supervisor) addSupervisor.run(room.name, agent.id, at);
     for (const room of home.rooms) {
-      upsertRoom.run(room.name, toPosix(path.relative(home.root, room.targetRepo)), room.shared ? 1 : 0, room.orders ? 1 : 0, at);
+      upsertRoom.run(
+        room.name,
+        toPosix(path.relative(home.root, room.targetRepo)),
+        room.shared ? 1 : 0,
+        room.orders ? 1 : 0,
+        room.brief?.keeper ?? null,
+        at,
+      );
       for (const agent of room.agents) {
         upsertAgent.run(
           room.name,

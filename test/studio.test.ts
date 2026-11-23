@@ -450,3 +450,78 @@ test("the owner's start of any agent still works across rooms", async () => {
     assert.equal((await waitForRun(db, run.id)).status, "done");
   }
 });
+
+// --- A question to the keeper of a room's brief (hq_message aboutBrief) ------------------
+
+/** The studio home, room demo declaring a brief kept by writer (persisted in rooms.brief_keeper). */
+function briefSetup(): { config: HqConfig; db: Db } {
+  const config = studioHome();
+  writeRoom(config.home, {
+    name: "demo",
+    targetRepo: "../demo",
+    brief: { file: "brief.md", keeper: "writer" },
+    agents: [agent("scout"), agent("writer")],
+  });
+  fs.writeFileSync(path.join(config.home, "rooms", "demo", "brief.md"), "Colours: black and gold.\n");
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  return { config, db };
+}
+
+test("migration 34: the keeper of a room's brief is mirrored into rooms.brief_keeper", () => {
+  const { config, db } = briefSetup();
+  assert.deepEqual(db.prepare("SELECT name, brief_keeper FROM rooms ORDER BY name").all(), [
+    { name: "demo", brief_keeper: "writer" },
+    { name: "other", brief_keeper: null },
+    { name: "studio", brief_keeper: null },
+  ]);
+  writeRoom(config.home, { name: "demo", targetRepo: "../demo", agents: [agent("scout"), agent("writer")] });
+  syncHome(db, loadHome(config.home));
+  assert.equal(db.prepare("SELECT brief_keeper FROM rooms WHERE name = 'demo'").pluck().get(), null);
+});
+
+test("hq_message aboutBrief: a studio that works for a room asks the keeper of its brief; the task is labelled as a question on the brief", () => {
+  const { config, db } = briefSetup();
+  const scout = ctxOf(db, config, "demo", "scout");
+  const video = ctxOf(db, config, "studio", "video");
+  // Before demo ordered from the studio, the studio may not ask.
+  assert.throws(
+    () => hqMessage(db, video, { to: "writer", room: "demo", aboutBrief: true, text: "Which gold?" }),
+    /only when that room ordered from yours/,
+  );
+  hqMessage(db, scout, { to: "video", room: "studio", text: "A 20 s clip of the app." });
+  hqMessage(db, video, { to: "writer", room: "demo", aboutBrief: true, text: "Which gold, warm or pale?" });
+  const [task] = tasksOf(db, "demo", "writer");
+  assert.equal(task!.source, "message");
+  assert.equal(task!.from_room, "studio");
+  assert.equal(task!.from_agent, "video");
+  assert.match(
+    task!.text,
+    /^Message from video of room "studio" \(answer with hq_message to "video", room "studio"\): Question about the brief of room "demo", which you keep: Which gold, warm or pale\?$/,
+  );
+  // The keeper answers as any agent answers a studio.
+  const writer = ctxOf(db, config, "demo", "writer");
+  hqMessage(db, writer, { to: "video", room: "studio", text: "Warm gold." });
+  assert.match(tasksOf(db, "studio", "video").at(-1)!.text, /^Message from writer of room "demo".*: Warm gold\.$/);
+});
+
+test("hq_message aboutBrief: the wrong agent, a room without a brief keeper, an unknown room or one's own room is a clear error", () => {
+  const { config, db } = briefSetup();
+  const video = ctxOf(db, config, "studio", "video");
+  hqMessage(db, ctxOf(db, config, "demo", "scout"), { to: "video", room: "studio", text: "A clip." });
+  hqMessage(db, ctxOf(db, config, "other", "social"), { to: "video", room: "studio", text: "A clip." });
+  assert.throws(
+    () => hqMessage(db, video, { to: "scout", room: "demo", aboutBrief: true, text: "?" }),
+    /"scout" does not keep the brief of room "demo": its keeper is "writer"/,
+  );
+  assert.throws(
+    () => hqMessage(db, video, { to: "social", room: "other", aboutBrief: true, text: "?" }),
+    /Room "other" has no brief keeper: its room\.json declares no brief, or no keeper for it/,
+  );
+  assert.throws(() => hqMessage(db, video, { to: "x", room: "nowhere", aboutBrief: true, text: "?" }), /Unknown room "nowhere"/);
+  assert.throws(() => hqMessage(db, video, { to: "script", aboutBrief: true, text: "?" }), /aboutBrief is for the keeper of another room's brief/);
+  // A keeper the home no longer has (the room changed, not yet synced) is refused too.
+  db.prepare("DELETE FROM agents WHERE room = 'demo' AND id = 'writer'").run();
+  assert.throws(() => hqMessage(db, video, { to: "writer", room: "demo", aboutBrief: true, text: "?" }), /Unknown agent "writer" in room "demo"/);
+  assert.equal(tasksOf(db, "demo", "scout").length, 0);
+});

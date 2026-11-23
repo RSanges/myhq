@@ -519,7 +519,7 @@ test("room brief: a message from a room with a brief gives its text and its refe
     "Tone: plain.",
     "--- End of the brief of room a ---",
     `Its reference folders, read-only for this run: ${design}.`,
-    "Apply it to the tasks of room a only. If something it should say is missing, ask the agent who ordered, or set the task blocked: do not guess.",
+    'Apply it to the tasks of room a only. If something it should say is missing, ask its keeper (hq_message to "clerk", room "a", aboutBrief true) or the agent who ordered, or set the task blocked: do not guess.',
   ].join("\n");
   assert.ok(input.prompt.includes(block), input.prompt);
   // The next run of the studio, with no task of a, carries neither.
