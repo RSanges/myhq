@@ -3,11 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { getDbAt, type Db } from "../src/server/db";
+import { getDbAt, type ApprovalRow, type Db } from "../src/server/db";
 import { LocalEngine, type Engine, type RunEvent, type RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
 import { loadHome, syncHome } from "../src/server/rooms";
+import { decideRead, READ_GUARD_ENV, readReadConfig } from "../src/server/read-guard-lib.mjs";
 import { agentEnv, startRun } from "../src/server/runner";
+import { deliverRelays, recordRelays } from "../src/server/supervisor";
 import { decide, readConfig } from "../src/server/write-guard-lib.mjs";
 import { makeHome, waitForRun } from "./helpers";
 
@@ -469,4 +471,158 @@ test("room folders: a room folder that leads out of the root is not given, and t
   assert.ok(!seen[0]!.prompt.includes(path.join(config.home, "folders")));
   assert.deepEqual(fs.readdirSync(outside), [], "no recu made out of the root");
   assert.ok(errors.some((args) => String(args[0]).startsWith("[room-folders]")));
+});
+
+// --- The room brief: joined to a run of a shared room that works for the room --------------
+
+/** Gives room `name` of a sharedHome a brief (room.json `brief`) with this text; its clerk a supervisor when asked. */
+function withBrief(h: ReturnType<typeof sharedHome>, name: string, brief: Record<string, unknown>, text: string, supervisor = false): void {
+  const dir = path.join(h.config.home, "rooms", name);
+  fs.writeFileSync(path.join(dir, "brief.md"), text);
+  fs.writeFileSync(
+    path.join(dir, "room.json"),
+    JSON.stringify({
+      name,
+      targetRepo: `../${name}-project`,
+      brief: { file: "brief.md", ...brief },
+      agents: [{ id: "clerk", name: "Clerk", role: "roles/clerk.md", model: "haiku", allowedTools: ["mcp__hq__*"], ...(supervisor ? { supervisor: true } : {}) }],
+    }),
+  );
+  syncHome(h.db, loadHome(h.config.home));
+}
+
+/** A reference folder made under the home, returned by its real path. */
+function referenceDir(h: ReturnType<typeof sharedHome>, relative: string): string {
+  const dir = path.join(h.config.home, relative);
+  fs.mkdirSync(dir, { recursive: true });
+  return fs.realpathSync(dir);
+}
+
+/** Runs the agent once and returns what the engine saw. */
+async function briefRun(h: ReturnType<typeof sharedHome>, room = "demo", agent = "scout"): Promise<RunInput> {
+  const seen: RunInput[] = [];
+  const run = startRun({ room, agent }, { config: h.config, engine: capturing(seen), send: async () => true });
+  assert.equal((await waitForRun(h.db, run.id)).status, "done");
+  return seen[0]!;
+}
+
+test("room brief: a message from a room with a brief gives its text and its reference folders to the run of the studio", async () => {
+  const h = sharedHome();
+  const design = referenceDir(h, "refs/a-design");
+  withBrief(h, "a", { references: ["refs/a-design"], keeper: "clerk" }, "Colours: black and gold.\nTone: plain.\n");
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  const input = await briefRun(h);
+  assert.ok(input.addDirs!.includes(design), "the reference is read for this run");
+  const block = [
+    '--- Brief of room a (kept by agent "clerk") ---',
+    "Colours: black and gold.",
+    "Tone: plain.",
+    "--- End of the brief of room a ---",
+    `Its reference folders, read-only for this run: ${design}.`,
+    "Apply it to the tasks of room a only. If something it should say is missing, ask the agent who ordered, or set the task blocked: do not guess.",
+  ].join("\n");
+  assert.ok(input.prompt.includes(block), input.prompt);
+  // The next run of the studio, with no task of a, carries neither.
+  const next = await briefRun(h);
+  assert.ok(!next.prompt.includes("Brief of room a") && !next.addDirs!.includes(design));
+});
+
+test("room brief: a room without a brief changes nothing in the run of the studio", async () => {
+  const h = sharedHome();
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  const input = await briefRun(h);
+  assert.ok(!input.prompt.includes("Brief of room"));
+  assert.ok(!input.prompt.includes("Its reference folders"));
+  const outsideRoot = (dirs: string[] | undefined) => (dirs ?? []).filter((dir) => !dir.startsWith(h.root));
+  assert.deepEqual(outsideRoot(input.addDirs), outsideRoot((await briefRun(h)).addDirs), "no folder besides the room folders");
+});
+
+test("room brief: a room that is not shared never receives the brief of another room", async () => {
+  const h = sharedHome();
+  const design = referenceDir(h, "refs/b-design");
+  withBrief(h, "b", { references: ["refs/b-design"] }, "Colours of b.");
+  addTask(h.db, "a", "clerk", "message", { from: "b" });
+  const input = await briefRun(h, "a", "clerk");
+  assert.ok(!input.prompt.includes("Brief of room") && !input.prompt.includes("Colours of b."));
+  assert.ok(!input.addDirs!.includes(design));
+});
+
+test("room brief: two origins give two labelled blocks, each with its own references", async () => {
+  const h = sharedHome();
+  const aDesign = referenceDir(h, "refs/a-design");
+  const cDesign = referenceDir(h, "refs/c-design");
+  withBrief(h, "a", { references: ["refs/a-design"] }, "Brief A.");
+  withBrief(h, "c", { references: ["refs/c-design"] }, "Brief C.");
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  addTask(h.db, "demo", "scout", "message", { from: "c" });
+  const input = await briefRun(h);
+  assert.ok(input.prompt.includes("--- Brief of room a ---\nBrief A.\n--- End of the brief of room a ---"));
+  assert.ok(input.prompt.includes("--- Brief of room c ---\nBrief C.\n--- End of the brief of room c ---"));
+  assert.ok(input.prompt.includes(`Its reference folders, read-only for this run: ${aDesign}.\nApply it to the tasks of room a only.`));
+  assert.ok(input.prompt.includes(`Its reference folders, read-only for this run: ${cDesign}.\nApply it to the tasks of room c only.`));
+  assert.ok(input.addDirs!.includes(aDesign) && input.addDirs!.includes(cDesign));
+});
+
+test("room brief: a brief longer than 12000 characters is cut, and the prompt says so", async () => {
+  const h = sharedHome();
+  withBrief(h, "a", {}, `${"x".repeat(12_000)}TAIL`);
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  const { prompt } = await briefRun(h);
+  const cut = "(The brief is cut here: it is longer than 12000 characters, the rest is not given.)";
+  assert.ok(prompt.includes(`--- Brief of room a ---\n${"x".repeat(12_000)}\n${cut}\n--- End of the brief of room a ---`));
+  assert.ok(!prompt.includes("TAIL"));
+  assert.ok(!prompt.includes("Its reference folders"), "no reference declared: no sentence about them");
+});
+
+test("room brief: a reference missing on disk is skipped with a log, the others are given", async (t) => {
+  const h = sharedHome();
+  const design = referenceDir(h, "refs/a-design");
+  withBrief(h, "a", { references: ["refs/a-design", "refs/not-made"] }, "Brief A.");
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  const errors: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => errors.push(args));
+  const input = await briefRun(h);
+  assert.ok(input.addDirs!.includes(design));
+  assert.ok(!input.addDirs!.some((dir) => dir.includes("not-made")));
+  assert.ok(input.prompt.includes(`Its reference folders, read-only for this run: ${design}.`));
+  assert.ok(errors.some((args) => String(args[0]).startsWith("[room-brief]") && String(args[0]).includes("not-made")));
+});
+
+test("room brief: a message from a supervisor does not join the brief of its own room", async () => {
+  const h = sharedHome();
+  const design = referenceDir(h, "refs/b-design");
+  withBrief(h, "b", { references: ["refs/b-design"] }, "Brief B.", true);
+  addTask(h.db, "demo", "scout", "message", { from: "b" });
+  const input = await briefRun(h);
+  assert.ok(!input.prompt.includes("Brief of room b") && !input.addDirs!.includes(design));
+  assert.ok(input.prompt.includes("In this run you work for room b:"), "its room folder is given as before");
+});
+
+test("room brief: the message an approved item relays (onApprove) joins the brief of the room that submitted it", async () => {
+  const h = sharedHome();
+  withBrief(h, "a", {}, "Brief A.");
+  const id = Number(
+    h.db
+      .prepare("INSERT INTO approvals (room, agent_id, type, title, body, status, created_at) VALUES ('a', 'clerk', 'script', 'Script', 'b', 'approved', ?)")
+      .run(new Date().toISOString()).lastInsertRowid,
+  );
+  recordRelays(h.db, id, [{ room: "demo", agent: "scout", text: "Make the clip." }]);
+  assert.equal(deliverRelays(h.db, h.db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow).length, 1);
+  const { prompt } = await briefRun(h);
+  assert.ok(prompt.includes("--- Brief of room a ---\nBrief A.\n--- End of the brief of room a ---"));
+});
+
+test("room brief: a reference inside a private folder of the home is granted to the read guard of the run", async () => {
+  const h = sharedHome();
+  const design = referenceDir(h, "private/a-design");
+  fs.writeFileSync(path.join(h.config.home, "myhq.json"), JSON.stringify({ privateDirs: ["private"] }));
+  withBrief(h, "a", { references: ["private/a-design"] }, "Brief A.");
+  addTask(h.db, "demo", "scout", "message", { from: "a" });
+  const input = await briefRun(h);
+  const guard = readReadConfig({ [READ_GUARD_ENV]: input.env[READ_GUARD_ENV] });
+  assert.deepEqual(guard.deny, [path.join(h.config.home, "private")]);
+  assert.ok(guard.except.includes(design));
+  const read = (file: string) => decideRead({ tool_name: "Read", tool_input: { file_path: file }, cwd: input.workDir }, guard);
+  assert.deepEqual(read(path.join(design, "logo.svg")), { allow: true });
+  assert.equal(read(path.join(h.config.home, "private", "other", "notes.md")).allow, false);
 });

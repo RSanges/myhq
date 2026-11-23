@@ -386,6 +386,18 @@ export function benchLines(bench: Bench): string {
 export const MACHINE_CHECKED =
   "MyHQ checked the machine before starting you (memory, shared resources); you still check it before a heavy step if your role tells you to.";
 
+/** The block of a room brief in the prompt of a run that works for that room (runFolders). */
+function briefBlock(room: string, brief: RunBrief): string {
+  return [
+    `--- Brief of room ${room}${brief.keeper ? ` (kept by agent "${brief.keeper}")` : ""} ---`,
+    brief.text,
+    ...(brief.truncated ? [`(The brief is cut here: it is longer than ${BRIEF_MAX_CHARS} characters, the rest is not given.)`] : []),
+    `--- End of the brief of room ${room} ---`,
+    ...(brief.references.length > 0 ? [`Its reference folders, read-only for this run: ${brief.references.join(", ")}.`] : []),
+    `Apply it to the tasks of room ${room} only. If something it should say is missing, ask the agent who ordered, or set the task blocked: do not guess.`,
+  ].join("\n");
+}
+
 export function buildPrompt(params: {
   room: Room;
   agent: Agent;
@@ -441,6 +453,7 @@ export function buildPrompt(params: {
       lines.push(
         `In this run you work for room ${worked.room}: its folder is ${worked.path}, read-only too; what its client sent is in its recu/ folder and in the recu/ of each of its orders: ${outside}.`,
       );
+      if (worked.brief) lines.push(briefBlock(worked.room, worked.brief));
     }
     if (params.folders.workedFor.length === 0) {
       lines.push(
@@ -553,9 +566,50 @@ export function startRun(request: StartRunRequest, deps: RunnerDeps = {}): RunRo
 export type RunFolders = {
   /** The folder of the agent's own room, null when it cannot be given. */
   own: string | null;
-  /** The folders of the other rooms the run works for (agents of a shared room only), by room name. */
-  workedFor: { room: string; path: string }[];
+  /** The folders of the other rooms the run works for (agents of a shared room only), by room name, with the brief of that room if any. */
+  workedFor: { room: string; path: string; brief?: RunBrief | null }[];
 };
+
+/** The most characters of a room brief given inline in a prompt. */
+export const BRIEF_MAX_CHARS = 12_000;
+
+/** The brief of a room a run works for (room.json `brief`), as the run receives it. */
+export type RunBrief = {
+  /** Its text, cut at BRIEF_MAX_CHARS. */
+  text: string;
+  truncated: boolean;
+  /** The agent of that room who keeps it, or null. */
+  keeper: string | null;
+  /** The real paths of its reference folders that exist now: read-only for this run. */
+  references: string[];
+};
+
+/**
+ * The brief of a room for a run, read now: null, with the reason logged, when
+ * its file cannot be read. A reference that is not an existing folder is
+ * skipped, with a log.
+ */
+function givenBrief(origin: Room): RunBrief | null {
+  if (!origin.brief) return null;
+  let text: string;
+  try {
+    text = fs.readFileSync(origin.brief.file, "utf8").trim();
+  } catch (error) {
+    console.error(`[room-brief] the brief of room "${origin.name}" is not given to the run`, error);
+    return null;
+  }
+  const references: string[] = [];
+  for (const dir of origin.brief.references) {
+    try {
+      if (!fs.statSync(dir).isDirectory()) throw new Error("not a folder");
+      references.push(fs.realpathSync(dir));
+    } catch (error) {
+      console.error(`[room-brief] reference ${dir} of room "${origin.name}" is skipped: ${(error as Error).message}`);
+    }
+  }
+  const truncated = text.length > BRIEF_MAX_CHARS;
+  return { text: truncated ? text.slice(0, BRIEF_MAX_CHARS) : text, truncated, keeper: origin.brief.keeper, references };
+}
 
 /**
  * The real path of the folder of a room, its `recu/` made first; null, with the
@@ -582,27 +636,36 @@ function givenRoomFolder(config: HqConfig, name: string): string | null {
  * a revise or approval task (`ref_id` is the approval) on an item delivered
  * for another room (`for_room`) that ordered from this one (roomOrderedFrom:
  * an agent names forRoom itself, so that alone opens nothing). Only rooms of
- * the home. Never the root.
+ * the home. Never the root. Each of those rooms that has a brief (room.json
+ * `brief`) also gives it, with its reference folders, unless every task that
+ * names the room is a message from a supervisor (a relaunch of the
+ * supervisor does not carry the brief of its own room).
  */
 function runFolders(config: HqConfig, db: Db, room: Room, mailbox: readonly TaskRow[]): RunFolders {
   const own = givenRoomFolder(config, room.name);
   const workedFor: RunFolders["workedFor"] = [];
   if (!room.shared) return { own, workedFor };
-  const origins = new Set<string>();
+  /** The origins, each with the senders of its messages (null: a task that is no message, a revise or an approval). */
+  const origins = new Map<string, (string | null)[]>();
+  const add = (name: string, sender: string | null) => origins.set(name, [...(origins.get(name) ?? []), sender]);
   const forRoom = db.prepare("SELECT for_room FROM approvals WHERE id = ?");
   for (const task of mailbox) {
-    if (task.from_room) origins.add(task.from_room);
+    if (task.from_room) add(task.from_room, task.from_agent);
     if ((task.source === "revise" || task.source === "approval") && task.ref_id !== null) {
       const item = forRoom.get(task.ref_id) as { for_room: string | null } | undefined;
-      if (item?.for_room && roomOrderedFrom(db, item.for_room, room.name)) origins.add(item.for_room);
+      if (item?.for_room && roomOrderedFrom(db, item.for_room, room.name)) add(item.for_room, null);
     }
   }
   origins.delete(room.name);
   if (origins.size === 0) return { own, workedFor };
-  const known = new Set(loadHome(config.home).rooms.map((each) => each.name));
-  for (const name of [...origins].filter((each) => known.has(each)).sort()) {
+  const known = new Map(loadHome(config.home).rooms.map((each) => [each.name, each]));
+  for (const name of [...origins.keys()].filter((each) => known.has(each)).sort()) {
     const folder = givenRoomFolder(config, name);
-    if (folder) workedFor.push({ room: name, path: folder });
+    if (!folder) continue;
+    const origin = known.get(name)!;
+    const bySupervisor = (sender: string | null) => sender !== null && origin.agents.some((agent) => agent.id === sender && agent.supervisor);
+    const brief = origins.get(name)!.every(bySupervisor) ? null : givenBrief(origin);
+    workedFor.push({ room: name, path: folder, ...(brief ? { brief } : {}) });
   }
   return { own, workedFor };
 }
@@ -1024,7 +1087,10 @@ export function launchRun(params: {
   void summarizeRun({ config, db, run, mailbox, language, env: agentEnv(process.env, {}), call: deps.summarize });
   const folders: RunFolders = params.roomFolders ? runFolders(config, db, room, mailbox) : { own: null, workedFor: [] };
   // The room folders are read-only, like every --add-dir (write-guard.ts).
-  const readDirs = [...(folders.own ? [folders.own] : []), ...folders.workedFor.map((each) => each.path)];
+  const readDirs = [
+    ...(folders.own ? [folders.own] : []),
+    ...folders.workedFor.flatMap((each) => [each.path, ...(each.brief?.references ?? [])]),
+  ];
   const runAgent = readDirs.length > 0 ? { ...agent, addDirs: [...agent.addDirs, ...readDirs] } : agent;
   const prompt = params.prompt(run.id, mailbox, folders, run.subject_id, machineChecked);
   // The same launch again: the tasks the stopped run claimed are back in the queue, so it claims them again.
