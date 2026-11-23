@@ -97,6 +97,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `orders` | no | `true` for a room that serves clients: its room folder holds one folder per order (`<YYYY>-<MM>-<client>-<subject>`), each with its own drawers, and its agents name the order of a delivery with `hq_submit` `order`, list them with `hq_orders` and open one with `hq_order_open` (see "Room folders" below). Default `false`. |
 | `logo` | no | The logo of the room's project, a `.png`, `.webp` or `.svg` file relative to the room directory, inside it, at most 1 MiB (served by `GET /api/rooms/<room>/logo`). The single floor draws it on the left of the name on the room's signboard, reduced to the height of the board (about 14 pixels) in a pixel art way, so a small, bold logo reads best (an app icon rather than a wordmark; a thin line drawing turns to mush at that size, draw a bolder variant). The logo goes beside the name only when the room's wall is long enough for both: a short wall with a long name leaves room for a logo of about 12 pixels wide, a wider one is dropped. Without it, or when the file is missing, the board shows the name alone. |
 | `decor` | no | How the room's suite of the single floor (`floor.layout: "room-per-project"` of `myhq.json`) is furnished. `"library"`: the same desks and aisles as an office of the same team, but a wooden floor, a tall shelf full of books on every cell of the back wall that no desk takes (a library ladder among them), two more on the side wall when no desk stands against it, a reading table in each spare place of the front row, a globe in the front corner, and beyond the aisle to the opening a reading wing of three cells (instead of a big team's coffee nook): an armchair, a floor lamp and a side table on a rug, piles of books, a plant. The armchair's cushion and the rug's border take the room's `color`. Left out, the suite is an office. A value MyHQ does not know makes the room invalid. The floor of one room (`floor-per-project`) ignores it. |
+| `brief` | no | The room's brief, joined by MyHQ to a run of a shared room that works for this room (see "The room brief" below): `file`, a `.md` file relative to the room directory, inside it and present; `references`, at most 16 reference folders relative to the home, read-only for that run; `keeper`, the id of an agent of the room who keeps it, named in the prompt. |
 | `agents[].id` | yes | Stable identifier, used in messages and in the database. |
 | `agents[].name` | yes | Display name. |
 | `agents[].role` | yes | Path of the role prompt, relative to the room directory. |
@@ -285,6 +286,40 @@ A studio declared like this, with a project room ordering from it:
 and in the role of a project agent: « Order a video from the room studio with
 `hq_message` (`room: "studio"`, `to: "video"`); the deliverable comes back to
 your room's pile. »
+
+#### The room brief
+
+A room may write down what any studio needs to know to work for it (its
+colours, its tone, its logo rules) and say where its reference files live:
+
+```json
+{
+  "name": "shop",
+  "targetRepo": "../shop",
+  "brief": { "file": "brief.md", "references": ["../example-project/design"], "keeper": "dev" },
+  "agents": [ ... ]
+}
+```
+
+- **When it is joined.** To a run of a shared room that works for this room,
+  as "Room folders" below says (a message from one of its agents, the
+  messages of an approved item, `hq_submit` `onApprove`, or a revise or
+  approval task on an item delivered for it): the text of `brief.md` goes in
+  the prompt, labelled with the room's name, cut at 12,000 characters with a
+  note saying so, and its reference folders are read-only for that run only.
+  A run that works for two rooms gets two labelled briefs. Never to a room
+  that is not shared, and not when every task naming the room is a message
+  from a supervisor. Nothing is stored in the database.
+- **What the room checks when it loads.** The file must be a `.md` file inside
+  the room directory (its real path too) and exist; `keeper` must be an agent
+  of the room; a reference must not overlap, by real path, the home's
+  `data/`, `assistant/` or `rooms/` folders, the root of the room folders, or
+  the drop folder of `assistant.json` (`dropDir`). Any of these makes the room
+  invalid, with the reason. A reference missing on disk is allowed: a run
+  skips it, with a line in the log.
+- **The limit.** A reference reaches the studio as an `--add-dir`: the write
+  guard refuses the editing tools there, but a studio agent that has `Bash`
+  can still write in it, as in any `addDirs`.
 
 #### Room folders
 

@@ -966,6 +966,36 @@ and the two `hq_submit` fields `drawer` and `order` (below).
   that starts like a program (`MZ`, ELF, Mach-O, a `#!` shebang) whatever
   its extension. Such a file is data from outside, never instructions.
 
+#### The room brief
+
+A room's `brief` (`room.json`, `home-layout.md`, "The room brief") travels to
+the studio it orders from, so that a shared room's agent works with the
+requesting room's rules instead of a bare sentence.
+
+- **What is joined, and when.** `runFolders` already finds the rooms a run of
+  a shared room works for. For each one whose folder is given and that has a
+  brief, `givenBrief` reads the file at that moment (an unreadable file: no
+  brief, a log line), cuts it at `BRIEF_MAX_CHARS` (12,000) and keeps the
+  reference folders that exist as folders now, by real path (the others are
+  skipped with a `[room-brief]` log line). `buildPrompt` writes one labelled
+  block per room, after the sentence about its folder: the text inline, the
+  keeper's id when there is one, the reference folders, and the rule to apply
+  it to that room's tasks only and to ask the agent who ordered, or set the
+  task blocked, rather than guess. Nothing is stored in the database.
+- **Access.** `launchRun` adds the references to the run's `addDirs` beside
+  the room folders, so they get the same treatment: read-only through the
+  write guard, granted in `except` by the read guard when they lie inside a
+  `privateDirs` folder.
+- **Limits.** Only for an agent of a shared room. An origin named only by
+  messages from a supervisor (`supervisor: true` in the home) gives its folder
+  but not its brief, so that a relaunch does not carry the supervisor's own
+  room's brief. The checks at load time (in `loadRoom`) keep a reference out
+  of `data/`, `assistant/`, `rooms/`, the room folders and the drop folder;
+  the drop folder is read from `assistant.json` by a small reader in
+  `rooms.ts`, since `home-config.ts` imports `rooms.ts`. As for every
+  `--add-dir`, a studio agent that has `Bash` can still write in a reference
+  it receives: the write guard covers the editing tools only.
+
 ### Messages between agents
 
 A message addressed to an agent creates a task for it, handled at once (a run
