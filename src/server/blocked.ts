@@ -10,6 +10,7 @@ import { isVetoNote, machineCheck, type MachineRead, type MachineShortfall } fro
 import { waitsForNextRun } from "./portier";
 import { RELAUNCH_REASON, relaunchSubject } from "./relaunch-requests";
 import { resourceHolder } from "./resources";
+import { writeMessage } from "./supervisor";
 import type { Agent, Home } from "./rooms";
 import {
   isStopping,
@@ -502,14 +503,33 @@ export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget,
 /**
  * « Clore »: the tasks of the target are done, with the note « close par le
  * propriétaire » (or the one given: the supervisor's, closures.ts). Nothing wakes.
+ * A closed order from another room (`from_room`, a message to a studio) is told
+ * to the agent who ordered: a message in the closed task's agent's name, with
+ * `expects: "none"`, so it waits in that agent's mailbox for its next run (the
+ * run that would conclude the order is done reads it) and wakes nothing.
  */
 export function closeBlocked(db: Db, target: BlockedTarget, note: string = strings.deskModules.standard.closedNote): { tasks: number[] } {
   return db
     .transaction(() => {
       const { ids } = targetTasks(db, target);
+      const orders = db
+        .prepare(
+          `SELECT * FROM tasks WHERE id IN (${placeholders(ids)}) AND status IN ('blocked', 'pending')
+             AND from_room IS NOT NULL AND from_agent IS NOT NULL AND from_room <> room ORDER BY id`,
+        )
+        .all(...ids) as TaskRow[];
       db.prepare(
         `UPDATE tasks SET status = 'done', note = ?, updated_at = ? WHERE id IN (${placeholders(ids)}) AND status IN ('blocked', 'pending')`,
       ).run(note, now(), ...ids);
+      for (const order of orders) {
+        writeMessage(
+          db,
+          { room: order.room, agentId: order.agent_id, runId: null },
+          { room: order.from_room!, agentId: order.from_agent! },
+          `Your order was closed on the Standard, so it will not be done (task #${order.id} of ${order.agent_id} in room "${order.room}"): ${oneLine(order.text)} Closing note: ${oneLine(note)} Order it again if you still need it.`,
+          "none",
+        );
+      }
       return { tasks: ids };
     })
     .immediate();

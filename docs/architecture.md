@@ -1603,7 +1603,15 @@ stuck, not of entries. Two actions, with a light confirmation on the page:
   end of a run of another subject (it is then overdue, see "Wake-ups"), or
   another relaunch, does.
 - **Clore** (`POST /api/blocked/close`): the tasks of the entry are `done`
-  with the note « Close par le propriétaire. ». Nothing wakes.
+  with the note « Close par le propriétaire. ». Nothing wakes. A closed task
+  that came from another room (`from_room`, an order to a studio) is told to
+  the agent who ordered (`closeBlocked`): a message in the closed task's
+  agent's name, which order, the closing note, and that it will not be done.
+  It is sent with `expects: "none"`, the soberest level that is still read:
+  it wakes no run, and waits in the orderer's mailbox for its next run,
+  which is the one that would otherwise take the order for done. The same
+  holds for a closure by the supervisor (`hq_blocked_close`), whose note says
+  who closed it. Nothing for a task of the same room.
 
 The count and the entries are only what is open: an entry closed, by the
 owner or by the supervisor, is off the Standard since its tasks are done.

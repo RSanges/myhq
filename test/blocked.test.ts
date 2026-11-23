@@ -11,7 +11,7 @@ import { DeskCommands } from "../src/server/desk-command";
 import { resolveDesk } from "../src/server/desk";
 import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import { HqError } from "../src/server/errors";
-import { loadHome } from "../src/server/rooms";
+import { loadHome, syncHome } from "../src/server/rooms";
 import { strings } from "../src/ui/strings";
 import { makeHome, waitForRun } from "./helpers";
 
@@ -320,4 +320,44 @@ test("the desk: the Standard is the default phone, counts the agents stuck, and 
   assert.equal(first.href, `/bureau/telephone#${first.id}`);
   assert.equal(first.ref?.kind, "blocked");
   assert.match(first.id, /^blocked-task-\d+$/);
+});
+
+test("Clore on an order from another room tells the agent who ordered, by a message that waits for its next run; a task of the same room tells no one", () => {
+  const config = office();
+  const dir = path.join(config.home, "rooms", "studio");
+  fs.mkdirSync(path.join(dir, "roles"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "roles", "scout.md"), "You are a test agent.\n");
+  fs.writeFileSync(
+    path.join(dir, "room.json"),
+    JSON.stringify({ name: "studio", targetRepo: "../studio", shared: true, agents: [{ id: "video", name: "Video", role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] }] }),
+  );
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  const at = ago(30);
+  const order = Number(
+    db
+      .prepare(
+        `INSERT INTO tasks (room, agent_id, source, text, status, note, from_room, from_agent, created_at, updated_at)
+         VALUES ('studio', 'video', 'message', 'Message from scout of room "demo": A 20 s clip of the app.', 'blocked', 'No source footage.', 'demo', 'scout', ?, ?)`,
+      )
+      .run(at, at).lastInsertRowid,
+  );
+  const own = addTask(db, "editor", { status: "blocked", created: at, note: "Stuck.", fromAgent: "critic" });
+
+  assert.deepEqual(closeBlocked(db, { kind: "task", id: order }), { tasks: [order] });
+  const told = db.prepare("SELECT * FROM tasks WHERE room = 'demo' AND agent_id = 'scout'").all() as TaskRow[];
+  assert.equal(told.length, 1);
+  assert.equal(told[0]!.source, "message");
+  assert.equal(told[0]!.from_room, "studio");
+  assert.equal(told[0]!.from_agent, "video");
+  assert.match(told[0]!.text, /closed on the Standard, so it will not be done/);
+  assert.match(told[0]!.text, /task #\d+ of video in room "studio"/);
+  assert.ok(told[0]!.text.includes("A 20 s clip of the app."), "which order");
+  assert.ok(told[0]!.text.includes(strings.deskModules.standard.closedNote), "with the closing note");
+  // It waits for scout's next run: no wake-up for it.
+  assert.equal(db.prepare("SELECT expects FROM message_wake WHERE task_id = ?").pluck().get(told[0]!.id), "none");
+
+  closeBlocked(db, { kind: "task", id: own });
+  assert.equal((db.prepare("SELECT COUNT(*) FROM tasks WHERE room = 'demo' AND agent_id = 'critic'").pluck().get() as number), 0);
+  assert.equal((db.prepare("SELECT COUNT(*) FROM messages").pluck().get() as number), 1);
 });
