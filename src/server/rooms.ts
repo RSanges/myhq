@@ -4,7 +4,7 @@ import { z } from "zod";
 import { ROOM_DECORS, type RoomDecor } from "../ui/floor-mode";
 import { isInside } from "./config";
 import { cronError } from "./cron";
-import { readArchivedRooms } from "./home-settings";
+import { readArchivedRooms, readHomeSettings } from "./home-settings";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
 import { patternRegExp, resolveReal } from "./write-guard-lib.mjs";
@@ -212,6 +212,9 @@ export function withItemsTool(allowedTools: string[]): string[] {
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
 export const roomColorSchema = z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #ff3d7f");
 
+/** The most reference folders a room brief lists. */
+export const BRIEF_REFERENCES_MAX = 16;
+
 /** The name of a room as the owner reads it (room.json `label`); `name` stays its identifier. */
 export const roomLabelSchema = z.string().trim().min(1).max(60);
 
@@ -233,6 +236,21 @@ export const roomFileSchema = z.strictObject({
     .optional(),
   /** How its suite of the single floor is furnished ("library"); left out, an office. */
   decor: z.enum(ROOM_DECORS).optional(),
+  /**
+   * The room's brief (docs/home-layout.md, "The room brief"): a markdown file relative to the room directory,
+   * reference folders relative to the home, and the agent of the room who keeps it. MyHQ joins it to a run
+   * of a shared room that works for this room (runner.ts, runFolders).
+   */
+  brief: z
+    .strictObject({
+      file: z
+        .string()
+        .min(1)
+        .refine((value) => path.extname(value).toLowerCase() === ".md", "must be a .md file"),
+      references: z.array(z.string().min(1)).max(BRIEF_REFERENCES_MAX).optional(),
+      keeper: idSchema.optional(),
+    })
+    .optional(),
   targetRepo: z.string().min(1),
   agents: z.array(agentSchema).min(1),
 });
@@ -330,7 +348,18 @@ export type Room = {
   logo?: string | null;
   /** How its suite of the single floor is furnished (room.json `decor`), or null for an office. */
   decor?: RoomDecor | null;
+  /** Its brief (room.json `brief`): absolute paths, the keeper an agent id of the room; null or absent: none. */
+  brief?: RoomBrief | null;
   agents: Agent[];
+};
+
+export type RoomBrief = {
+  /** Absolute path of the brief file, inside the room directory (real path included). */
+  file: string;
+  /** Absolute paths of its reference folders, as declared (they may not exist yet). */
+  references: string[];
+  /** The id of the agent of the room who keeps it, or null. */
+  keeper: string | null;
 };
 
 export type InvalidRoom = { dir: string; error: string };
@@ -405,6 +434,65 @@ function notebookError(home: string, agents: readonly Agent[], others: readonly 
     taken.push({ owner: `"${agent.id}"`, dir });
   }
   return null;
+}
+
+/**
+ * The drop folder of assistant.json (`dropDir`, absolute), null without one.
+ * Read here rather than through loadAssistantConfig: src/assistant/home-config.ts
+ * imports this module at load time. Throws when the file is invalid (fail closed).
+ */
+function readDropDir(home: string): string | null {
+  const file = path.join(home, "assistant.json");
+  if (!fs.existsSync(file)) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`);
+  }
+  const parsed = z.looseObject({ dropDir: z.string().trim().min(1).optional() }).safeParse(raw);
+  if (!parsed.success) throw new Error(`${file}: ${formatZodError(parsed.error)}`);
+  return parsed.data.dropDir ? path.resolve(home, parsed.data.dropDir) : null;
+}
+
+/**
+ * The brief of a room, checked: its file inside the room directory (by its
+ * real path too) and present, its keeper an agent of the room, and no
+ * reference that overlaps, by real path, the home's `data/`, `assistant/` or
+ * `rooms/` folders, the root of the room folders or the drop folder of
+ * assistant.json. A reference missing on disk is allowed (the run skips it).
+ * Throws an explicit Error.
+ */
+function roomBrief(home: string, roomDir: string, brief: NonNullable<RoomFile["brief"]>, agents: readonly Agent[]): RoomBrief {
+  const file = path.resolve(roomDir, brief.file);
+  if (!isInside(roomDir, file)) throw new Error("brief file must stay inside the room directory");
+  if (!fs.existsSync(file)) throw new Error(`brief file not found (${brief.file})`);
+  const real = (dir: string): string => resolveReal(path.resolve(dir)) as string;
+  if (!isInside(real(roomDir), real(file))) throw new Error("brief file must stay inside the room directory");
+  if (brief.keeper !== undefined && !agents.some((agent) => agent.id === brief.keeper)) {
+    throw new Error(`brief keeper "${brief.keeper}" is no agent of the room`);
+  }
+  const references = (brief.references ?? []).map((dir) => path.resolve(home, dir));
+  if (references.length > 0) {
+    // The root of the room folders, as room-folders.ts takes it (roomFoldersRoot, not imported: it imports this module).
+    const closed: { name: string; dir: string }[] = [
+      ...["data", "assistant", "rooms"].map((folder) => ({ name: `the ${folder}/ folder of the home`, dir: path.join(home, folder) })),
+      { name: "the room folders", dir: path.resolve(home, readHomeSettings(home)?.folders?.dir ?? "folders") },
+    ];
+    const drop = readDropDir(home);
+    if (drop) closed.push({ name: "the drop folder of assistant.json", dir: drop });
+    for (const [index, dir] of references.entries()) {
+      let reference: string;
+      try {
+        reference = real(dir);
+      } catch (error) {
+        throw new Error(`brief reference "${brief.references![index]}": ${(error as Error).message}`);
+      }
+      const hit = closed.find((each) => overlaps(reference, real(each.dir)));
+      if (hit) throw new Error(`brief reference "${brief.references![index]}" must not overlap ${hit.name}`);
+    }
+  }
+  return { file, references, keeper: brief.keeper ?? null };
 }
 
 /** Loads and validates one room directory. Throws an explicit Error when invalid. */
@@ -526,6 +614,15 @@ export function loadRoom(home: string, roomDir: string): Room {
   const logo = room.logo ? path.resolve(roomDir, room.logo) : null;
   if (logo && !isInside(roomDir, logo)) throw new Error(`${file}: logo must stay inside the room directory`);
 
+  let brief: RoomBrief | null = null;
+  if (room.brief) {
+    try {
+      brief = roomBrief(home, roomDir, room.brief, agents);
+    } catch (error) {
+      throw new Error(`${file}: ${(error as Error).message}`);
+    }
+  }
+
   return {
     name: room.name,
     label: room.label ?? null,
@@ -536,6 +633,7 @@ export function loadRoom(home: string, roomDir: string): Room {
     orders: room.orders ?? false,
     logo,
     decor: room.decor ?? null,
+    brief,
     agents,
   };
 }

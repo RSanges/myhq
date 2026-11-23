@@ -234,3 +234,74 @@ test("orders: room.json accepts the boolean, the room carries it and syncHome mi
   const wrong = makeHome({}, { name: "demo", targetRepo: "x", orders: "yes", agents: [agent] });
   assert.equal(loadHome(wrong.home).invalid.length, 1);
 });
+
+// --- The room brief (room.json `brief`) ------------------------------------------------
+
+/** A home whose room demo declares `brief`, its brief.md written unless `write` is false. */
+function briefHome(brief: unknown, write = true) {
+  const config = makeHome({}, { name: "demo", targetRepo: "x", agents: [agent, { ...agent, id: "dev", name: "Dev" }], brief });
+  if (write) fs.writeFileSync(path.join(config.home, "rooms", "demo", "brief.md"), "Colours: black and gold.\n");
+  return config;
+}
+
+test("brief: a room may declare its brief file, its reference folders and its keeper", () => {
+  const config = briefHome({ file: "brief.md", references: ["../example-project/design", "refs/logos"], keeper: "dev" });
+  const home = loadHome(config.home);
+  assert.deepEqual(home.invalid, []);
+  assert.deepEqual(home.rooms[0]!.brief, {
+    file: path.join(config.home, "rooms", "demo", "brief.md"),
+    references: [path.resolve(config.home, "../example-project/design"), path.join(config.home, "refs", "logos")],
+    keeper: "dev",
+  });
+  const plain = briefHome({ file: "brief.md" });
+  assert.deepEqual(loadHome(plain.home).rooms[0]!.brief, { file: path.join(plain.home, "rooms", "demo", "brief.md"), references: [], keeper: null });
+  assert.equal(loadHome(makeHome().home).rooms[0]!.brief, null, "left out: no brief");
+});
+
+test("brief: a reference that does not exist on disk does not make the room invalid", () => {
+  const config = briefHome({ file: "brief.md", references: ["refs/not-made-yet"] });
+  assert.deepEqual(loadHome(config.home).invalid, []);
+});
+
+for (const [label, brief, pattern, write] of [
+  ["a file that is not markdown", { file: "brief.txt" }, /brief\.file: must be a \.md file/, true],
+  ["a file outside the room directory", { file: "../other/brief.md" }, /brief file must stay inside the room directory/, true],
+  ["a missing file", { file: "brief.md" }, /brief file not found \(brief\.md\)/, false],
+  ["an unknown keeper", { file: "brief.md", keeper: "ghost" }, /brief keeper "ghost" is no agent of the room/, true],
+  ["an unknown field", { file: "brief.md", extra: 1 }, /extra/, true],
+  ["too many references", { file: "brief.md", references: Array.from({ length: 17 }, (_, i) => `refs/${i}`) }, /brief\.references/, true],
+  ["a reference in data/", { file: "brief.md", references: ["data/work"] }, /brief reference "data\/work" must not overlap the data\/ folder of the home/, true],
+  ["a reference in rooms/", { file: "brief.md", references: ["rooms/demo"] }, /must not overlap the rooms\/ folder of the home/, true],
+  ["a reference in assistant/", { file: "brief.md", references: ["assistant"] }, /must not overlap the assistant\/ folder of the home/, true],
+  ["a reference holding the home", { file: "brief.md", references: ["."] }, /must not overlap the data\/ folder of the home/, true],
+  ["a reference in the room folders", { file: "brief.md", references: ["folders/demo"] }, /must not overlap the room folders/, true],
+] as const) {
+  test(`brief: rejects ${label} with an explicit error`, () => {
+    const home = loadHome(briefHome(brief, write).home);
+    assert.equal(home.rooms.length, 0);
+    assert.match(home.invalid[0]!.error, pattern);
+  });
+}
+
+test("brief: a reference in the drop folder of assistant.json, or in the room folders of myhq.json, makes the room invalid", () => {
+  const config = briefHome({ file: "brief.md", references: ["inbox/client"] });
+  fs.writeFileSync(path.join(config.home, "assistant.json"), JSON.stringify({ dropDir: "inbox" }));
+  assert.match(loadHome(config.home).invalid[0]!.error, /brief reference "inbox\/client" must not overlap the drop folder of assistant\.json/);
+  const moved = briefHome({ file: "brief.md", references: ["deliveries"] });
+  fs.writeFileSync(path.join(moved.home, "myhq.json"), JSON.stringify({ folders: { dir: "deliveries/rooms" } }));
+  assert.match(loadHome(moved.home).invalid[0]!.error, /must not overlap the room folders/);
+});
+
+test("brief: a brief file reached through a link out of the room directory makes the room invalid", (t) => {
+  const config = briefHome({ file: "notes/brief.md" }, false);
+  const outside = path.join(config.home, "elsewhere");
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "brief.md"), "Not the room's.\n");
+  try {
+    fs.symlinkSync(outside, path.join(config.home, "rooms", "demo", "notes"), "junction");
+  } catch (error) {
+    t.skip(`cannot create a directory link here: ${(error as Error).message}`);
+    return;
+  }
+  assert.match(loadHome(config.home).invalid[0]!.error, /brief file must stay inside the room directory/);
+});
