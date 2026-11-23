@@ -526,7 +526,7 @@ export function closeBlocked(db: Db, target: BlockedTarget, note: string = strin
           db,
           { room: order.room, agentId: order.agent_id, runId: null },
           { room: order.from_room!, agentId: order.from_agent! },
-          `Your order was closed on the Standard, so it will not be done (task #${order.id} of ${order.agent_id} in room "${order.room}"): ${oneLine(order.text)} Closing note: ${oneLine(note)} Order it again if you still need it.`,
+          `Your order was closed on the Standard (task #${order.id} of ${order.agent_id} in room "${order.room}"): ${oneLine(order.text)} Closing note: ${oneLine(note)} Read the note: unless it says the work goes on elsewhere (under another task), order it again if you still need it.`,
           "none",
         );
       }

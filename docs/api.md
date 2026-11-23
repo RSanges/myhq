@@ -767,8 +767,9 @@ Errors: `INVALID_INPUT`, `TASK_NOT_FOUND` or `RUN_NOT_FOUND` (404), `NOT_BLOCKED
 « Clore » on the Standard. Same body. The tasks of the target are `done`, with
 the note « Close par le propriétaire. ». Nothing wakes. A closed task that is
 an order from another room (`from_room`) gives the agent who ordered a
-message saying which order was closed, with the closing note, sent with
-`expects: "none"`: it waits for that agent's next run.
+message saying which order was closed, with the closing note, and asking it
+to read the note before ordering again (the work may go on under another
+task), sent with `expects: "none"`: it waits for that agent's next run.
 
 Response `200`: `{ "tasks": [12] }`. Errors: as for the relaunch.
 

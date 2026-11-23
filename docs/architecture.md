@@ -1619,7 +1619,10 @@ stuck, not of entries. Two actions, with a light confirmation on the page:
   with the note « Close par le propriétaire. ». Nothing wakes. A closed task
   that came from another room (`from_room`, an order to a studio) is told to
   the agent who ordered (`closeBlocked`): a message in the closed task's
-  agent's name, which order, the closing note, and that it will not be done.
+  agent's name, which order was closed and the closing note, and it leaves
+  the conclusion to the note: unless the note says the work goes on
+  elsewhere (a supervisor closing a duplicate), order it again if still
+  needed.
   It is sent with `expects: "none"`, the soberest level that is still read:
   it wakes no run, and waits in the orderer's mailbox for its next run,
   which is the one that would otherwise take the order for done. The same

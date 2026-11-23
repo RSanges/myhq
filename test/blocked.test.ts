@@ -350,7 +350,14 @@ test("Clore on an order from another room tells the agent who ordered, by a mess
   assert.equal(told[0]!.source, "message");
   assert.equal(told[0]!.from_room, "studio");
   assert.equal(told[0]!.from_agent, "video");
-  assert.match(told[0]!.text, /closed on the Standard, so it will not be done/);
+  assert.match(told[0]!.text, /^Message from video of room "studio" \(answer with hq_message to "video", room "studio"\): Your order was closed on the Standard \(task #\d+ of video in room "studio"\): /);
+  assert.ok(
+    told[0]!.text.endsWith(
+      "Read the note: unless it says the work goes on elsewhere (under another task), order it again if you still need it.",
+    ),
+    "the note decides, not the message",
+  );
+  assert.doesNotMatch(told[0]!.text, /will not be done/);
   assert.match(told[0]!.text, /task #\d+ of video in room "studio"/);
   assert.ok(told[0]!.text.includes("A 20 s clip of the app."), "which order");
   assert.ok(told[0]!.text.includes(strings.deskModules.standard.closedNote), "with the closing note");
