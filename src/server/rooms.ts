@@ -362,6 +362,25 @@ export type RoomBrief = {
   keeper: string | null;
 };
 
+/** Why a project room shows as without a brief: none declared, an empty file, a file that cannot be read now. */
+export type BriefNotice = "none" | "empty" | "missing";
+
+/**
+ * Whether a room should show that it has no brief to give a studio (an
+ * information, the room works as before), read now. Null for a shared room:
+ * it serves the others, its brief would reach no one; null too for a brief
+ * with text.
+ */
+export function briefNotice(room: Room): BriefNotice | null {
+  if (room.shared) return null;
+  if (!room.brief) return "none";
+  try {
+    return fs.readFileSync(room.brief.file, "utf8").trim() === "" ? "empty" : null;
+  } catch {
+    return "missing";
+  }
+}
+
 export type InvalidRoom = { dir: string; error: string };
 
 /** A valid room the owner archived (myhq.json `archivedRooms`): kept on disk, out of the floor and the scheduler. */

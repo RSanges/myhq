@@ -340,6 +340,7 @@ restart.
     }
   ],
   "invalidRooms": [{ "room": "broken", "error": "..." }],
+  "roomsWithoutBrief": [{ "room": "demo", "reason": "none" }],
   "reception": { "room": "demo", "sprite": null, "runs": [] },
   "floor": { "layout": "floor-per-project", "owner": null },
   "scheduler": { "enabled": false, "running": false, "timeZone": "Europe/Paris" },
@@ -390,6 +391,11 @@ restart.
   `hq_status`, `tool` from the run's events, `hq_status` itself left out).
   `null` between runs. After the snapshot, the `tool_call` events of the
   stream keep it up to date (see `architecture.md`, "The activity bubble").
+- `roomsWithoutBrief`: the rooms that are not shared and have no brief to give
+  a studio (`home-layout.md`, "The room brief"): `reason` is `"none"` (no
+  `brief` in `room.json`), `"empty"` (its file holds only blank lines) or
+  `"missing"` (its file cannot be read now). An information: the room works
+  as before. A shared room is never listed, it serves the others.
 - `reception`: the onboarding agent seen from the floors. `room` is the one
   floor that draws it as a receptionist (`reception.room` of `myhq.json` when
   that room exists, else the room `assistant`, else the first room, `null`
@@ -1865,6 +1871,7 @@ Secrets are never part of it.
         "label": "Demo client",
         "color": "#ff3d7f",
         "shared": false,
+        "briefNotice": "none",
         "state": "paused",
         "pause": { "armed": ["scout"], "pausedAt": "2026-11-13T09:00:00.000Z" },
         "week": { "runs": 4, "costUsd": 1.2 },
@@ -1912,6 +1919,9 @@ Secrets are never part of it.
   `system` for the time zone of the machine) and what applies without the key
   (`fallback`). `running` tells that this process holds the scheduler lock.
 - `budgets` carries the budgets and run durations in the same form.
+- `briefNotice` is the `reason` of `roomsWithoutBrief` of `GET /api/state` for
+  that room, `null` when it has a brief with text or is shared; the card of
+  the room shows « Sans fiche ».
 - `armed` is the state in force (the database wins over `room.json`). A room is
   `paused` while it has a pause (`pause.armed`: the agents resuming re-arms).
 - `archivedRooms` are the rooms of `archivedRooms` of `myhq.json`, out of

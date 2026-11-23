@@ -58,6 +58,8 @@ export const settingsViewSchema = z.object({
       label: z.string().nullable(),
       color: z.string().nullable(),
       shared: z.boolean(),
+      /** Why the room shows as without a brief (rooms.ts, briefNotice), null when it has one or is shared. */
+      briefNotice: z.enum(["none", "empty", "missing"]).nullable(),
       /** Paused from the settings page (room-manage.ts): its routines were disarmed at once. */
       state: z.enum(["active", "paused"]),
       pause: z.object({ armed: z.array(z.string()), pausedAt: z.string() }).nullable(),

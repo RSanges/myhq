@@ -454,6 +454,13 @@ export const strings = {
       archivedLine: (p: { at: string; agents: number; runs: number; cost: string }) =>
         `Archivée le ${p.at}, ${p.agents} ${p.agents === 1 ? "agent" : "agents"}, ${p.runs} ${p.runs === 1 ? "tour" : "tours"} et ${p.cost} $ au total`,
       invalidTitle: "Salles invalides (à corriger dans leur room.json)",
+      /** A project room without a brief (rooms.ts, briefNotice): a chip of its card, its reason in the tooltip. */
+      noBrief: "Sans fiche",
+      noBriefWhy: {
+        none: "Cette salle n'a pas de fiche : un studio qui travaille pour elle ne reçoit ni ses règles ni ses références. Déclare brief dans son room.json.",
+        empty: "La fiche de cette salle est vide : un studio qui travaille pour elle ne reçoit rien.",
+        missing: "Le fichier de fiche de cette salle ne se lit pas.",
+      },
       toast: {
         paused: (room: string, n: number) => `Salle ${room} en pause : ${n === 1 ? "1 routine désarmée" : `${n} routines désarmées`}.`,
         resumed: (room: string) => `Salle ${room} reprise : ses routines sont réarmées.`,

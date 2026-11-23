@@ -17,7 +17,7 @@ import type {
 import { NOTIFICATION_NOTE, readFloorLayout, readFloorOwner, readReceptionRoom } from "./home-settings";
 import { isArmed, listFirings, toRoutineDto, type FiringDto, type RoutineDto } from "./routines";
 import { heldResources } from "./resources";
-import { toPosix, type Home } from "./rooms";
+import { briefNotice, toPosix, type BriefNotice, type Home } from "./rooms";
 import { isoSpriteUrl, isoStrideOf, ownerSpriteUrl, receptionSpriteUrl, spriteUrl } from "./sprites";
 import { logoUrl } from "./logos";
 import { HQ_STATUS_TOOL } from "../ui/activity";
@@ -308,6 +308,8 @@ export type StateDto = {
     }[];
   }[];
   invalidRooms: { room: string; error: string }[];
+  /** The project rooms without a brief to give a studio (rooms.ts, briefNotice): an information, they work as before. */
+  roomsWithoutBrief: { room: string; reason: BriefNotice }[];
   /**
    * The reception: the floor that draws the onboarding agent as a receptionist
    * (null when the home has no room), its own character sheet when the home
@@ -444,6 +446,10 @@ export function getState(db: Db, home: Home, scheduler: SchedulerInfo, at: Date 
       }),
     })),
     invalidRooms: home.invalid.map((r) => ({ room: path.basename(r.dir), error: r.error })),
+    roomsWithoutBrief: home.rooms.flatMap((room) => {
+      const reason = briefNotice(room);
+      return reason ? [{ room: room.name, reason }] : [];
+    }),
     reception: {
       room: resolveReceptionRoom(
         home.rooms.map((room) => room.name),

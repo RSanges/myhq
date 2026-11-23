@@ -317,6 +317,13 @@ colours, its tone, its logo rules) and say where its reference files live:
   the drop folder of `assistant.json` (`dropDir`). Any of these makes the room
   invalid, with the reason. A reference missing on disk is allowed: a run
   skips it, with a line in the log.
+- **A room without a brief shows.** A room that is not shared and has no
+  `brief`, or whose brief file is empty, is listed in `roomsWithoutBrief` of
+  the state and its card on the settings page says « Sans fiche ». It is an
+  information, not an error: the room works, a studio just gets no brief
+  from it. Shared rooms are never listed: they serve the others, and a brief
+  is only given by the room a studio works for. (A declared file that is
+  missing when the room loads still makes the room invalid, as above.)
 - **The limit.** A reference reaches the studio as an `--add-dir`: the write
   guard refuses the editing tools there, but a studio agent that has `Bash`
   can still write in it, as in any `addDirs`.

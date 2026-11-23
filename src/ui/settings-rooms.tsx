@@ -110,6 +110,11 @@ function RoomCard({
           <span className="flex flex-wrap gap-1.5">
             <StateChip state={room.state} />
             {room.shared && <span className="settings-tag">{r.shared}</span>}
+            {room.briefNotice && (
+              <span className="settings-tag" title={t.noBriefWhy[room.briefNotice]}>
+                {t.noBrief}
+              </span>
+            )}
             {room.label && <code className="settings-tag">{room.name}</code>}
           </span>
         </span>

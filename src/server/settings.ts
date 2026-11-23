@@ -24,7 +24,7 @@ import { roomWeekTotals } from "./usage";
 import { recentVerdicts } from "./portier";
 import { machineView } from "./machine";
 import { readDoorConfig, recentDoorRequests } from "./door";
-import { idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, roomLabelSchema, type Home, type Room } from "./rooms";
+import { briefNotice, idSchema, loadHome, MODELS, roomColorSchema, roomFileSchema, roomLabelSchema, type Home, type Room } from "./rooms";
 import {
   budgetSettingSchema,
   maxRunsSettingSchema,
@@ -456,6 +456,7 @@ export function buildSettingsView(config: HqConfig, db: Db, env: Env = process.e
         label: room.label ?? null,
         color: room.color,
         shared: room.shared,
+        briefNotice: briefNotice(room),
         state: pause ? ("paused" as const) : ("active" as const),
         pause,
         week: weeks.get(room.name) ?? { runs: 0, costUsd: 0 },

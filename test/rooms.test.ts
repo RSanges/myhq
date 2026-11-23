@@ -4,7 +4,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { getDbAt } from "../src/server/db";
 import { getState } from "../src/server/feed";
-import { loadHome, syncHome, type Agent } from "../src/server/rooms";
+import { briefNotice, loadHome, syncHome, type Agent } from "../src/server/rooms";
+import { buildSettingsView } from "../src/server/settings";
 import { schedulerInfo } from "../src/server/routines";
 import { makeHome } from "./helpers";
 
@@ -304,4 +305,39 @@ test("brief: a brief file reached through a link out of the room directory makes
     return;
   }
   assert.match(loadHome(config.home).invalid[0]!.error, /brief file must stay inside the room directory/);
+});
+
+// --- A project room without a brief (briefNotice) ---------------------------------------
+
+test("brief notice: a project room without a brief, or with an empty one, is reported in the state and the settings, and stays valid", () => {
+  const config = briefHome({ file: "brief.md" });
+  fs.mkdirSync(path.join(config.home, "rooms", "studio", "roles"), { recursive: true });
+  fs.writeFileSync(path.join(config.home, "rooms", "studio", "roles", "scout.md"), "You are a test agent.\n");
+  fs.writeFileSync(
+    path.join(config.home, "rooms", "studio", "room.json"),
+    JSON.stringify({ name: "studio", targetRepo: "x", shared: true, agents: [agent] }),
+  );
+  fs.mkdirSync(path.join(config.home, "rooms", "plain", "roles"), { recursive: true });
+  fs.writeFileSync(path.join(config.home, "rooms", "plain", "roles", "scout.md"), "You are a test agent.\n");
+  fs.writeFileSync(path.join(config.home, "rooms", "plain", "room.json"), JSON.stringify({ name: "plain", targetRepo: "x", agents: [agent] }));
+  const db = getDbAt(config.dbPath);
+  const notices = () => {
+    const home = loadHome(config.home);
+    syncHome(db, home);
+    assert.deepEqual(home.invalid, []);
+    const state = getState(db, home, schedulerInfo(config)).roomsWithoutBrief;
+    const settings = buildSettingsView(config, db, {}).rooms.map((room) => [room.name, room.briefNotice]);
+    return { state, settings };
+  };
+  // demo has a brief with text, studio is shared (it serves the others): neither is reported.
+  assert.deepEqual(notices(), {
+    state: [{ room: "plain", reason: "none" }],
+    settings: [["demo", null], ["plain", "none"], ["studio", null]],
+  });
+  fs.writeFileSync(path.join(config.home, "rooms", "demo", "brief.md"), "  \n\n");
+  assert.deepEqual(notices().state, [
+    { room: "demo", reason: "empty" },
+    { room: "plain", reason: "none" },
+  ]);
+  assert.equal(briefNotice({ ...loadHome(config.home).rooms[0]!, brief: { file: path.join(config.home, "gone.md"), references: [], keeper: null } }), "missing");
 });
