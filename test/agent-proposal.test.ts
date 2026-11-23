@@ -517,3 +517,13 @@ test("an agent-mode run reads the catalogue folders of myhq.json, read-only", as
   assert.match(input.prompt, /Language of this home: fr \(French\)\. Write the title, the body, the reason and the whole role prompt in French/);
   assert.match(input.prompt, /"Proposition d'agent : <agent id> \(<room>\)"/);
 });
+
+test("a proposed agent that submits gets hq_items: a revision asks it to read its item back", () => {
+  const { payload, body } = normalizeAgentProposal(proposal(), "An illustrator.");
+  assert.deepEqual(payload.agent.allowedTools, ["Read", "mcp__hq__hq_submit", "mcp__hq__hq_task_update", "mcp__hq__hq_items"]);
+  assert.match(body, /`mcp__hq__hq_items`/, "the owner approves the list as it will be written");
+  // Nothing is added to an agent that does not submit, already has it, or has every hq tool.
+  for (const allowedTools of [["Read", "mcp__hq__hq_status"], ["mcp__hq__hq_items", "mcp__hq__hq_submit"], ["Read", "mcp__hq__*"]]) {
+    assert.deepEqual(normalizeAgentProposal(proposal({}, { allowedTools }), "An illustrator.").payload.agent.allowedTools, allowedTools);
+  }
+});

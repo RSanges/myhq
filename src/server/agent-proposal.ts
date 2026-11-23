@@ -7,7 +7,7 @@ import { replaceDashes } from "./dashes";
 import { now, type Db, type TaskSource } from "./db";
 import { HqError } from "./errors";
 import { writeJsonAtomic, writeTextAtomic } from "./home-file";
-import { agentSchema, idSchema, loadHome, loadRoom, roomFileSchema, syncHome, type Room } from "./rooms";
+import { agentSchema, idSchema, loadHome, loadRoom, roomFileSchema, syncHome, withItemsTool, type Room } from "./rooms";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
 /**
@@ -97,6 +97,7 @@ export function normalizeAgentProposal(payload: unknown, body: string): { payloa
   delete rest.role;
   const file = proposedAgentSchema.safeParse({ ...rest, armed: false });
   if (!file.success) throw new Error(`invalid agent_proposal payload: agent.${issues(file.error)}`);
+  file.data.allowedTools = withItemsTool(file.data.allowedTools);
   const left = [...new Set(rolePrompt.match(/\{\{\w+\}\}/g) ?? [])];
   if (left.length > 0) throw new Error(`invalid agent_proposal payload: rolePrompt still has placeholder(s): ${left.join(", ")}`);
 

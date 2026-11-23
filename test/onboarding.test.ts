@@ -559,3 +559,12 @@ test("at startup, a pending revision of the onboarding agent runs without manual
   // No binary: the run fails, which proves it was really launched.
   assert.equal((await waitForRun(db, run.id)).status, "failed");
 });
+
+test("an agent of a proposed room that submits gets hq_items: a revision asks it to read its item back", () => {
+  const submitted = proposal("../acme");
+  submitted.room.agents[1]!.allowedTools = ["WebSearch", "mcp__hq__hq_submit"];
+  const { payload, body } = normalizeRoomProposal(submitted, "Two agents for Acme.", templatesDir);
+  assert.deepEqual(payload.room.agents[0]!.allowedTools, ["Read", "Edit", "Bash(git *)", "mcp__hq__*"]);
+  assert.deepEqual(payload.room.agents[1]!.allowedTools, ["WebSearch", "mcp__hq__hq_submit", "mcp__hq__hq_items"]);
+  assert.match(body, /"mcp__hq__hq_items"/, "the owner approves the room.json as it will be written");
+});

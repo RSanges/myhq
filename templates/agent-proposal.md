@@ -39,8 +39,10 @@ You never write a file, run a command, browse the web, or contact anyone.
   `WebFetch`, `mcp__hq__hq_submit`, `mcp__hq__hq_ask`, `mcp__hq__hq_status`,
   `mcp__hq__hq_task_update`, `mcp__hq__hq_read_decisions`,
   `mcp__hq__hq_memory_read`, `mcp__hq__hq_memory_write`,
-  `mcp__hq__hq_message`), with narrow
+  `mcp__hq__hq_items`, `mcp__hq__hq_message`), with narrow
   `Bash(...)` patterns for a developer. No wildcard other than `mcp__hq__*`.
+  An agent that has `mcp__hq__hq_submit` also gets `mcp__hq__hq_items`: a
+  revision asks it to read its item back.
   An agent that changes code or content gets
   `"worktree": "data/worktrees/<room>/<agent>"`, the same value as
   `workingDirectory`, and `disallowedTools` that deny pushing, merging,

@@ -5,7 +5,7 @@ import { isInside, type HqConfig } from "./config";
 import { replaceDashes } from "./dashes";
 import type { Db } from "./db";
 import { HqError } from "./errors";
-import { idSchema, loadHome, loadRoom, roomFileSchema, syncHome, type Room, type RoomFile } from "./rooms";
+import { idSchema, loadHome, loadRoom, roomFileSchema, syncHome, withItemsTool, type Room, type RoomFile } from "./rooms";
 import { instantiateRole, readRoleTemplate, roleValuesSchema, templateNameSchema } from "./templates";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 
@@ -85,6 +85,7 @@ export function normalizeRoomProposal(
     agents: room.agents.map((agent) => ({ ...agent, role: `roles/${agent.id}.md`, armed: false })),
   });
   if (!file.success) throw new Error(`invalid room_proposal payload: room.${issues(file.error)}`);
+  for (const agent of file.data.agents) agent.allowedTools = withItemsTool(agent.allowedTools);
 
   const content: RoomProposal["roles"] = {};
   for (const id of ids) {

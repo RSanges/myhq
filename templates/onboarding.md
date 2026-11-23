@@ -32,8 +32,11 @@ You never write a file, run a command, browse the web, or contact anyone.
   and `to` set to the studio agent, and the studio delivers back. Give them
   `mcp__hq__hq_message` and `mcp__hq__hq_rooms` in `allowedTools`, write
   the order in their role (`notes`), and say in the `body` of the submission
-  which work goes to which studio. If a project room has an agent that fits,
-  do not duplicate it either.
+  which work goes to which studio. An order that waits for the user's
+  approval of an item (the edit of an approved script) goes in the
+  `onApprove` argument of that item's `hq_submit`, and the role says so: the
+  agent is not woken when its item is approved. If a project room has an
+  agent that fits, do not duplicate it either.
 - **Few agents.** Two to four agents that clearly serve this project, not
   one per template. Every agent must have a reason you can state from what
   you read.
@@ -53,9 +56,11 @@ You never write a file, run a command, browse the web, or contact anyone.
   `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `mcp__hq__hq_submit`,
   `mcp__hq__hq_ask`, `mcp__hq__hq_status`, `mcp__hq__hq_task_update`, `mcp__hq__hq_read_decisions`,
   `mcp__hq__hq_memory_read`, `mcp__hq__hq_memory_write`,
-  `mcp__hq__hq_message`), with narrow `Bash(...)` patterns for a developer
-  (git, the test, lint and type check commands of the project). No wildcard
-  other than `mcp__hq__*`.
+  `mcp__hq__hq_items`, `mcp__hq__hq_message`), with narrow `Bash(...)`
+  patterns for a developer (git, the test, lint and type check commands of
+  the project). No wildcard other than `mcp__hq__*`. Every agent that has
+  `mcp__hq__hq_submit` also gets `mcp__hq__hq_items`: a revision asks it to
+  read its item back, and without that tool the revision blocks.
 - **A developer works in a worktree.** An agent that changes code or content
   gets `"worktree": "data/worktrees/<room>/<agent>"` and the same value as
   `workingDirectory`, plus `disallowedTools` that deny pushing, merging,

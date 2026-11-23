@@ -199,6 +199,16 @@ export const agentSchema = z.strictObject({
     .optional(),
 });
 
+/**
+ * The tools of a proposed agent, as MyHQ writes them: an agent that submits
+ * (hq_submit) also reads its items back (hq_items), since a revision asks it
+ * to, and blocks without that tool. A list that has `mcp__hq__*` has both.
+ */
+export function withItemsTool(allowedTools: string[]): string[] {
+  const has = (tool: string) => allowedTools.includes("mcp__hq__*") || allowedTools.includes(tool);
+  return has("mcp__hq__hq_submit") && !has("mcp__hq__hq_items") ? [...allowedTools, "mcp__hq__hq_items"] : allowedTools;
+}
+
 /** A CSS hex colour, `#rgb` or `#rrggbb`: the colour of a room in the interface. */
 export const roomColorSchema = z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "must be a hex colour like #ff3d7f");
 
