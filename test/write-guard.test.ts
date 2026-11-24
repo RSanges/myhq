@@ -8,9 +8,11 @@ import { askChat, buildChatArgs } from "../src/assistant/chat";
 import { buildClaudeArgs } from "../src/server/claude-engine";
 import type { Engine, RunInput } from "../src/server/engine";
 import { getDbAt } from "../src/server/db";
+import { loadHome } from "../src/server/rooms";
 import { startRun } from "../src/server/runner";
 import {
   cliToolRules,
+  needsWriteGuard,
   installWriteGuard,
   WRITE_GUARD_ENV,
   WRITE_GUARD_HOOK,
@@ -143,6 +145,66 @@ test("a rule with a sub-path limits the writes to it; a deny rule wins", () => {
   const denied = decide(write(path.join(work, "supabase", "migrations", "1.sql")), dev);
   assert.ok(!denied.allow && /your rules deny writing there/.test(denied.reason));
   assert.equal(decide(write(path.join(work, "a.ts")), config(work, ["Read"])).allow, false, "no write rule, no write");
+});
+
+test("an MCP tool declared as writing files is held to the write rules; undeclared ones are not guarded", () => {
+  const { root, work } = dirs();
+  const render = (saveTo?: unknown, cwd?: string) => ({
+    tool_name: "mcp__cad__render_view",
+    tool_input: { objects: "part", ...(saveTo === undefined ? {} : { save_to: saveTo }) },
+    ...(cwd ? { cwd } : {}),
+  });
+  const cao = writeGuardConfig({
+    workDir: work,
+    allowedTools: ["Read", "Write(models/**)", "Edit(models/**)", "mcp__cad__render_view"],
+    disallowedTools: ["Write(models/secret/**)"],
+    fileWriteTools: { "mcp__cad__render_view": ["save_to", "save_to"], "mcp__cad__nothing": [] },
+  });
+  assert.deepEqual(cao.fileTools, { "mcp__cad__render_view": ["save_to"] }, "fields deduplicated, a tool without fields dropped");
+  assert.equal(needsWriteGuard(cao), true);
+  // No file asked for: the render comes back in the reply.
+  assert.deepEqual(decide(render(), cao), { allow: true });
+  assert.deepEqual(decide(render(""), cao), { allow: true });
+  assert.equal(decide(render(path.join(work, "models", "view.png")), cao).allow, true);
+  assert.equal(decide(render("models/view", work), cao).allow, true, "a relative path resolves against the session's cwd");
+  for (const target of [
+    path.join(work, "tools", "check.py"),
+    path.join(work, "CLAUDE.md"),
+    path.join(work, "models", "secret", "a.png"),
+    path.join(work, ".claude", "settings.local.json"),
+    path.join(root, "outside.png"),
+    path.join(os.tmpdir(), "view.png"),
+  ]) {
+    const decision = decide(render(target), cao);
+    assert.equal(decision.allow, false, target);
+    assert.ok(!decision.allow && decision.reason.startsWith("MyHQ write guard: mcp__cad__render_view to "), decision.reason);
+  }
+  assert.equal(decide(render("../outside.png", work), cao).allow, false);
+  assert.equal(decide(render(42), cao).allow, false, "a field that is not a path is a refusal");
+  assert.equal(decide(render("   "), cao).allow, false);
+  // A second field is checked too.
+  const two = writeGuardConfig({ workDir: work, allowedTools: ["Write(out/**)"], fileWriteTools: { mcp__x__export: ["path", "sidecar"] } });
+  const exportTo = (p: string, sidecar: string) => ({ tool_name: "mcp__x__export", tool_input: { path: p, sidecar } });
+  assert.equal(decide(exportTo(path.join(work, "out", "a.stl"), path.join(work, "out", "a.json")), two).allow, true);
+  assert.equal(decide(exportTo(path.join(work, "out", "a.stl"), path.join(work, "a.json")), two).allow, false);
+  // An agent with no write rule writes no file through such a tool either.
+  const none = writeGuardConfig({ workDir: work, allowedTools: ["Read"], fileWriteTools: { mcp__cad__render_view: ["save_to"] } });
+  assert.equal(needsWriteGuard(none), true, "the hook is installed for the tool alone");
+  assert.equal(decide(render(path.join(work, "models", "v.png")), none).allow, false);
+  assert.equal(decide(render(), none).allow, true);
+  // Without the declaration, the tool is not the guard's business (nor are the others of the server).
+  assert.equal(decide(render(path.join(root, "outside.png")), config(work, ["Write"])).allow, true);
+  assert.equal(decide({ tool_name: "mcp__cad__measure", tool_input: { save_to: path.join(root, "x") } }, cao).allow, true);
+  assert.equal(needsWriteGuard(config(work, ["Read"])), false);
+});
+
+test("the configuration of file writing tools is checked when read", () => {
+  const base = { workDir: path.resolve("/w"), allow: [], deny: [], writeDirs: [] };
+  const read = (fileTools: unknown) => () => readConfig({ [WRITE_GUARD_ENV]: JSON.stringify({ ...base, fileTools }) });
+  assert.deepEqual(read({ mcp__a__b: ["save_to"] })().fileTools, { mcp__a__b: ["save_to"] });
+  for (const bad of [[], { Write: ["file_path"] }, { mcp__a__b: [] }, { mcp__a__b: "save_to" }, { "mcp__a b": ["x"] }]) {
+    assert.throws(read(bad), /not a valid guard configuration/, JSON.stringify(bad));
+  }
 });
 
 test("the settings that hold the hook cannot be written", () => {
@@ -301,6 +363,35 @@ test("installing the hook writes an exec-form PreToolUse entry and keeps everyth
   assert.ok(!fs.readdirSync(path.join(work, ".claude")).some((name) => name.endsWith(".tmp")));
 });
 
+test("the hook also matches the declared file writing tools, and only MCP tools can be declared", () => {
+  const { work } = dirs();
+  installWriteGuard(work, { script: HOOK, fileTools: ["mcp__cad__render_view", "mcp__cad__render_view"] });
+  assert.equal(settingsOf(work).hooks.PreToolUse[0]!.matcher, "Write|Edit|MultiEdit|NotebookEdit|mcp__cad__render_view");
+  installWriteGuard(work, { script: HOOK });
+  assert.equal(settingsOf(work).hooks.PreToolUse.length, 1);
+  assert.equal(settingsOf(work).hooks.PreToolUse[0]!.matcher, "Write|Edit|MultiEdit|NotebookEdit");
+  for (const bad of ["Bash", ".*", "mcp__a|Read", "mcp__a__(b)"]) {
+    assert.throws(() => installWriteGuard(work, { script: HOOK, fileTools: [bad] }), /only an MCP tool name/, bad);
+  }
+});
+
+test("the hook script refuses an outside path of a declared tool", () => {
+  const { root, work } = dirs();
+  const cfg = writeGuardConfig({ workDir: work, allowedTools: ["Write(models/**)"], fileWriteTools: { mcp__cad__render_view: ["save_to"] } });
+  const env = { ...process.env, ...writeGuardEnv(cfg) };
+  const run = (saveTo: string) =>
+    spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ tool_name: "mcp__cad__render_view", tool_input: { save_to: saveTo } }),
+      env,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+  assert.equal(run(path.join(work, "models", "v.png")).status, 0);
+  const outside = run(path.join(root, "v.png"));
+  assert.equal(outside.status, 2);
+  assert.match(outside.stderr, /MyHQ write guard: mcp__cad__render_view to .* refused/);
+});
+
 test("a settings file that is not a JSON object is an explicit error", () => {
   const { work } = dirs();
   fs.mkdirSync(path.join(work, ".claude"));
@@ -446,4 +537,59 @@ test("a chat turn installs the guard in its cwd, with its writeDirs, and adds th
   assert.equal(decide(write(path.join(root, "n.md")), guard).allow, false);
   assert.ok(fs.existsSync(path.join(work, ".claude", "settings.local.json")));
   assert.ok(fs.readFileSync(path.join(work, ".claude", ".gitignore"), "utf8").includes("settings.local.json"));
+});
+
+test("an agent's fileWriteTools reach its run: the hook matches them and the guard holds their paths", async () => {
+  const config = makeHome(
+    {},
+    {
+      name: "demo",
+      targetRepo: "../demo-project",
+      agents: [
+        {
+          id: "cad",
+          name: "CAD",
+          role: "roles/scout.md",
+          model: "haiku",
+          allowedTools: ["Read", "mcp__cad__render_view"],
+          fileWriteTools: { mcp__cad__render_view: "save_to" },
+        },
+      ],
+    },
+  );
+  const seen: RunInput[] = [];
+  const engine: Engine = {
+    name: "claude",
+    async *run(input) {
+      seen.push(input);
+      yield { type: "end", status: "done", reason: "success", summary: "OK", usage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, costUsd: 0 };
+    },
+  };
+  const run = startRun({ room: "demo", agent: "cad" }, { config, engine, send: async () => true });
+  assert.equal((await waitForRun(getDbAt(config.dbPath), run.id)).status, "done");
+  const input = seen[0]!;
+  const guard = readConfig(input.env);
+  assert.deepEqual(guard.fileTools, { mcp__cad__render_view: ["save_to"] }, "a single field is written as a string in room.json");
+  assert.equal(settingsOf(input.workDir).hooks.PreToolUse[0]!.matcher, "Write|Edit|MultiEdit|NotebookEdit|mcp__cad__render_view");
+  const render = { tool_name: "mcp__cad__render_view", tool_input: { save_to: path.join(input.workDir, "view.png") } };
+  assert.equal(decide(render, guard).allow, false, "no write rule: no file through the tool either");
+});
+
+test("fileWriteTools of room.json name MCP tools only", () => {
+  const home = (fileWriteTools: unknown) =>
+    makeHome(
+      {},
+      {
+        name: "demo",
+        targetRepo: "../demo-project",
+        agents: [{ id: "cad", name: "CAD", role: "roles/scout.md", model: "haiku", allowedTools: ["Read"], fileWriteTools }],
+      },
+    ).home;
+  const agent = (fileWriteTools: unknown) => loadHome(home(fileWriteTools)).rooms[0]!.agents[0]!;
+  assert.deepEqual(agent({ mcp__cad__render_view: ["save_to", "png_to"] }).fileWriteTools, { mcp__cad__render_view: ["save_to", "png_to"] });
+  for (const bad of [{ Bash: "command" }, { "mcp__a|Read": "x" }, { mcp__cad__render_view: [] }, { mcp__cad__render_view: "" }]) {
+    const loaded = loadHome(home(bad));
+    assert.equal(loaded.rooms.length, 0, JSON.stringify(bad));
+    assert.match(JSON.stringify(loaded.invalid), /fileWriteTools/, JSON.stringify(bad));
+  }
 });
