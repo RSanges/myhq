@@ -728,6 +728,12 @@ it the moment the item is approved (`src/server/approval-command.ts`, started by
 - anything else falls back to `"task"`: the task is written pending with the
   error under its text and `wakeAgents` wakes the agent (`wakesAgent` treats
   `"command"` like `"task"` for an approval task, which only exists then).
+- with `approvalCommandFailure: "owner"`, a failure is never taken over by a
+  model turn: the task is written `blocked` with the error, `decideApproval`
+  hands it to the owner (`noteBlocked` by MyHQ, `handOff` true, so the
+  supervisor leaves it) and sends a Telegram alert; nobody is woken. It is for
+  commands whose action must stay exactly the one the owner saw, such as the
+  last click of a form.
 
 Each command run is one row of `approval_commands` (`ok`, `note`, `error`, its
 start and end).

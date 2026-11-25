@@ -199,6 +199,13 @@ export const agentSchema = z.strictObject({
    */
   approvalCommand: z.array(z.string().min(1).max(4_000)).min(1).max(64).optional(),
   /**
+   * With `onApproval: "command"`: what happens when the command fails. "task" (the default): the agent
+   * gets the task and is woken, so the item is still executed. "owner": the item goes back to the owner,
+   * as a blocked task handed to them, and the agent is not woken (for a command whose action no model
+   * turn may take over, such as the last click of a form).
+   */
+  approvalCommandFailure: z.enum(["task", "owner"]).optional(),
+  /**
    * The piece the agent works on, shown large in the surveillance room: patterns relative to its working
    * directory (`renders/**\/*.mp4`), as the write rules take them (docs/home-layout.md, "The piece").
    */
@@ -337,6 +344,8 @@ export type Agent = {
   portier?: boolean;
   /** The command of `onApproval: "command"`, relative to the home; null otherwise. */
   approvalCommand?: string[] | null;
+  /** When the approval command fails: "task" gives the item to the agent, "owner" to the owner; absent: "task". */
+  approvalCommandFailure?: "task" | "owner";
   /** Patterns of its piece, relative to its working directory (room.json `pieces`); empty: no piece followed. */
   pieces: string[];
 };
@@ -587,6 +596,9 @@ export function loadRoom(home: string, roomDir: string): Room {
     if (agent.onApproval === "command" && !agent.approvalCommand) {
       throw new Error(`${file}: "${agent.id}" has onApproval "command": approvalCommand is required`);
     }
+    if (agent.approvalCommandFailure && agent.onApproval !== "command") {
+      throw new Error(`${file}: "${agent.id}" has approvalCommandFailure: it only applies to onApproval "command"`);
+    }
 
     let skills: string[];
     try {
@@ -639,6 +651,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       cacheTtl: agent.cacheTtl ?? null,
       portier: agent.portier ?? true,
       approvalCommand: agent.approvalCommand ?? null,
+      approvalCommandFailure: agent.approvalCommandFailure ?? "task",
       pieces: agent.pieces ?? [],
     };
   });

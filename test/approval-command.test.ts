@@ -47,7 +47,7 @@ process.stdin.on("end", () => {
 `;
 
 /** Room "demo": a mailer with an approval command, Social (onApproval task) and Motion. */
-function office(mode: "ok" | "silent" | "fail"): { config: HqConfig; db: Db } {
+function office(mode: "ok" | "silent" | "fail", failure?: "task" | "owner"): { config: HqConfig; db: Db } {
   const base = { role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] };
   const config = makeHome(
     { portier: { enabled: true, model: "haiku" } },
@@ -55,7 +55,7 @@ function office(mode: "ok" | "silent" | "fail"): { config: HqConfig; db: Db } {
       name: "demo",
       targetRepo: "../demo-project",
       agents: [
-        { id: "mailer", name: "Mailer", ...base, onApproval: "command", approvalCommand: [process.execPath, "tools/send.mjs", mode] },
+        { id: "mailer", name: "Mailer", ...base, onApproval: "command", approvalCommand: [process.execPath, "tools/send.mjs", mode], ...(failure ? { approvalCommandFailure: failure } : {}) },
         { id: "social", name: "Social", ...base, onApproval: "task" },
         { id: "motion", name: "Motion", ...base },
       ],
@@ -130,6 +130,42 @@ test("approval command: a failure, or an answer without ok, falls back to the ta
     assert.match(seen.at(-1)!.prompt, /MyHQ a lancé la commande d'approbation/);
     assert.equal(dto(db, id).actionNote, null);
   }
+});
+
+test("approval command: with approvalCommandFailure owner, a failure goes back to the owner, blocked and handed off, and the agent is not woken", async () => {
+  const { config, db } = office("fail", "owner");
+  const seen: RunInput[] = [];
+  const sent: string[] = [];
+  const id = addApproval(db, "mailer");
+  decideApproval(db, id, { decision: "approved" }, config, {
+    engine: engine(seen),
+    send: async (text) => {
+      sent.push(text);
+      return true;
+    },
+  });
+  await approvalCommandsIdle();
+  const [task] = approvalTasks(db);
+  assert.ok(task);
+  assert.equal(task.status, "blocked");
+  assert.match(task.text, new RegExp(`^Item approuvé n° ${id} non exécuté : Réponse à Léa`));
+  assert.match(task.text, /exited with code 3: SMTP indisponible/);
+  assert.equal(runsOf(db, "mailer").length, 0, "no run: the agent never takes over");
+  assert.equal(seen.length, 0);
+  const note = db.prepare("SELECT room, agent_id, handed_off FROM blocked_notes WHERE task_id = ?").get(task.id) as
+    | { room: string; agent_id: string; handed_off: number }
+    | undefined;
+  assert.equal(note?.handed_off, 1, "handed to the owner for good");
+  assert.equal(note?.agent_id, "myhq");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, new RegExp(`Item n° ${id} approuvé mais non exécuté`));
+  assert.equal(dto(db, id).actionDone, false);
+});
+
+test("approval command: approvalCommandFailure only applies to onApproval command", () => {
+  const base = { role: "roles/scout.md", model: "haiku", allowedTools: ["mcp__hq__*"] };
+  const config = makeHome({}, { name: "demo", targetRepo: "../demo-project", agents: [{ id: "a", name: "A", ...base, onApproval: "task", approvalCommandFailure: "owner" }] });
+  assert.match(loadHome(config.home).invalid[0]?.error ?? "", /approvalCommandFailure: it only applies to onApproval "command"/);
 });
 
 test("approval command: onApproval command needs approvalCommand, and a proposed agent may not carry one", async () => {
