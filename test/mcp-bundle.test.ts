@@ -80,6 +80,8 @@ test("the build freezes the server: it runs from build/mcp and ignores later cha
       "hq_blocked_close",
       "hq_blocked_note",
       "hq_items",
+      "hq_machine_hold",
+      "hq_machine_release",
       "hq_memory_read",
       "hq_memory_write",
       "hq_message",

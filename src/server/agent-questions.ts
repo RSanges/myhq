@@ -104,6 +104,8 @@ export const QUESTION_DENIED_TOOLS = [
   "mcp__hq__hq_blocked_note",
   "mcp__hq__hq_run_extend",
   "mcp__hq__hq_run_stop",
+  "mcp__hq__hq_machine_hold",
+  "mcp__hq__hq_machine_release",
 ] as const;
 
 /** How much of a proposed task the agent reads again in the context of the next questions. */
