@@ -335,7 +335,10 @@ export const chatReplySchema = z.object({
   pendingConfirmation: z.object({ summary: z.string() }).optional(),
   choices: z.array(choiceSchema).optional(),
   messages: z.array(chatMessageSchema),
-  dispatch: z.object({ run: runSchema }).optional(),
+  /** A task for an agent: the run started, or the task kept in its mailbox when the run could not start now (`queued`). */
+  dispatch: z
+    .object({ run: runSchema.nullable(), queued: z.object({ taskId: z.number().int(), code: z.string() }).nullable().default(null) })
+    .optional(),
 });
 
 export const clearedSchema = z.object({ cleared: z.boolean() });
@@ -471,6 +474,8 @@ const deskRefSchema = z.discriminatedUnion("kind", [
     /** A supervisor's note on the entry, and whether it handed the entry to the owner. */
     note: z.object({ text: z.string(), by: z.string(), at: z.string() }).nullable().default(null),
     handedOff: z.boolean().default(false),
+    /** The whole words of the agent (its note, a run's summary) when the reason had to be cut. */
+    detail: z.string().nullable().default(null),
   }),
 ]);
 export const deskItemSchema = z.object({

@@ -749,6 +749,13 @@ the outcome, since a command that failed may have written.
 its instruction left blocked and the tasks it gave back) go back to `pending`,
 then a run of their agent starts at once with reason `relaunch`, taking its
 mailbox, under the agent lock, the shared resources and the daily cap.
+« Répondre » is the same call with `"answer"` (1 to 5000 characters, trimmed):
+the owner's words join the tasks as a pending task of source `chat` (a request
+of the owner, in the subject of the relaunch, that only the owner cancels), so
+the run, or the next one of that subject, takes them with the tasks. On
+MyHQ's note on a bench the answer is ignored and the closing is tried again,
+as for « Relancer ». Either way, the `standard_handoff` items of the entry's
+tasks still unseen are marked seen (`POST /api/blocked/close` does the same).
 
 Response `200`:
 
@@ -1331,25 +1338,37 @@ another turn is in progress, the message waits for it (see TurnState).
   messages, with the same ids).
 
 **With `to`**: the text becomes the task of that agent and a run starts at once
-(reason `desk`), like `POST /api/runs` with a `task`: same agent lock and daily
-cap. The chat is not asked, so the request does not wait for its turn.
+(reason `desk`), like `POST /api/runs` with a `task`: same agent lock, shared
+resources, machine and daily cap. The chat is not asked, so the request does
+not wait for its turn.
 
 ```json
 {
   "ok": true,
   "reply": "Tâche transmise à Scout, tour n° 12 lancé",
-  "dispatch": { "run": { "...": "Run shape" } },
+  "dispatch": { "run": { "...": "Run shape" }, "queued": null },
   "messages": [{ "...": "the task, role user, with to" }, { "...": "kind dispatch" }]
 }
 ```
+
+When what holds back any run keeps this one from starting now (`AGENT_BUSY`,
+`RESOURCE_BUSY`, `MACHINE_BUSY`, `DAILY_CAP_REACHED`, `SHUTTING_DOWN`), the text
+is not lost: it waits in the agent's mailbox as a pending task of source `chat`
+(a request of the owner, in the general subject), which the wake-ups take once
+that is over (a machine short of memory keeps it in the queue, without
+overtaking). `run` is then `null`, `queued` is `{ "taskId", "code" }` and `reply`
+says why in French. A start the veto command defers is tried again by the
+runner itself once the command answers: it is answered `MACHINE_BUSY` (409) and
+nothing is queued, so that it does not run twice.
 
 Status `202`. Both messages are added to the conversation, so the next chat turn
 knows what was sent to whom. Without `to`, the chat may itself hand work to an
 agent through its request files, as it does on Telegram.
 
 Errors: `INVALID_JSON`, `INVALID_INPUT`, `CHAT_NOT_CONFIGURED` (404, without `to`),
-and with `to`: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, `AGENT_BUSY` (409),
-`DAILY_CAP_REACHED` (429), in which case nothing is added to the conversation.
+and with `to`: `ROOM_NOT_FOUND`, `ROOM_INVALID`, `AGENT_NOT_FOUND`, and
+`MACHINE_BUSY` (409) for a start deferred by the veto command, in which case
+nothing is added to the conversation.
 
 ### `GET /api/chat/history`
 

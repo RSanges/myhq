@@ -24,8 +24,8 @@ export async function handleChatPost(request: Request): Promise<Response> {
     const body = chatBodySchema.parse(await readJson(request));
     const service = getChatService(config);
     if (body.to) {
-      const { reply, run, messages } = service.dispatch(body.text, body.to, "desk");
-      return Response.json({ ok: true, reply, dispatch: { run: toRun(run) }, messages }, { status: 202 });
+      const { reply, run, queued, messages } = service.dispatch(body.text, body.to, "desk");
+      return Response.json({ ok: true, reply, dispatch: { run: run ? toRun(run) : null, queued }, messages }, { status: 202 });
     }
     if (!service.configured) {
       throw new HqError("CHAT_NOT_CONFIGURED", 404, "The conversation is not configured (no chat section in assistant.json).");

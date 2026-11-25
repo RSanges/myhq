@@ -15,11 +15,11 @@ import { getConfig, type Env, type HqConfig } from "../server/config";
 import { writeGuardScript } from "../server/write-guard";
 import { getDbAt, type Db, type RunRow } from "../server/db";
 import { ZERO_USAGE } from "../server/engine";
-import { HqError } from "../server/errors";
+import { HqError, isHqError } from "../server/errors";
 import type { ApprovalDto } from "../server/feed";
 import { proposeAgent } from "../server/agent-need";
 import { listQueue, moveInQueue } from "../server/queue";
-import { findAgent, startRun as defaultStartRun, wakeAgents, type RunnerDeps, type StartRunRequest } from "../server/runner";
+import { findAgent, startRun as defaultStartRun, wakeAgents, WAITS, type RunnerDeps, type StartRunRequest } from "../server/runner";
 import { loadHome } from "../server/rooms";
 import { DroppedFileError, moveDroppedIntoReceived, RoomFolderError, roomFoldersRoot } from "../server/room-folders";
 import { lastChatTurnEnd, recordChatTurn } from "../server/usage";
@@ -59,7 +59,14 @@ export type TurnResult = {
   choices: Choice[] | null;
 };
 
-export type DispatchResult = { reply: string; run: RunRow; messages: ChatMessageDto[] };
+export type DispatchResult = {
+  reply: string;
+  /** The run started for the task; null when it could not start now and the task waits in the agent's mailbox (`queued`). */
+  run: RunRow | null;
+  /** The task kept pending when the run could not start (the machine, the agent busy, the cap...), with the code of why. */
+  queued: { taskId: number; code: string } | null;
+  messages: ChatMessageDto[];
+};
 
 /**
  * What a message adds to a turn. `attachmentDir`: the message points to a file
@@ -228,21 +235,39 @@ export class ChatService {
 
   /**
    * The text becomes the task of an agent and a run starts at once, with the
-   * lock and the daily cap of any run (`AGENT_BUSY`, `DAILY_CAP_REACHED`
-   * are thrown). The chat is not involved, so it does not wait for its turn.
+   * lock, the shared resources, the machine and the daily cap of any run. When
+   * one of them holds the run back (`WAITS`: the agent busy, a resource, the
+   * machine, the cap, MyHQ stopping), the text is not lost: it waits in the
+   * agent's mailbox as a pending task of source `chat` (a request of the
+   * owner), which the wake-ups take once what held it back is over, and the
+   * reply says so. Any other error is thrown. The chat is not involved, so it
+   * does not wait for its turn.
    */
   dispatch(text: string, to: ChatTarget, channel: ChatChannel = "desk"): DispatchResult {
     const { agent } = findAgent(this.deps.config, to.room, to.agent);
     const start = this.deps.startRun ?? ((request: StartRunRequest) => defaultStartRun(request, { config: this.deps.config }));
-    const run = start({ room: to.room, agent: agent.id, task: text, reason: DESK_REASON });
-    const reply = strings.chat.dispatched(agent.name, run.id);
+    let run: RunRow | null = null;
+    let queued: DispatchResult["queued"] = null;
+    try {
+      run = start({ room: to.room, agent: agent.id, task: text, reason: DESK_REASON });
+    } catch (error) {
+      if (!isHqError(error) || !WAITS.has(error.code)) throw error;
+      // A start deferred for the veto command is tried again by the runner once it answers: kept as is, it would run twice.
+      if ((error as { deferred?: boolean }).deferred === true) throw error;
+      queued = { taskId: queueDispatch(this.deps.db, to.room, agent.id, text), code: error.code };
+    }
+    const reply = run ? strings.chat.dispatched(agent.name, run.id) : strings.chat.dispatchQueued(agent.name, queued!.code);
     const target = { room: to.room, agent: agent.id };
     const messages = [
       this.remember("user", text, null, { channel, to: target }),
       this.remember("bot", reply, "dispatch", { channel, to: target }),
     ].filter((message): message is ChatMessageDto => message !== null);
-    this.log(`task for ${to.room}/${agent.id} from the ${channel}: run #${run.id} started`);
-    return { reply, run, messages };
+    this.log(
+      run
+        ? `task for ${to.room}/${agent.id} from the ${channel}: run #${run.id} started`
+        : `task for ${to.room}/${agent.id} from the ${channel}: queued as task #${queued!.taskId} (${queued!.code})`,
+    );
+    return { reply, run, queued, messages };
   }
 
   // --- The pipeline ------------------------------------------------------------
@@ -673,6 +698,23 @@ export class ChatService {
 // Shared across module instances (instrumentation, route bundles, dev reloads):
 // the Telegram bridge and the HTTP routes must use the same service, or two
 // turns could run at once.
+/**
+ * Keeps a task the owner gave an agent from the desk or Telegram, whose run could not start now, as a pending
+ * task of source `chat` in the general subject (the one of a direct run): the wake-ups take it once the agent,
+ * the machine or the cap allows (a machine short of memory keeps it in the queue, without overtaking).
+ */
+export function queueDispatch(db: Db, room: string, agentId: string, text: string): number {
+  const at = new Date().toISOString();
+  return Number(
+    db
+      .prepare(
+        `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, created_at, updated_at)
+         VALUES (?, ?, 'chat', NULL, ?, 'pending', ?, ?)`,
+      )
+      .run(room, agentId, text, at, at).lastInsertRowid,
+  );
+}
+
 const globalForService = globalThis as unknown as { __myhqChatServices?: Map<string, ChatService> };
 
 /**

@@ -15,6 +15,7 @@ import type { HqConfig } from "../src/server/config";
 import { getDbAt, type Db, type RunRow } from "../src/server/db";
 import type { Engine } from "../src/server/engine";
 import { eventStreamResponse } from "../src/server/event-stream";
+import { strings } from "../src/ui/strings";
 import { startRun as realStartRun, type StartRunRequest } from "../src/server/runner";
 import { startFakeTelegram } from "./fake-telegram";
 import { chatConfig, makeHome, waitForRun } from "./helpers";
@@ -368,17 +369,24 @@ test("with `to`, the text becomes the task of that agent and a run starts at onc
   const task = db.prepare("SELECT text, status FROM tasks WHERE run_id = ?").get(body.dispatch.run.id) as { text: string };
   assert.equal(task.text, "Prépare la réponse à la mairie");
 
-  // The agent is busy: same refusal as POST /api/runs, and nothing is recorded for it.
+  // The agent is busy: the text is not lost, it waits in the agent's mailbox as a request of the owner, and the reply says why.
   const busy = await post({ text: "Autre chose", to: { room: "demo", agent: "scout" } });
-  assert.equal(busy.status, 409);
-  assert.equal((await json(busy)).error.code, "AGENT_BUSY");
-  assert.equal(listChatHistory(db, 10).length, 2);
+  assert.equal(busy.status, 202);
+  const queued = await json(busy);
+  assert.equal(queued.dispatch.run, null);
+  assert.equal(queued.dispatch.queued.code, "AGENT_BUSY");
+  assert.equal(queued.reply, strings.chat.dispatchQueued("Scout", "AGENT_BUSY"));
+  const waiting = db.prepare("SELECT source, status, text, run_id FROM tasks WHERE id = ?").get(queued.dispatch.queued.taskId);
+  assert.deepEqual({ ...(waiting as object) }, { source: "chat", status: "pending", text: "Autre chose", run_id: null });
+  assert.equal(listChatHistory(db, 10).length, 4);
 
   release();
   await waitForRun(db, body.dispatch.run.id);
+  // The cap of one run a day holds the queued task back too: a later text waits the same way.
   const capped = await post({ text: "Encore", to: { room: "demo", agent: "scout" } });
-  assert.equal(capped.status, 429);
-  assert.equal((await json(capped)).error.code, "DAILY_CAP_REACHED");
+  assert.equal(capped.status, 202);
+  assert.equal((await json(capped)).dispatch.queued.code, "DAILY_CAP_REACHED");
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE source = 'chat' AND status = 'pending'").get() as { n: number }).n, 2);
 
   assert.equal((await post({ text: "x", to: { room: "demo", agent: "nobody" } })).status, 404);
   assert.equal((await post({ text: "x", to: { room: "nowhere", agent: "scout" } })).status, 404);

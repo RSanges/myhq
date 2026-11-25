@@ -490,3 +490,60 @@ test("reopen: refused when only updated_at changed, the status still done", () =
   assert.throws(() => reopenClosure(db, loadHome(config.home), closure), (error) => error instanceof HqError && error.code === "STATE_CHANGED");
   assert.equal(taskOf(db, blocked).status, "done");
 });
+
+// --- The hand-off on the desk and on Telegram ---------------------------------------------------
+
+const handOffItems = (db: Db) =>
+  db.prepare("SELECT room, agent_id, title, body, payload, status FROM approvals WHERE type = 'standard_handoff' ORDER BY id").all() as {
+    room: string;
+    agent_id: string;
+    title: string;
+    body: string;
+    payload: string;
+    status: string;
+  }[];
+
+test("a hand-off files one informational item, in the stuck agent's room, with the note, the agent's words and the link", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "The judge fails on the joint of the logo." });
+  hqBlockedNote(db, sup, { kind: "task", id: blocked, text: "Dis-lui s'il corrige le joint ou livre avec l'alerte.", handOff: true });
+  const [item, ...others] = handOffItems(db);
+  assert.equal(others.length, 0);
+  assert.equal(item!.room, "demo");
+  assert.equal(item!.agent_id, "scout");
+  assert.equal(item!.status, "unseen", "informational: the sweep sends it to Telegram, the desk lists it under « À regarder »");
+  assert.equal(item!.title, s.handOffItem.title("Scout"));
+  assert.match(item!.body, /\*\*Note de Vigie\*\* : Dis-lui s'il corrige le joint/);
+  assert.match(item!.body, /The judge fails on the joint of the logo\./);
+  assert.match(item!.body, new RegExp(`\\(/bureau/standard#blocked-task-${blocked}\\)`));
+  assert.deepEqual(JSON.parse(item!.payload), { target: { kind: "task", id: blocked }, tasks: [blocked] });
+
+  // Handed off already: a later hand-off adds its note, not a second item.
+  hqBlockedNote(db, sup, { kind: "task", id: blocked, text: "Toujours en attente de toi.", handOff: true });
+  assert.equal(handOffItems(db).length, 1);
+});
+
+test("acting on a handed-off entry from the Standard marks its item seen; a note without hand-off files nothing", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const quiet = addTask(db, "demo", "social", { status: "blocked", note: "Waiting." });
+  hqBlockedNote(db, sup, { kind: "task", id: quiet, text: "J'ai relancé Social.", handOff: false });
+  assert.equal(handOffItems(db).length, 0);
+
+  const blocked = addTask(db, "demo", "scout", { status: "blocked", note: "Which version?" });
+  hqBlockedNote(db, sup, { kind: "task", id: blocked, text: "Choisis la version.", handOff: true });
+  relaunchBlocked(config, db, { kind: "task", id: blocked }, { engine: engine(), send: async () => true }, "La longue.");
+  assert.equal(handOffItems(db)[0]!.status, "seen");
+});
+
+test("a reopening hands the entry to the owner without an item: the owner did it", () => {
+  const { config, db } = office();
+  const sup = ctxOf(config, db, "assistant", "watcher");
+  const done = addTask(db, "demo", "social", { status: "blocked", note: "Duplicate." });
+  hqBlockedClose(db, sup, { kind: "task", id: done, reason: REASON });
+  const closure = listClosures(db, loadHome(config.home))[0]!;
+  reopenClosure(db, loadHome(config.home), closure.id);
+  assert.equal(listBlocked(db, loadHome(config.home), config).find((entry) => entry.id === done)?.handedOff, true);
+  assert.equal(handOffItems(db).length, 0);
+});

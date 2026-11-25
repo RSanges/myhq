@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { STANDARD_ALIAS } from "../ui/standard-link";
 import { strings } from "../ui/strings";
 import { attachmentPath } from "./attachments";
-import { handedOff, listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
+import { HANDOFF_TYPE, handedOff, listBlocked, MYHQ_NOTE_AGENT, MYHQ_NOTE_ROOM, targetTasks, type BlockedEntry, type BlockedTarget } from "./blocked";
 import { liveConfig, type HqConfig } from "./config";
 import { now, type ApprovalRow, type Db, type RunRow } from "./db";
 import { HqError } from "./errors";
@@ -310,19 +311,86 @@ export function requestRelaunch(
     .immediate();
 }
 
-/** hq_blocked_note: a sentence for the owner on the tasks of an entry; `handOff` hands the entry to the owner. */
-export function noteBlocked(db: Db, by: SupervisorActor, target: BlockedTarget, text: string, handOff: boolean): { tasks: number[]; handedOff: boolean } {
+/**
+ * hq_blocked_note: a sentence for the owner on the tasks of an entry; `handOff` hands the entry to the owner.
+ * The first hand-off of an entry also files an informational item (`announce`, on by default): the owner is
+ * told on the desk (« À regarder ») and on Telegram, not only by the lamp of the Standard. Off for a hand-off
+ * the owner caused (a reopening), which they already know about.
+ */
+export function noteBlocked(
+  db: Db,
+  by: SupervisorActor,
+  target: BlockedTarget,
+  text: string,
+  handOff: boolean,
+  announce = true,
+): { tasks: number[]; handedOff: boolean } {
   return db
     .transaction(() => {
       const found = targetTasks(db, target);
+      const already = handedOff(db, found.ids);
       const insert = db.prepare(
         "INSERT INTO blocked_notes (task_id, room, agent_id, run_id, text, handed_off, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       const at = now();
       for (const id of found.ids) insert.run(id, by.room, by.agentId, by.runId, text, handOff ? 1 : 0, at);
+      if (handOff && announce && !already) announceHandOff(db, by, target, found, text, at);
       return { tasks: found.ids, handedOff: handOff };
     })
     .immediate();
+}
+
+/** The anchor of an entry on the page of the Standard (`blockedItem` in desk.ts): a pending task is listed as `pending`. */
+function entryAnchor(db: Db, target: BlockedTarget): string {
+  if (target.kind === "run") return `blocked-run-${target.id}`;
+  const task = db.prepare("SELECT status FROM tasks WHERE id = ?").get(target.id) as { status: string } | undefined;
+  return `blocked-${task?.status === "pending" ? "pending" : "task"}-${target.id}`;
+}
+
+/**
+ * The informational item of a hand-off (`standard_handoff`): in the room and the name of the agent stuck, so
+ * that it takes the room's colour, with the note, the agent's own words and a link to the Standard, where
+ * « Répondre » acts on it. It is born `unseen`, like a type of `notifyTypes`: the sweep of the notifications
+ * sends it to Telegram (at the end of the run that handed it, or the next sweep), and acting on the entry
+ * from the Standard marks it seen (`seeHandOffItems`).
+ */
+function announceHandOff(
+  db: Db,
+  by: SupervisorActor,
+  target: BlockedTarget,
+  found: { room: string; agentId: string; ids: number[] },
+  text: string,
+  at: string,
+): void {
+  const s = strings.deskModules.standard.handOffItem;
+  const nameOf = (room: string, id: string) =>
+    (db.prepare("SELECT name FROM agents WHERE room = ? AND id = ?").get(room, id) as { name: string } | undefined)?.name ?? id;
+  const byName = by.room === MYHQ_NOTE_ROOM && by.agentId === MYHQ_NOTE_AGENT ? "MyHQ" : nameOf(by.room, by.agentId);
+  const agentName = nameOf(found.room, found.agentId);
+  const words =
+    target.kind === "run"
+      ? (db.prepare("SELECT summary FROM runs WHERE id = ?").get(target.id) as { summary: string | null } | undefined)?.summary
+      : (db.prepare("SELECT note FROM tasks WHERE id = ?").get(target.id) as { note: string | null } | undefined)?.note;
+  const body = [
+    s.note(byName, text),
+    ...(words?.trim() ? ["", s.words(agentName, target.kind === "run" ? null : target.id), "", words.trim()] : []),
+    "",
+    s.link(`/bureau/${STANDARD_ALIAS}#${entryAnchor(db, target)}`),
+  ].join("\n");
+  db.prepare(
+    `INSERT INTO approvals (room, agent_id, run_id, type, title, body, payload, status, seen_by_agent_at, created_at, subject_id)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, 'unseen', ?, ?, ?)`,
+  ).run(
+    found.room,
+    found.agentId,
+    HANDOFF_TYPE,
+    s.title(agentName),
+    body,
+    JSON.stringify({ target, tasks: found.ids }),
+    at,
+    at,
+    relaunchSubject(db, found.ids),
+  );
 }
 
 /** One entry in a wake-up task: what hq_relaunch and hq_blocked_note take, who, since when, why, and the text. */

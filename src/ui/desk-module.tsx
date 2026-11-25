@@ -11,6 +11,7 @@ import { formatClock } from "./format";
 import { PostitsView } from "./postits-view";
 import { coreSources, isWatchTray, matchesTypes, selectAgents, selectHistory, selectPending, selectUnseen, watchTypes } from "./model";
 import { RECEPTION_ROOM } from "./reception";
+import { STANDARD_ALIAS } from "./standard-link";
 import type { Approval, DeskObject } from "./schemas";
 import { strings } from "./strings";
 import { SiteNav } from "./site-nav";
@@ -55,7 +56,12 @@ export function DeskModulePage({ id }: { id: string }) {
   const wide = useMediaQuery("(min-width: 40rem)");
   const { model } = hq;
   const agents = useMemo(() => selectAgents(model), [model]);
-  const object = desk?.objects.find((each) => each.id === id) ?? null;
+  const object =
+    desk?.objects.find((each) => each.id === id) ??
+    (id === STANDARD_ALIAS ? desk?.objects.find((each) => coreSources(each).includes("blocked")) : undefined) ??
+    null;
+  // The object's own id: `/bureau/standard` marks the Standard seen, not an id the desk does not know.
+  const objectId = object?.id ?? id;
 
   useEffect(() => {
     if (object) document.title = t.pageTitle(object.label, object.count);
@@ -64,7 +70,7 @@ export function DeskModulePage({ id }: { id: string }) {
   // Seen once per opening: what the unread sources (summaries, chat) counted until now is read.
   useEffect(() => {
     let closed = false;
-    markDeskSeen(id)
+    markDeskSeen(objectId)
       .then(() => {
         if (!closed) reload();
       })
@@ -72,7 +78,7 @@ export function DeskModulePage({ id }: { id: string }) {
     return () => {
       closed = true;
     };
-  }, [id, reload]);
+  }, [objectId, reload]);
 
   if (object?.object === "phone" && coreSources(object).includes("chat")) {
     return (

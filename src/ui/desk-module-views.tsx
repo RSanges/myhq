@@ -9,7 +9,7 @@ import { RECEPTION_ROOM } from "./reception";
 import { chipStyle } from "./room-color";
 import type { DeskItem, DeskObject } from "./schemas";
 import { strings } from "./strings";
-import { Badge, buttonClass, ErrorNote } from "./ui";
+import { Badge, buttonClass, ErrorNote, fieldClass } from "./ui";
 
 // The interfaces of the desk objects whose data comes from GET /api/desk
 // rather than from the state of the desk: the newspaper, the calendar, the
@@ -278,6 +278,9 @@ const STATE_TONE: Record<BlockedRef["state"], "danger" | "warn"> = {
 
 type Outcome = { tone: "ok" | "warn"; text: string };
 
+/** The longest answer on the Standard, as the server takes it (`ANSWER_MAX`, blocked.ts). */
+const ANSWER_MAX = 5_000;
+
 /** What an action said, in French: the run started, or why the agent could not be woken. */
 function relaunchOutcome(result: Awaited<ReturnType<typeof relaunchBlocked>>): Outcome {
   if (result.run) return { tone: "ok", text: t.standard.relaunched(result.run.id) };
@@ -287,19 +290,24 @@ function relaunchOutcome(result: Awaited<ReturnType<typeof relaunchBlocked>>): O
 
 function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: BlockedRef; onDone: (outcome: Outcome) => void }) {
   const [confirm, setConfirm] = useState<"relaunch" | "close" | null>(null);
+  const [answering, setAnswering] = useState(false);
+  const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tint = chipStyle(item.color);
   const run = refData.entry === "run";
   const target: BlockedTarget = { kind: run ? "run" : "task", id: refData.id };
   const room = refData.room === RECEPTION_ROOM ? strings.room.reception.name : refData.room;
-  const act = async (action: "relaunch" | "close") => {
+  const act = async (action: "relaunch" | "close" | "answer") => {
     setBusy(true);
     setError(null);
     try {
-      if (action === "relaunch") {
-        const said = relaunchOutcome(await relaunchBlocked(target));
-        onDone({ ...said, text: t.standard.outcome(item.title, said.text) });
+      if (action === "relaunch" || action === "answer") {
+        const words = action === "answer" ? answer.trim() : undefined;
+        const said = relaunchOutcome(await relaunchBlocked(target, words));
+        onDone({ ...said, text: t.standard.outcome(item.title, words ? t.standard.answered(said.text) : said.text) });
+        setAnswering(false);
+        setAnswer("");
       } else {
         await closeBlocked(target);
         onDone({ tone: "ok", text: t.standard.outcome(item.title, t.standard.closed) });
@@ -349,6 +357,16 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
           {refData.note.text}
         </p>
       )}
+      {refData.detail && (
+        <details className="rounded-md bg-soft">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+            {t.standard.detail}
+          </summary>
+          <div className="px-3 pb-3 text-sm">
+            <Markdown source={refData.detail} />
+          </div>
+        </details>
+      )}
       {item.body && (
         <details className="rounded-md bg-soft">
           <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
@@ -360,7 +378,36 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
           </div>
         </details>
       )}
-      {confirm ? (
+      {answering ? (
+        <form
+          className="space-y-2 rounded-md border border-line p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (answer.trim()) void act("answer");
+          }}
+        >
+          <label className="block space-y-1.5">
+            <span className="text-sm">{t.standard.answerLabel(item.title)}</span>
+            <textarea
+              className={`${fieldClass} min-h-24`}
+              value={answer}
+              maxLength={ANSWER_MAX}
+              placeholder={t.standard.answerPlaceholder}
+              autoFocus
+              onChange={(event) => setAnswer(event.target.value)}
+            />
+          </label>
+          <p className="text-xs text-muted">{t.standard.answerHint}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" className={buttonClass("primary")} disabled={busy || !answer.trim()}>
+              {busy ? t.standard.sending : t.standard.sendAnswer}
+            </button>
+            <button type="button" className={buttonClass()} disabled={busy} onClick={() => setAnswering(false)}>
+              {t.standard.confirm.cancel}
+            </button>
+          </div>
+        </form>
+      ) : confirm ? (
         <div className="space-y-2 rounded-md border border-line p-3">
           <p className="text-sm">{question}</p>
           <div className="flex flex-wrap gap-2">
@@ -379,7 +426,10 @@ function StandardEntry({ item, refData, onDone }: { item: DeskItem; refData: Blo
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={buttonClass("primary")} onClick={() => setConfirm("relaunch")}>
+          <button type="button" className={buttonClass("primary")} onClick={() => setAnswering(true)}>
+            {t.standard.answer}
+          </button>
+          <button type="button" className={buttonClass()} onClick={() => setConfirm("relaunch")}>
             {t.standard.relaunch}
           </button>
           <button type="button" className={buttonClass()} onClick={() => setConfirm("close")}>

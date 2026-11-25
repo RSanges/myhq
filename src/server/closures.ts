@@ -199,7 +199,8 @@ export function reopenClosure(db: Db, home: Home, id: number): { closure: number
       const restore = db.prepare("UPDATE tasks SET status = ?, note = ?, run_id = ?, updated_at = ? WHERE id = ?");
       for (const task of before) restore.run(task.status, task.note, task.run_id, task.updated_at, task.id);
       const text = strings.deskModules.standard.reopenedNote(nameOf(home, row.by_room, row.by_agent), row.reason);
-      for (const task of before) noteBlocked(db, myhqActor(), { kind: "task", id: task.id }, text, true);
+      // The owner reopened it: no item to tell them.
+      for (const task of before) noteBlocked(db, myhqActor(), { kind: "task", id: task.id }, text, true, false);
       db.prepare("UPDATE supervisor_closes SET reopened_at = ? WHERE id = ?").run(now(), row.id);
       return { closure: row.id, tasks: before.map((task) => task.id) };
     })

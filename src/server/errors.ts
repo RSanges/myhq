@@ -14,9 +14,23 @@ export class HqError extends Error {
 
 export type ApiErrorBody = { error: { code: string; message: string } };
 
+/**
+ * Whether a value is an HqError. Not only `instanceof`: Next.js builds the
+ * instrumentation hook (the Telegram bridge) and each route apart, so a
+ * service kept on `globalThis` by one of them (the chat service, for example)
+ * throws the HqError class of its own copy of this module, which a route's
+ * `instanceof` does not recognize. Its name, code and status say what it is.
+ */
+export function isHqError(error: unknown): error is HqError {
+  if (error instanceof HqError) return true;
+  if (!(error instanceof Error) || error.name !== "HqError") return false;
+  const { code, status } = error as Partial<HqError>;
+  return typeof code === "string" && typeof status === "number";
+}
+
 /** Maps any thrown value to the API error response. */
 export function errorResponse(error: unknown): Response {
-  if (error instanceof HqError) {
+  if (isHqError(error)) {
     return Response.json({ error: { code: error.code, message: error.message } } satisfies ApiErrorBody, {
       status: error.status,
     });
