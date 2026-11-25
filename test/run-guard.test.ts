@@ -96,6 +96,11 @@ test("every claude process waits for its MCP servers before the first turn", () 
   assert.ok(Number(CLAUDE_ENV.MCP_CONNECT_TIMEOUT_MS) >= 30_000);
 });
 
+test("no claude process can leave a command running in the background past its turn", () => {
+  assert.equal(CLAUDE_ENV.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+  assert.ok(Number(CLAUDE_ENV.BASH_MAX_TIMEOUT_MS) >= 30 * 60_000);
+});
+
 test("a run whose MCP server is pending at its start is stopped, delivers nothing, and is retried once", async () => {
   const config = makeHome();
   const db = getDbAt(config.dbPath);
