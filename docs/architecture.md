@@ -55,7 +55,12 @@ the start. MCP startup is made blocking (`MCP_CONNECTION_NONBLOCKING=0`,
 `MCP_CONNECT_TIMEOUT_MS=60000`): by default CLI 2.1.183 connects the servers
 in the background and sends the first request at once, so a server slower to
 start than the CLI is still `pending` and the agent works without its tools
-(it then writes tool calls as text and invents a result). The runner checks
+(it then writes tool calls as text and invents a result). Background tasks
+are off (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the process ends with the
+turn, so the notice that a `run_in_background` command has finished never
+comes back, and an agent that ended its turn "waiting" for a build was never
+woken again. A long command runs in the foreground instead, up to one hour
+(`BASH_MAX_TIMEOUT_MS=3600000`, 10 minutes by default). The runner checks
 the start event too: when a server listed there is not `connected`, the run
 is stopped at once, before its first event is read, and fails with the end
 reason `mcp_not_connected`; it is started again once, a few seconds later,
@@ -3926,8 +3931,9 @@ tile shows the piece the agent works on, large.
   ends. The tile therefore also reads the run's journal (the `events` table):
   the tool in progress (the latest call with no result yet, named in words:
   « Commande : lance les tests », « Lit bilan.json ») and since when; the
-  latest command the CLI moved to the background (it caps a command in the
-  foreground at 10 minutes), with the end of its output, read from the
+  latest command the CLI moved to the background (none since background
+  tasks are off, see "A run", but a run journal from before still shows
+  one), with the end of its output, read from the
   `.output` file the CLI names (only under the system's temporary folder);
   and how long the journal has not moved. Past 5 minutes without any event
   the block turns amber, past 15 red: a long command, or a run that is

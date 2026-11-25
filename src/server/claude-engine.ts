@@ -198,11 +198,21 @@ export function builtInTools(allowedTools: string[]): string[] {
  * without its tools. The wait is bounded by MCP_CONNECT_TIMEOUT_MS (5 s by
  * default), raised to 60 s: a server can take 15 to 25 s to answer `initialize` on a
  * loaded machine, and the one still pending after it is caught by the runner.
+ *
+ * Background tasks are off: under `claude -p` the process ends with the turn,
+ * so the notice that a command started with `run_in_background` has finished
+ * never comes back. An agent that launched a long build that way and ended its
+ * turn "waiting" for it was never woken again (CAO, run #914, 2026-11-25). A
+ * long command therefore runs in the foreground, and BASH_MAX_TIMEOUT_MS
+ * raises the cap of one Bash call from 10 minutes to one hour so that a build
+ * or a slicer pass can finish inside it.
  */
 export const CLAUDE_ENV = {
   ENABLE_TOOL_SEARCH: "false",
   MCP_CONNECTION_NONBLOCKING: "0",
   MCP_CONNECT_TIMEOUT_MS: "60000",
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+  BASH_MAX_TIMEOUT_MS: "3600000",
 } as const;
 
 /** Environment additions of one run: its prompt cache duration when the agent sets one (`cacheTtl`). */
