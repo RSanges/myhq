@@ -54,7 +54,7 @@ import { dayKey } from "./time";
 import { ensureWorktree, worktreeBranch } from "./worktree";
 import { benchOf, closeArchivedBenches, openBench, type Bench } from "./benches";
 import { agentReadGuard } from "./read-guard";
-import { installWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
+import { installWriteGuard, needsWriteGuard, writeGuardConfig, writeGuardEnv, writeGuardScript } from "./write-guard";
 
 /** Why a run was started, stored on the run: lowercase letters and underscores, 40 at most. */
 export const reasonSchema = z.string().regex(/^[a-z_]{1,40}$/, "lowercase letters and underscores, 40 at most");
@@ -1335,9 +1335,14 @@ async function execute(p: ExecuteParams): Promise<void> {
         allowedTools: agent.allowedTools,
         disallowedTools: agent.disallowedTools,
         notebooks: notebook ? [notebook.dir] : [],
+        fileWriteTools: agent.fileWriteTools,
       });
-      if (guard.allow.length > 0 || guard.notebooks !== undefined) {
-        installWriteGuard(workDir, { script: writeGuardScript(config.repoRoot), ignoreInGit: agent.worktree !== null });
+      if (needsWriteGuard(guard)) {
+        installWriteGuard(workDir, {
+          script: writeGuardScript(config.repoRoot),
+          ignoreInGit: agent.worktree !== null,
+          fileTools: Object.keys(guard.fileTools ?? {}),
+        });
       }
       const addDirs = notebook ? notebook.addDirs : agent.addDirs;
       // The home's private folders stay closed but for the notebook and the addDirs (read-guard.ts): nothing without privateDirs.

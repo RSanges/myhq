@@ -432,7 +432,12 @@ export function questionNotebook(p: { config: HqConfig; agent: Agent; workDir: s
   addDirs: string[];
   env: Record<string, string>;
 } {
-  installWriteGuard(p.workDir, { script: writeGuardScript(p.config.repoRoot), ignoreInGit: p.agent.worktree !== null });
+  // The hook's matcher keeps the agent's file writing tools: a run of it may share this folder and its settings file.
+  installWriteGuard(p.workDir, {
+    script: writeGuardScript(p.config.repoRoot),
+    ignoreInGit: p.agent.worktree !== null,
+    fileTools: Object.keys(p.agent.fileWriteTools ?? {}),
+  });
   const guard = writeGuardConfig({ workDir: p.workDir, allowedTools: [], notebooks: [p.notebook] });
   return { addDirs: [...new Set([...p.agent.addDirs, p.notebook])], env: writeGuardEnv(guard) };
 }

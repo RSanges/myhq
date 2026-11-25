@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { mcpBundleDir } from "../mcp/bundle";
 import { HqError } from "./errors";
+import { FILE_TOOL_NAME } from "./write-guard-lib.mjs";
 
 /**
  * The write guard of agent runs and chat turns.
@@ -19,6 +20,12 @@ import { HqError } from "./errors";
  * leaves the write roots of the run, given to it in MYHQ_WRITE_GUARD. An
  * agent whose rules allow no write gets no hook (the CLI refuses its writes);
  * a chat turn always gets one.
+ *
+ * An MCP tool that writes a file itself (a render saved to a path, an export)
+ * escapes those rules: its server writes, not the CLI. An agent declares such
+ * tools in `fileWriteTools` (room.json), with the input fields that name the
+ * file; the hook then matches them too and holds each path to the agent's
+ * write rules, as for a Write. A field left out or empty passes (no file).
  */
 
 /** Environment variable of the run holding the guard's configuration (read by the hook). */
@@ -51,6 +58,8 @@ export type WriteGuardConfig = {
   writeDirs: string[];
   /** Absolute notebooks (notebook.ts): writable with Write and Edit only, Markdown notes only (write-guard-lib.mjs). Absent: none. */
   notebooks?: string[];
+  /** MCP tools that write a file themselves, with the input fields naming it (room.json `fileWriteTools`). Absent: none. */
+  fileTools?: Record<string, string[]>;
 };
 
 function splitRule(rule: string): { name: string; pattern: string | null } {
@@ -74,6 +83,7 @@ export function writeGuardConfig(params: {
   disallowedTools?: readonly string[];
   writeDirs?: readonly string[];
   notebooks?: readonly string[];
+  fileWriteTools?: Readonly<Record<string, readonly string[]>>;
 }): WriteGuardConfig {
   const patterns = (rules: readonly string[], bare: string | null) => {
     const out: string[] = [];
@@ -92,7 +102,18 @@ export function writeGuardConfig(params: {
     deny: patterns(params.disallowedTools ?? [], null),
     writeDirs: (params.writeDirs ?? []).map((dir) => path.resolve(dir)),
     ...(params.notebooks && params.notebooks.length > 0 ? { notebooks: params.notebooks.map((dir) => path.resolve(dir)) } : {}),
+    ...fileToolsOf(params.fileWriteTools),
   };
+}
+
+function fileToolsOf(tools: Readonly<Record<string, readonly string[]>> | undefined): { fileTools?: Record<string, string[]> } {
+  const entries = Object.entries(tools ?? {}).filter(([, fields]) => fields.length > 0);
+  return entries.length > 0 ? { fileTools: Object.fromEntries(entries.map(([name, fields]) => [name, [...new Set(fields)]])) } : {};
+}
+
+/** Whether a run needs the write guard's hook: it may write somewhere, or it has a tool that writes files. */
+export function needsWriteGuard(config: WriteGuardConfig): boolean {
+  return config.allow.length > 0 || config.notebooks !== undefined || config.fileTools !== undefined;
 }
 
 /**
@@ -201,9 +222,14 @@ function keepOutOfGit(workDir: string): void {
  */
 export function installWriteGuard(
   workDir: string,
-  opts: { script: string; node?: string; ignoreInGit?: boolean },
+  opts: { script: string; node?: string; ignoreInGit?: boolean; fileTools?: readonly string[] },
 ): void {
-  installGuardHook(workDir, { ...opts, guard: "write", hookFile: WRITE_GUARD_HOOK, matcher: WRITE_TOOL_NAMES.join("|") });
+  const { fileTools, ...rest } = opts;
+  const extra = [...new Set(fileTools ?? [])];
+  for (const name of extra) {
+    if (!FILE_TOOL_NAME.test(name)) throw new HqError("WRITE_GUARD_TOOL", 400, `Cannot guard ${name}: only an MCP tool name (mcp__server__tool) can be a file writing tool.`);
+  }
+  installGuardHook(workDir, { ...rest, guard: "write", hookFile: WRITE_GUARD_HOOK, matcher: [...WRITE_TOOL_NAMES, ...extra].join("|") });
 }
 
 /** The read guard's tools, the matcher of its hook (read-guard-lib.mjs). */
