@@ -20,7 +20,8 @@ import {
 import { DOOR_DAY_MAX, DOOR_QUESTION_MAX, DOOR_RUN_MAX, DOOR_TYPE, DOOR_WAIT_MS, type DoorRow } from "../server/door";
 import { pieceKind } from "../server/live-room";
 import { APPROVAL_STATUSES, liveItem, now, type ApprovalRow, type Db } from "../server/db";
-import { readNotifyTypes } from "../server/home-settings";
+import { DEFAULT_MACHINE, readMachineSetting, readNotifyTypes } from "../server/home-settings";
+import { HOLD_DEFAULT_MINUTES, HOLD_MAX_MINUTES, queryNvidiaSmi, releaseHolds, takeHold, takeReading, type HoldOutcome } from "../server/machine";
 import { EXTEND_MAX_MINUTES, EXTEND_MIN_MINUTES, extendRun, requestStop, runStatus } from "../server/long-runs";
 import { AGENT_PROPOSAL, NEED_SOURCE, needSchema, normalizeAgentProposal, queueAgentNeed, sameNeed } from "../server/agent-proposal";
 import { MESSAGE_EXPECTS } from "../server/portier";
@@ -139,6 +140,10 @@ export const SHOW_CAPTION_MAX = 200;
 export const PINS_MAX = 50;
 
 /** Input shapes of the twenty-two tools (zod raw shapes, as the MCP SDK expects). */
+/** hq_machine_hold: how long it waits for the memory by default, and at most. */
+export const HOLD_WAIT_DEFAULT_SECONDS = 120;
+export const HOLD_WAIT_MAX_SECONDS = 600;
+
 export const inputs = {
   hq_message: {
     to: z.string().min(1).describe("Id of the agent to write to."),
@@ -388,6 +393,25 @@ export const inputs = {
       .max(500)
       .describe("For the owner, in one sentence of the home's language: why the run is stuck (the facts of hq_run_status). Shown on the Standard."),
   },
+  hq_machine_hold: {
+    ramGb: z.number().positive().max(1024).optional().describe("The RAM the step takes, in GB, beyond what you already use (a render, a build, a model loaded)."),
+    vramGb: z.number().positive().max(256).optional().describe("The GPU memory the step takes, in GB."),
+    minutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(HOLD_MAX_MINUTES)
+      .optional()
+      .describe(`How long the step may take at most (${HOLD_DEFAULT_MINUTES} by default, ${HOLD_MAX_MINUTES} at most): past it the hold expires.`),
+    waitSeconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(HOLD_WAIT_MAX_SECONDS)
+      .optional()
+      .describe(`How long to wait for the memory when the machine is busy (${HOLD_WAIT_DEFAULT_SECONDS} s by default, 0: answer at once).`),
+  },
+  hq_machine_release: {},
 } as const;
 
 type Args<K extends keyof typeof inputs> = z.infer<z.ZodObject<(typeof inputs)[K]>>;
@@ -1407,4 +1431,76 @@ export async function hqAskAssistant(
     }
     await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? ASK_ASSISTANT_POLL_MS));
   }
+}
+
+// --- hq_machine_hold, hq_machine_release ---------------------------------------------------------
+
+/** How often a hold that waits asks the machine again. */
+export const HOLD_POLL_MS = 5_000;
+
+/** How the hold tools read the machine: RAM from node:os, the GPU from nvidia-smi, waited for (an MCP call may wait). */
+export type HoldRead = (gpu: boolean) => Promise<import("../server/machine").MachineReading>;
+
+const realHoldRead: HoldRead = async (gpu) => {
+  const stdout = gpu ? await queryNvidiaSmi() : null;
+  const os = await import("node:os");
+  return takeReading({ memory: () => ({ freeBytes: os.freemem(), totalBytes: os.totalmem() }), gpu: () => stdout });
+};
+
+/**
+ * hq_machine_hold: memory for one heavy step of the run, granted when the
+ * machine has it (what is free, minus what the other runs and holds still have
+ * to take, covers the need plus the home's margin), waited for otherwise. The
+ * hold lasts until hq_machine_release, its minutes, or the end of the run.
+ */
+export async function hqMachineHold(
+  db: Db,
+  ctx: HqContext,
+  args: Args<"hq_machine_hold">,
+  deps: { read?: HoldRead; sleep?: (ms: number) => Promise<void>; pollMs?: number } = {},
+) {
+  const parsed = z.object(inputs.hq_machine_hold).parse(args);
+  const need = { ramGb: parsed.ramGb ?? null, vramGb: parsed.vramGb ?? null };
+  if (need.ramGb === null && need.vramGb === null) throw new ToolError("Give ramGb, vramGb or both: the memory the step takes.");
+  const read = deps.read ?? realHoldRead;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const pollMs = deps.pollMs ?? HOLD_POLL_MS;
+  const deadline = Date.now() + (parsed.waitSeconds ?? HOLD_WAIT_DEFAULT_SECONDS) * 1000;
+  const setting = ctx.home ? readMachineSetting(ctx.home).setting : DEFAULT_MACHINE;
+  let outcome: HoldOutcome;
+  for (;;) {
+    const reading = await read(need.vramGb !== null);
+    outcome = takeHold(db, {
+      runId: ctx.runId,
+      room: ctx.room,
+      agentId: ctx.agentId,
+      need,
+      minutes: parsed.minutes ?? HOLD_DEFAULT_MINUTES,
+      reading,
+      setting,
+    });
+    if (outcome.kind !== "busy" || Date.now() + pollMs > deadline) break;
+    await sleep(pollMs);
+  }
+  if (outcome.kind === "held") {
+    return {
+      held: true,
+      holdId: outcome.holdId,
+      expiresAt: outcome.expiresAt,
+      note: "Run the heavy step now, then call hq_machine_release. The hold ends with your run anyway.",
+    };
+  }
+  return {
+    held: false,
+    reason: outcome.text,
+    note:
+      outcome.kind === "neverFits"
+        ? "This machine can never give that much: lower the step (resolution, batch, model) or tell the owner."
+        : "The machine is busy: do something light meanwhile and ask again, or say you wait with hq_status and ask again in a few minutes. Do not start the step without its hold.",
+  };
+}
+
+/** hq_machine_release: the heavy step is over, its memory goes back to the other runs. */
+export function hqMachineRelease(db: Db, ctx: HqContext) {
+  return { released: releaseHolds(db, ctx.runId) };
 }

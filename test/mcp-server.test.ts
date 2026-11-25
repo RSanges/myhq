@@ -66,7 +66,7 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return content.map((part) => part.text).join("");
 }
 
-test("lists the twenty-three hq tools", async () => {
+test("lists the twenty-five hq tools", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "hq_ask",
@@ -75,6 +75,8 @@ test("lists the twenty-three hq tools", async () => {
     "hq_blocked_close",
     "hq_blocked_note",
     "hq_items",
+    "hq_machine_hold",
+    "hq_machine_release",
     "hq_memory_read",
     "hq_memory_write",
     "hq_message",

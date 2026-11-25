@@ -28,6 +28,7 @@ import {
 import {
   closeRunMachine,
   closeStaleRunMachines,
+  releaseHolds,
   machineCheck,
   machineLooked,
   readMachine,
@@ -1529,6 +1530,7 @@ async function execute(p: ExecuteParams): Promise<void> {
   closeArchivedBenches(db, { of: { room: room.name, agentId: agent.id }, force: true });
   // What the machine gave it, stored with whether it ran alone (machine.ts); nothing for an agent without needs.
   closeRunMachine(db, run.id, p.deps.machine);
+  releaseHolds(db, run.id);
   wake(p);
   await notifyPendingApprovals(db, p.send, p.deps.env);
   // What the bot sends on its own goes into the conversation MyHQ keeps, so
