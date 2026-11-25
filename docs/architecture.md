@@ -1212,9 +1212,11 @@ tasks (`launchRun`'s `claimIds`), the subject of a relaunch
 
 **No overtaking.** When a resource or the machine frees, the first task in the
 order that can use it gets it. The rule, in `wakeAgents` and in the queue's
-reasons alike: a task whose start is refused for a shared resource or for the
-veto command (`RESOURCE_BUSY`, `MACHINE_BUSY` of the veto) keeps, for the rest
-of the pass, everything scarce its agent declares: each of its `resources`,
+reasons alike: a task whose start is refused for a shared resource or while the
+veto command is asked (`RESOURCE_BUSY`, `MACHINE_BUSY` of the veto) keeps, for the rest
+of the pass, everything scarce its agent declares (once the veto command says to
+wait for that agent, an agent the owner paused, it keeps nothing: it would
+otherwise hold the others back for as long as the pause lasts): each of its `resources`,
 `ram` when it declares `needs.ramGb`, `vram` when it declares `needs.vramGb`.
 A task refused for memory (`MACHINE_BUSY` of the gate, `MachineBusy.holds`)
 keeps only the kinds that fell short: `ram` for a RAM shortfall, `vram` for a

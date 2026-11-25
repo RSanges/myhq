@@ -1046,7 +1046,8 @@ export function launchRun(params: {
           machine.reason === null
             ? `The home's veto command is asked before the run of "${agent.id}": it starts once it answers.`
             : `The home's veto command says to wait before the run of "${agent.id}": ${machine.reason}`,
-          scarceOf(agent),
+          // Asked, it keeps its place; held back by the veto (an agent paused by the owner), it keeps nothing from the others.
+          machine.reason === null ? scarceOf(agent) : [],
           machine.deferred,
         );
       }
