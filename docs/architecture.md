@@ -141,6 +141,13 @@ not on intuition: every run records its tokens and estimated cost (the
 stream-json output provides them), and the app shows the share of the plan
 consumed by runs over the week.
 
+The CLI's result line is its last word: `ClaudeEngine` stops reading there and
+gives the process 30 seconds to exit (`RESULT_EXIT_GRACE_MS`), then stops it.
+A process the agent left behind (a test suite sent to the background, a
+server) can keep the CLI's stdout open, and without this the run would stay
+"running" with its work done, holding its agent's lock and its share of the
+machine until the supervisor stopped it.
+
 ### The HQ MCP server
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
@@ -1276,8 +1283,9 @@ declares, a run starts only if
 
     free now - reserved >= need + margin
 
-where `reserved` is, over the runs in progress that have a need of that kind,
-the sum of their needs minus what the machine gave up since the earliest of
+where `reserved` is, over the runs in progress that have a need of that kind
+and started less than 10 minutes ago (`RESERVATION_WINDOW_MS`), the sum of
+their needs minus what the machine gave up since the earliest of
 them started, never negative: the RAM given up being `free at that start -
 free now`, the GPU memory `used now - used at that start`. The memory given up
 is credited once to all of them, since with several runs going one run's
@@ -1287,7 +1295,13 @@ tasks released in the same pass never count the same free memory (the second
 sees the first's whole need reserved), and two runs of one parallel agent
 reserve twice. For example, A and B need 8 GB each and start with 20 GB free;
 A took 2 (18 free): 16 - 2 = 14 GB are still reserved, 4 are left, and C (4 GB,
-margin 2) waits. The need is the effective one (below), the margin
+margin 2) waits. Past its first 10 minutes a run reserves nothing more: it
+has loaded what it loads at its start, what it takes shows in what is free,
+and its agent's reasoning between two heavy steps takes little. Holding the
+whole need for the whole run (an hour or more for some agents) kept the heavy
+agents from ever running side by side. A heavy step that comes later is
+guarded by the margin and by the home's veto command (below), which can judge
+what MyHQ does not measure, such as the virtual memory. The need is the effective one (below), the margin
 `machine.keepFreeRamGb` or `keepFreeVramGb` of `myhq.json` (2 GB and 1 GB by
 default). Otherwise the start throws `MACHINE_BUSY` (409, with the figures):
 it is one more of the waits (`WAITS`), so the task stays pending, shows in the

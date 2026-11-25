@@ -10,6 +10,7 @@ import type { Engine, RunEvent, RunInput } from "../src/server/engine";
 import {
   closeRunMachine,
   effectiveNeeds,
+  RESERVATION_WINDOW_MS,
   reservations,
   sampleMachine,
   vetoesIdle,
@@ -386,6 +387,19 @@ test("the reservations credit the memory given up once: A and B need 8 GB from 2
     () => startRun({ room: "demo", agent: "c" }, { config, engine: holdingEngine().engine, send: async () => true, machine: () => now }),
     (error: unknown) => error instanceof MachineBusy && /4 GB are left/.test(error.message) && error.holds.join() === "ram",
   );
+});
+
+test("a run older than the reservation window reserves nothing: what it took shows in what is free, and C starts beside it", () => {
+  const { config, db } = home([agent("a", { needs: { ramGb: 8 } }), agent("c", { needs: { ramGb: 4 } })]);
+  const old = new Date(Date.now() - RESERVATION_WINDOW_MS - 60_000).toISOString();
+  const run = Number(db.prepare("INSERT INTO runs (room, agent_id, engine, task, status, started_at) VALUES ('demo', 'a', 'claude', 't', 'running', ?)").run(old).lastInsertRowid);
+  db.prepare("INSERT INTO run_machine (run_id, room, agent_id, ram_need_gb, ram_declared_gb, ram_free_start_gb, started_at) VALUES (?, 'demo', 'a', 8, 8, 12, ?)").run(run, old);
+  const now = reading({ ramFreeGb: 11 });
+  // Within the window, A would still reserve 8 - 1 = 7 GB and leave 4, under C's 4 + 2.
+  assert.deepEqual(reservations(db, now, new Date(Date.parse(old) + 60_000)), { ramGb: 7, vramGb: 0 });
+  assert.deepEqual(reservations(db, now), { ramGb: 0, vramGb: 0 });
+  const started = startRun({ room: "demo", agent: "c" }, { config, engine: holdingEngine().engine, send: async () => true, machine: () => now });
+  assert.equal(started.agent_id, "c");
 });
 
 test("a parallel agent: two subjects' runs reserve twice, a third waits for RAM and holds only RAM, a start deferred by the veto starts once per subject", async () => {
