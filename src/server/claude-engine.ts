@@ -398,11 +398,23 @@ export function parseStreamLine(line: string): RunEvent[] {
   return [];
 }
 
+/**
+ * How long the CLI may stay alive after its result line. A process it left
+ * behind (a test suite sent to the background, a server) can keep its stdout
+ * open, and the run would stay "running" with nothing left to do, holding its
+ * agent's lock and its share of the machine: past this, the CLI is stopped and
+ * the run ends on the result it gave.
+ */
+export const RESULT_EXIT_GRACE_MS = 30_000;
+
 /** Runs an agent with the official Claude Code binary in print mode. */
 export class ClaudeEngine implements Engine {
   readonly name = "claude" as const;
 
-  constructor(private readonly bin: string) {}
+  constructor(
+    private readonly bin: string,
+    private readonly resultExitGraceMs: number = RESULT_EXIT_GRACE_MS,
+  ) {}
 
   async *run(input: RunInput): AsyncIterable<RunEvent> {
     const child = spawn(this.bin, buildClaudeArgs(input), {
@@ -435,6 +447,20 @@ export class ClaudeEngine implements Engine {
           if (event.type === "end") ended = true;
           yield event;
         }
+        // The result is the CLI's last word: nothing after it is waited for.
+        if (ended) break;
+      }
+      if (ended) {
+        // The CLI exits on its own right after its result; one that does not is stopped.
+        const timer: { id?: ReturnType<typeof setTimeout> } = {};
+        const late = new Promise<"late">((resolve) => (timer.id = setTimeout(() => resolve("late"), this.resultExitGraceMs)));
+        const outcome = await Promise.race([exited, late]);
+        clearTimeout(timer.id);
+        if (outcome === "late") {
+          console.error(`[engine] claude still running ${Math.round(this.resultExitGraceMs / 1000)} s after its result: stopped`);
+          kill();
+        }
+        return;
       }
       const { code, error } = await exited;
       if (!ended) {

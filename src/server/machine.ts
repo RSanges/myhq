@@ -226,19 +226,34 @@ export function effectiveNeeds(db: Db, room: string, agent: Pick<Agent, "id" | "
 }
 
 /**
- * What the runs in progress still have to take, per kind: the sum of their
- * needs minus what the machine gave up since the earliest of them started,
- * never negative. The memory given up is credited once to all of them (one
- * run's share is not known), so that several runs going never under-count.
- * A run that just started has taken nothing yet and reserves its whole need.
+ * How long a run in progress reserves what it still has to take. A
+ * reservation keeps two runs released together from counting the same free
+ * memory; past this, a run has loaded what it loads at its start, and the
+ * memory it takes shows in what is free (its agent's reasoning between two
+ * heavy steps takes little). Holding the whole need for the whole run (an hour
+ * or more) kept the heavy agents from ever running side by side. The home's
+ * veto command (virtual memory) and the margin stay the guard on a heavy step
+ * that comes later.
  */
-export function reservations(db: Db, reading: MachineReading): { ramGb: number; vramGb: number } {
+export const RESERVATION_WINDOW_MS = 10 * 60_000;
+
+/**
+ * What the runs in progress still have to take, per kind: the sum of the
+ * needs of those started less than RESERVATION_WINDOW_MS ago minus what the
+ * machine gave up since the earliest of them started, never negative. The
+ * memory given up is credited once to all of them (one run's share is not
+ * known), so that several runs going never under-count. A run that just
+ * started has taken nothing yet and reserves its whole need; an older one
+ * reserves nothing, what it takes is no longer free.
+ */
+export function reservations(db: Db, reading: MachineReading, at: Date = new Date()): { ramGb: number; vramGb: number } {
+  const since = new Date(at.getTime() - RESERVATION_WINDOW_MS).toISOString();
   const rows = db
     .prepare(
       `SELECT m.ram_need_gb, m.vram_need_gb, m.ram_free_start_gb, m.vram_used_start_gb
-       FROM run_machine m JOIN runs r ON r.id = m.run_id WHERE r.status = 'running' ORDER BY m.started_at, m.run_id`,
+       FROM run_machine m JOIN runs r ON r.id = m.run_id WHERE r.status = 'running' AND m.started_at > ? ORDER BY m.started_at, m.run_id`,
     )
-    .all() as { ram_need_gb: number | null; vram_need_gb: number | null; ram_free_start_gb: number; vram_used_start_gb: number | null }[];
+    .all(since) as { ram_need_gb: number | null; vram_need_gb: number | null; ram_free_start_gb: number; vram_used_start_gb: number | null }[];
   const ram = rows.filter((row) => row.ram_need_gb !== null);
   const vram = rows.filter((row) => row.vram_need_gb !== null);
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
