@@ -5,7 +5,7 @@ import { test } from "node:test";
 import type { HqConfig } from "../src/server/config";
 import { getDbAt, type Db } from "../src/server/db";
 import type { Engine, RunEvent } from "../src/server/engine";
-import { closeStaleRunMachines, RESERVATION_WINDOW_MS, releaseHolds, reservations, takeHold, type MachineReading } from "../src/server/machine";
+import { closeStaleRunMachines, effectiveNeeds, RESERVATION_WINDOW_MS, releaseHolds, reservations, takeHold, type MachineReading } from "../src/server/machine";
 import { DEFAULT_MACHINE } from "../src/server/home-settings";
 import { loadHome, syncHome } from "../src/server/rooms";
 import { MachineBusy, startRun } from "../src/server/runner";
@@ -132,4 +132,14 @@ test("hq_machine_hold waits for the memory, then holds it; hq_machine_release gi
   const refused = await hqMachineHold(db, ctx(son, "son") as never, { ramGb: 8, waitSeconds: 0 }, { read: async () => reading() });
   assert.equal(refused.held, false);
   await assert.rejects(() => hqMachineHold(db, ctx(son, "son") as never, {}, { read: async () => reading() }), /ramGb, vramGb or both/);
+});
+
+test("a run that held memory for a heavy step does not teach its agent's need", () => {
+  const { db } = home([agent("motion", { needs: { ramGb: 1 } })]);
+  for (const peak of [5, 6]) {
+    const run = running(db, "motion", 30, 1);
+    db.prepare("UPDATE run_machine SET ram_peak_gb = ?, ended_at = ?, alone = 1 WHERE run_id = ?").run(peak, new Date().toISOString(), run);
+    takeHold(db, { runId: run, room: "demo", agentId: "motion", need: { ramGb: 6, vramGb: null }, minutes: 30, reading: reading(), setting: DEFAULT_MACHINE });
+  }
+  assert.deepEqual(effectiveNeeds(db, "demo", { id: "motion", needs: { ramGb: 1, vramGb: null } }), { ramGb: 1, vramGb: null });
 });

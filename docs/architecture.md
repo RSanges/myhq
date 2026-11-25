@@ -1317,7 +1317,8 @@ its need minus what the machine gave up since, for as long as it lasts. It
 lasts until it is released, until its minutes are over (30 by default, 180 at
 most: a forgotten hold expires) or until its run ends (the end of the run, or
 `closeStaleRunMachines` for a run that ended any other way). A run that holds
-reserves through its hold only, never twice. So two agents can think side by
+reserves through its hold only, never twice, and a run that held does not
+teach its agent's need (its peak is the step's, which the hold covered). So two agents can think side by
 side and take turns only for their heavy steps. The need is the effective one (below), the margin
 `machine.keepFreeRamGb` or `keepFreeVramGb` of `myhq.json` (2 GB and 1 GB by
 default). Otherwise the start throws `MACHINE_BUSY` (409, with the figures):
