@@ -175,7 +175,9 @@ export function scarceOf(agent: Pick<Agent, "needs" | "resources">): string[] {
 /**
  * The peaks of the last runs alone of an agent under the declaration in
  * force, newest first: only those measure the agent and nothing else, and a
- * declaration the owner changed starts the learning over.
+ * declaration the owner changed starts the learning over. A run that held
+ * memory for a heavy step (machine_holds) does not count: its peak is the
+ * step's, which its hold covered, not what its run needs outside it.
  */
 export function measuredPeaks(db: Db, room: string, agentId: string, declared: Needs, limit = PEAK_RUNS): { ramGb: number[]; vramGb: number[] } {
   const peaks = (kind: "ram" | "vram", need: number | null): number[] =>
@@ -185,7 +187,8 @@ export function measuredPeaks(db: Db, room: string, agentId: string, declared: N
           db
             .prepare(
               `SELECT ${kind}_peak_gb AS peak FROM run_machine WHERE room = ? AND agent_id = ? AND ended_at IS NOT NULL AND alone = 1
-                 AND ${kind}_declared_gb = ? AND ${kind}_peak_gb IS NOT NULL ORDER BY run_id DESC LIMIT ?`,
+                 AND ${kind}_declared_gb = ? AND ${kind}_peak_gb IS NOT NULL
+                 AND run_id NOT IN (SELECT run_id FROM machine_holds) ORDER BY run_id DESC LIMIT ?`,
             )
             .all(room, agentId, need, limit) as { peak: number }[]
         ).map((row) => row.peak);
