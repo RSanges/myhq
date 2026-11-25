@@ -141,6 +141,13 @@ not on intuition: every run records its tokens and estimated cost (the
 stream-json output provides them), and the app shows the share of the plan
 consumed by runs over the week.
 
+The CLI's result line is its last word: `ClaudeEngine` stops reading there and
+gives the process 30 seconds to exit (`RESULT_EXIT_GRACE_MS`), then stops it.
+A process the agent left behind (a test suite sent to the background, a
+server) can keep the CLI's stdout open, and without this the run would stay
+"running" with its work done, holding its agent's lock and its share of the
+machine until the supervisor stopped it.
+
 ### The HQ MCP server
 
 A stdio MCP server, shipped in the app, is the agents' only door to the office.
@@ -169,6 +176,8 @@ room) and writes directly to SQLite. Twenty-three tools, all validated with zod:
 | `hq_run_status(runId)` | Supervisor only: a run as it checks it, with MyHQ's hints on its activity (see "Long runs"). Read-only. |
 | `hq_run_extend(runId, minutes)` | Supervisor only: 10 to 60 more minutes for a long run, never past its hard limit. |
 | `hq_run_stop(runId, reason)` | Supervisor only: interrupts a stuck run, with the reason shown on the Standard. |
+| `hq_machine_hold(ramGb?, vramGb?, minutes?, waitSeconds?)` | Memory for one heavy step of the run (a render, a build), granted with the gate of a start and waited for (120 s by default, 600 at most) when the machine is busy. It lasts until `hq_machine_release`, its minutes (30 by default, 180 at most) or the end of the run; a new hold replaces the run's previous one (see "The queue and the machine"). Not given in read-only mode. |
+| `hq_machine_release()` | Gives back the memory of `hq_machine_hold` once the step is over. |
 | `hq_ask_assistant(question)` | Ask the assistant for one fact (600 characters at most) the agent needs and cannot find in its folders: about the owner or the owner's other projects. It waits for the app's answer, 2 minutes at most, and gets one paragraph back, a refusal, or that the owner was asked (see "The door to the assistant"). Not given in read-only mode. |
 
 Everything an agent wants to show or have approved goes through this server,
@@ -1276,8 +1285,9 @@ declares, a run starts only if
 
     free now - reserved >= need + margin
 
-where `reserved` is, over the runs in progress that have a need of that kind,
-the sum of their needs minus what the machine gave up since the earliest of
+where `reserved` is, over the runs in progress that have a need of that kind
+and started less than 10 minutes ago (`RESERVATION_WINDOW_MS`), the sum of
+their needs minus what the machine gave up since the earliest of
 them started, never negative: the RAM given up being `free at that start -
 free now`, the GPU memory `used now - used at that start`. The memory given up
 is credited once to all of them, since with several runs going one run's
@@ -1287,7 +1297,28 @@ tasks released in the same pass never count the same free memory (the second
 sees the first's whole need reserved), and two runs of one parallel agent
 reserve twice. For example, A and B need 8 GB each and start with 20 GB free;
 A took 2 (18 free): 16 - 2 = 14 GB are still reserved, 4 are left, and C (4 GB,
-margin 2) waits. The need is the effective one (below), the margin
+margin 2) waits. Past its first 10 minutes a run reserves nothing more: it
+has loaded what it loads at its start, what it takes shows in what is free,
+and its agent's reasoning between two heavy steps takes little. Holding the
+whole need for the whole run (an hour or more for some agents) kept the heavy
+agents from ever running side by side. A heavy step that comes later is
+guarded by the margin and by the home's veto command (below), which can judge
+what MyHQ does not measure, such as the virtual memory.
+
+**Holds: the memory of one heavy step.** An agent whose heavy work is a few
+steps of its run (a render, a 3D build, a model loaded on the GPU) asks for
+that memory around each of them, with `hq_machine_hold` before and
+`hq_machine_release` after, and declares in `needs` only what its run takes
+outside those steps (or nothing). A hold is granted with the gate of a start
+(what is free, minus what the young runs and the other holds still have to
+take, covers it plus the margin), in one immediate transaction, and recorded
+in `machine_holds` (migration 35) with what the machine had then: it reserves
+its need minus what the machine gave up since, for as long as it lasts. It
+lasts until it is released, until its minutes are over (30 by default, 180 at
+most: a forgotten hold expires) or until its run ends (the end of the run, or
+`closeStaleRunMachines` for a run that ended any other way). A run that holds
+reserves through its hold only, never twice. So two agents can think side by
+side and take turns only for their heavy steps. The need is the effective one (below), the margin
 `machine.keepFreeRamGb` or `keepFreeVramGb` of `myhq.json` (2 GB and 1 GB by
 default). Otherwise the start throws `MACHINE_BUSY` (409, with the figures):
 it is one more of the waits (`WAITS`), so the task stays pending, shows in the

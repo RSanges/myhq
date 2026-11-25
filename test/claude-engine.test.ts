@@ -5,6 +5,7 @@ import { test } from "node:test";
 import os from "node:os";
 import {
   buildClaudeArgs,
+  ClaudeEngine,
   runEnv,
   builtInTools,
   expandMcpServers,
@@ -231,4 +232,36 @@ test("writeMcpConfig writes the expanded values, and nothing when a variable is 
   };
   assert.equal(written.mcpServers.reddit!.env.CLIENT_ID, "abc");
   assert.deepEqual(written.mcpServers.hq!.env, hqEnv);
+});
+
+test("a CLI that stays alive after its result is stopped, and the run ends on that result", { skip: process.platform === "win32" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myhq-engine-"));
+  const bin = path.join(dir, "fake-claude.cjs");
+  const result = { type: "result", subtype: "success", is_error: false, result: "Done.", total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 2 } };
+  // Prints its result, then keeps running as if a process it started held its stdout.
+  fs.writeFileSync(bin, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(result) + "\n")});\nsetInterval(() => undefined, 1000);\n`);
+  fs.chmodSync(bin, 0o755);
+  const engine = new ClaudeEngine(bin, 200);
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const input: RunInput = {
+    runId: 1,
+    room: "demo",
+    agentId: "scout",
+    prompt: "Do it.",
+    model: "sonnet",
+    rolePath: path.join(dir, "role.md"),
+    allowedTools: [],
+    mcpConfigPath: path.join(dir, "mcp.json"),
+    maxBudgetUsd: 1,
+    workDir: dir,
+    env: { PATH: process.env.PATH ?? "" },
+    signal: controller.signal,
+  };
+  const events: RunEvent[] = [];
+  for await (const event of engine.run(input)) events.push(event);
+  assert.ok(Date.now() - startedAt < 5_000, "the run ended soon after its result");
+  const end = events.find((event) => event.type === "end");
+  assert.equal(end?.type === "end" ? end.status : null, "done");
+  assert.equal(end?.type === "end" ? end.summary : null, "Done.");
 });

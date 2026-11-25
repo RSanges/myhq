@@ -21,6 +21,8 @@ import {
   hqBlockedClose,
   hqBlockedNote,
   hqItems,
+  hqMachineHold,
+  hqMachineRelease,
   hqMemoryRead,
   hqMemoryWrite,
   hqMessage,
@@ -109,6 +111,29 @@ async function main(): Promise<void> {
           return { content: [{ type: "text" as const, text: toolErrorText(error) }], isError: true };
         }
       },
+    );
+    server.registerTool(
+      "hq_machine_hold",
+      {
+        description:
+          "Ask for the machine's memory before one heavy step (a render, a 3D build, a model loaded on the GPU), and only for it: MyHQ shares the machine between the agents, and memory held while you only think keeps the others waiting. Give what the step takes (ramGb, vramGb) and how long it may last. It waits for the memory when the machine is busy (waitSeconds) and answers `held: true` once you have it. Then run the step, and call hq_machine_release as soon as it is over. One hold at a time: a new one replaces the previous one. It ends with your run anyway.",
+        inputSchema: inputs.hq_machine_hold,
+      },
+      async (args) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(await hqMachineHold(db, ctx, args)) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: toolErrorText(error) }], isError: true };
+        }
+      },
+    );
+    server.registerTool(
+      "hq_machine_release",
+      {
+        description: "Give back the memory of hq_machine_hold once the heavy step is over, so that the other agents can use it.",
+        inputSchema: inputs.hq_machine_release,
+      },
+      async () => respond(() => hqMachineRelease(db, ctx)),
     );
     server.registerTool(
       "hq_status",

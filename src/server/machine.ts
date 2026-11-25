@@ -226,19 +226,52 @@ export function effectiveNeeds(db: Db, room: string, agent: Pick<Agent, "id" | "
 }
 
 /**
- * What the runs in progress still have to take, per kind: the sum of their
- * needs minus what the machine gave up since the earliest of them started,
- * never negative. The memory given up is credited once to all of them (one
- * run's share is not known), so that several runs going never under-count.
- * A run that just started has taken nothing yet and reserves its whole need.
+ * How long a run in progress reserves what it still has to take. A
+ * reservation keeps two runs released together from counting the same free
+ * memory; past this, a run has loaded what it loads at its start, and the
+ * memory it takes shows in what is free (its agent's reasoning between two
+ * heavy steps takes little). Holding the whole need for the whole run (an hour
+ * or more) kept the heavy agents from ever running side by side. The home's
+ * veto command (virtual memory) and the margin stay the guard on a heavy step
+ * that comes later.
  */
-export function reservations(db: Db, reading: MachineReading): { ramGb: number; vramGb: number } {
+export const RESERVATION_WINDOW_MS = 10 * 60_000;
+
+/**
+ * What the runs in progress still have to take, per kind: the sum of the
+ * needs of those started less than RESERVATION_WINDOW_MS ago and of the open
+ * holds (takeHold) minus what the machine gave up since the earliest of them
+ * started, never negative. The memory given up is credited once to all of
+ * them (one run's share is not known), so that several runs going never
+ * under-count. A run that just started has taken nothing yet and reserves its
+ * whole need; an older one reserves nothing, what it takes is no longer free,
+ * unless it holds memory for a heavy step, which its hold reserves.
+ */
+export function reservations(db: Db, reading: MachineReading, at: Date = new Date()): { ramGb: number; vramGb: number } {
+  const since = new Date(at.getTime() - RESERVATION_WINDOW_MS).toISOString();
+  const iso = at.toISOString();
+  // The young runs, and the open holds (one heavy step each): a run that holds reserves through its hold, not twice.
   const rows = db
     .prepare(
-      `SELECT m.ram_need_gb, m.vram_need_gb, m.ram_free_start_gb, m.vram_used_start_gb
-       FROM run_machine m JOIN runs r ON r.id = m.run_id WHERE r.status = 'running' ORDER BY m.started_at, m.run_id`,
+      `SELECT m.ram_need_gb, m.vram_need_gb, m.ram_free_start_gb, m.vram_used_start_gb, m.started_at AS at_start
+       FROM run_machine m JOIN runs r ON r.id = m.run_id WHERE r.status = 'running' AND m.started_at > @since
+         AND m.run_id NOT IN (SELECT h.run_id FROM machine_holds h WHERE ${OPEN_HOLD})
+       UNION ALL
+       SELECT h.ram_gb, h.vram_gb, h.ram_free_start_gb, h.vram_used_start_gb, h.started_at AS at_start
+       FROM machine_holds h JOIN runs r ON r.id = h.run_id WHERE r.status = 'running' AND ${OPEN_HOLD}
+       ORDER BY at_start`,
     )
-    .all() as { ram_need_gb: number | null; vram_need_gb: number | null; ram_free_start_gb: number; vram_used_start_gb: number | null }[];
+    .all({ since, at: iso }) as NeedRow[];
+  return pending(rows, reading);
+}
+
+type NeedRow = { ram_need_gb: number | null; vram_need_gb: number | null; ram_free_start_gb: number; vram_used_start_gb: number | null };
+
+/** A hold (alias h) neither released nor expired at @at. */
+const OPEN_HOLD = "h.released_at IS NULL AND h.expires_at > @at";
+
+/** What a group of needs still has to take: their sum minus what the machine gave up since the earliest of them started, never negative. */
+function pending(rows: NeedRow[], reading: MachineReading): { ramGb: number; vramGb: number } {
   const ram = rows.filter((row) => row.ram_need_gb !== null);
   const vram = rows.filter((row) => row.vram_need_gb !== null);
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
@@ -266,7 +299,7 @@ export type MachineShortfall =
  * short; a need above the machine's total (tooBig) comes alone, since nothing
  * that frees can ever let it start.
  */
-export function machineShortfalls(db: Db, need: Needs, reading: MachineReading, setting: MachineSetting): MachineShortfall[] {
+export function machineShortfalls(db: Db, need: Needs, reading: MachineReading, setting: MachineSetting, at: Date = new Date()): MachineShortfall[] {
   const tooBig: MachineShortfall[] = [];
   if (need.ramGb !== null && reading.ramTotalGb > 0 && need.ramGb + setting.keepFreeRamGb > reading.ramTotalGb) {
     tooBig.push({ kind: "tooBig", what: "ram", needGb: need.ramGb, keepGb: setting.keepFreeRamGb, totalGb: reading.ramTotalGb });
@@ -275,7 +308,7 @@ export function machineShortfalls(db: Db, need: Needs, reading: MachineReading, 
     tooBig.push({ kind: "tooBig", what: "vram", needGb: need.vramGb, keepGb: setting.keepFreeVramGb, totalGb: reading.vramTotalGb });
   }
   if (tooBig.length > 0) return tooBig;
-  const held = reservations(db, reading);
+  const held = reservations(db, reading, at);
   const short: MachineShortfall[] = [];
   if (need.ramGb !== null && reading.ramFreeGb - held.ramGb < need.ramGb + setting.keepFreeRamGb) {
     short.push({ kind: "ram", needGb: need.ramGb, keepGb: setting.keepFreeRamGb, freeGb: reading.ramFreeGb, reservedGb: held.ramGb });
@@ -315,6 +348,59 @@ export function shortfallText(shortfall: MachineShortfall): string {
   const what = shortfall.kind === "ram" ? "RAM" : "GPU memory";
   const left = round(shortfall.freeGb - shortfall.reservedGb);
   return `it needs ${shortfall.needGb} GB of ${what} free plus ${shortfall.keepGb} GB kept, and ${left} GB are left (${shortfall.freeGb} free, ${shortfall.reservedGb} reserved by the runs in progress)`;
+}
+
+// --- Holds: the memory of one heavy step -------------------------------------------------------
+
+/** How long a hold lasts unless the agent says otherwise, and at most: a hold that is never released expires. */
+export const HOLD_DEFAULT_MINUTES = 30;
+export const HOLD_MAX_MINUTES = 180;
+
+export type HoldOutcome =
+  | { kind: "held"; holdId: number; expiresAt: string; need: Needs }
+  | { kind: "busy" | "neverFits"; shortfall: MachineShortfall; text: string };
+
+/**
+ * Grants a run memory for one heavy step (hq_machine_hold), with the gate of
+ * a start: what is free now, minus what the runs and the other holds still
+ * have to take, must cover the need plus the margin. A hold the run already
+ * has is released first (one step at a time), so that it is not counted
+ * against the new one. In one immediate transaction: two holds asked at the
+ * same moment never count the same memory.
+ */
+export function takeHold(
+  db: Db,
+  p: { runId: number; room: string; agentId: string; need: Needs; minutes: number; reading: MachineReading; setting: MachineSetting; at?: Date },
+): HoldOutcome {
+  const at = p.at ?? new Date();
+  return db.transaction((): HoldOutcome => {
+    db.prepare("UPDATE machine_holds SET released_at = ? WHERE run_id = ? AND released_at IS NULL").run(at.toISOString(), p.runId);
+    const shortfalls = machineShortfalls(db, p.need, p.reading, p.setting, at);
+    if (shortfalls.length > 0) {
+      const shortfall = shortfalls[0]!;
+      return { kind: shortfall.kind === "tooBig" ? "neverFits" : "busy", shortfall, text: shortfallText(shortfall) };
+    }
+    const expiresAt = new Date(at.getTime() + Math.min(p.minutes, HOLD_MAX_MINUTES) * 60_000).toISOString();
+    const holdId = Number(
+      db
+        .prepare(
+          `INSERT INTO machine_holds (run_id, room, agent_id, ram_gb, vram_gb, ram_free_start_gb, vram_used_start_gb, started_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(p.runId, p.room, p.agentId, p.need.ramGb, p.need.vramGb, p.reading.ramFreeGb, p.reading.vramUsedGb, at.toISOString(), expiresAt).lastInsertRowid,
+    );
+    return { kind: "held", holdId, expiresAt, need: p.need };
+  }).immediate();
+}
+
+/** Releases the holds of a run (hq_machine_release, the end of the run). Returns how many were open. Never throws. */
+export function releaseHolds(db: Db, runId: number): number {
+  try {
+    return db.prepare("UPDATE machine_holds SET released_at = ? WHERE run_id = ? AND released_at IS NULL").run(now(), runId).changes;
+  } catch (error) {
+    console.error(`[machine] releasing the holds of run #${runId} failed`, error);
+    return 0;
+  }
 }
 
 // --- The home's veto command -------------------------------------------------------------
@@ -624,6 +710,9 @@ export function recordRunMachine(
  */
 export function closeStaleRunMachines(db: Db): number {
   try {
+    db.prepare(
+      "UPDATE machine_holds SET released_at = ? WHERE released_at IS NULL AND run_id NOT IN (SELECT id FROM runs WHERE status = 'running')",
+    ).run(now());
     return db
       .prepare(
         `UPDATE run_machine SET ended_at = COALESCE((SELECT r.ended_at FROM runs r WHERE r.id = run_machine.run_id), ?), alone = 0

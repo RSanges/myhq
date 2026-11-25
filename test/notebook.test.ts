@@ -255,6 +255,8 @@ test("a question without a notebook stays as it was: three read tools, no guard,
     "mcp__hq__hq_blocked_note",
     "mcp__hq__hq_run_extend",
     "mcp__hq__hq_run_stop",
+    "mcp__hq__hq_machine_hold",
+    "mcp__hq__hq_machine_release",
     "--max-budget-usd",
     "1",
   ]);

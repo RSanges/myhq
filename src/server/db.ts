@@ -1046,12 +1046,36 @@ CREATE INDEX IF NOT EXISTS benches_open ON benches (closed_at, room, agent_id);
     columns: [{ table: "rooms", column: "brief_keeper", type: "TEXT" }],
   },
   {
+    version: 35,
+    // The machine's holds (machine.ts, hq_machine_hold): the memory a run
+    // takes for one heavy step (a render, a build), reserved from the moment
+    // it is granted until it is released, it expires (expires_at) or its run
+    // ends (released_at). What the machine had when it was granted credits
+    // what the step has already taken, as for a run. Idempotent, as the
+    // migrations after 14.
+    sql: `
+CREATE TABLE IF NOT EXISTS machine_holds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  ram_gb REAL,
+  vram_gb REAL,
+  ram_free_start_gb REAL NOT NULL,
+  vram_used_start_gb REAL,
+  started_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  released_at TEXT
+);
+CREATE INDEX IF NOT EXISTS machine_holds_open ON machine_holds (released_at, expires_at);
+`,
+  },
+  {
     version: 36,
     // The journal of the queue's waits (live-activity.ts, journalWaits): one
     // row per pending task and cause, from the tick that first saw it to the
     // tick that no longer did (ended_at, null while it lasts), with the
-    // latest words of the reason. Rows are never deleted. Version 35 is left
-    // to the machine's holds. Idempotent, as the migrations after 14.
+    // latest words of the reason. Rows are never deleted. Idempotent, as the migrations after 14.
     sql: `
 CREATE TABLE IF NOT EXISTS task_waits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
