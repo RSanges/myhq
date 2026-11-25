@@ -218,7 +218,8 @@ export function taskWait(db: Db, config: HqConfig, home: Home, task: TaskRow, ag
     }
     // Memory taken by other runs, or the home's veto command asked or saying to wait: it starts on its own once that changes.
     if (machine?.kind === "machine") return { ...waits("machine", shortfallReason(machine.shortfall)), holds: machine.holds };
-    if (machine?.kind === "veto") return waits("veto", machine.reason === null ? r.vetoAsking : r.veto(machine.reason));
+    // While the veto command is asked, the task keeps its place; once it says to wait for this agent, it holds nothing back.
+    if (machine?.kind === "veto") return machine.reason === null ? waits("veto", r.vetoAsking) : { ...waits("veto", r.veto(machine.reason)), holds: [] };
     if (!overdue && task.source === "message" && config.messageWakeIntervalMs > 0) {
       const since = new Date(Date.now() - config.messageWakeIntervalMs).toISOString();
       const candidate: WakeCandidate = {

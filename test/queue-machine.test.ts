@@ -473,6 +473,27 @@ for (const behaviour of ["ok", "crash", "timeout"] as const) {
   });
 }
 
+test("the veto command: an agent it holds back keeps nothing, so a later task that needs the same memory still starts", async () => {
+  const s = home([agent("painter", { needs: { ramGb: 1 } }), agent("sculptor", { needs: { ramGb: 1 } })], {
+    machine: { veto: { command: [process.execPath, "veto.cjs"], timeoutSeconds: 0.5 } },
+  });
+  fs.writeFileSync(
+    path.join(s.config.home, "veto.cjs"),
+    `let input = ""; process.stdin.on("data", (c) => (input += c)); process.stdin.on("end", () => { const paused = JSON.parse(input).run.agent === "painter"; process.stdout.write(JSON.stringify(paused ? { wait: true, reason: "En pause" } : { wait: false })); });`,
+  );
+  const deps = { config: s.config, engine: holdingEngine([]).engine, send: async () => true, machine: () => reading() };
+  addTask(s.db, "painter", "work of painter", 2);
+  addTask(s.db, "sculptor", "work of sculptor", 1);
+  wakeAgents(s.config, s.db, deps);
+  await vetoesIdle();
+  wakeAgents(s.config, s.db, deps);
+  await vetoesIdle();
+  await until(() => runsOf(s.db, "sculptor").length === 1);
+  assert.equal(runsOf(s.db, "painter").length, 0);
+  assert.equal(queueOf(s.db, s.config)[0]!.reason, r.veto("En pause"));
+  await waitForRun(s.db, runsOf(s.db, "sculptor")[0]!.id);
+});
+
 test("the veto command: a command that cannot start is told on the Standard until it answers again; the settings page keeps its error", async () => {
   const s = home([agent("painter", { resources: ["gpu"] })], { machine: { veto: { command: ["./missing-veto.cmd"], timeoutSeconds: 1 } } });
   const deps = { config: s.config, engine: holdingEngine([]).engine, send: async () => true, machine: () => reading() };
