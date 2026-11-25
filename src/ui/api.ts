@@ -165,8 +165,12 @@ export const moveQueued = (taskId: number, move: "first" | "up" | "down" | "auto
 /** What the actions of the Standard act on: a task, or a failed or interrupted run and its tasks. */
 export type BlockedTarget = { kind: "task" | "run"; id: number };
 
-/** « Relancer »: the tasks go back to pending and the agent is woken at once, or the answer says why it could not be. */
-export const relaunchBlocked = (target: BlockedTarget) => request("/api/blocked/relaunch", relaunchResponseSchema, jsonInit("POST", target));
+/**
+ * « Relancer »: the tasks go back to pending and the agent is woken at once, or the answer says why it could not be.
+ * « Répondre » is the same with the owner's words to the agent (`answer`).
+ */
+export const relaunchBlocked = (target: BlockedTarget, answer?: string) =>
+  request("/api/blocked/relaunch", relaunchResponseSchema, jsonInit("POST", answer ? { ...target, answer } : target));
 
 /** « Clore »: the tasks are done, closed by the owner. */
 export const closeBlocked = (target: BlockedTarget) => request("/api/blocked/close", closeResponseSchema, jsonInit("POST", target));

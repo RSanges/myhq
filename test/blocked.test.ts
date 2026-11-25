@@ -368,3 +368,68 @@ test("Clore on an order from another room tells the agent who ordered, by a mess
   assert.equal((db.prepare("SELECT COUNT(*) FROM tasks WHERE room = 'demo' AND agent_id = 'critic'").pluck().get() as number), 0);
   assert.equal((db.prepare("SELECT COUNT(*) FROM messages").pluck().get() as number), 1);
 });
+
+// --- « Répondre », the whole note, the hand-off on the desk -------------------------------------
+
+test("answer: the owner's words join the task as a request of the owner, and the run takes both", async () => {
+  const config = office();
+  const db = getDbAt(config.dbPath);
+  syncHome(db, loadHome(config.home));
+  const seen: RunInput[] = [];
+  const task = addTask(db, "critic", { status: "blocked", created: ago(60), note: "The judge fails on the joint.", text: "Build the sign." });
+  const result = relaunchBlocked(config, db, { kind: "task", id: task }, { engine: engine(seen), send: async () => true }, "Ignore the rays, deliver.");
+  assert.equal(result.waiting, null);
+  await waitForRun(db, result.run!.id);
+  assert.match(seen[0]!.prompt, /\[task \d+, message\] Build the sign\./);
+  assert.match(seen[0]!.prompt, /\[task \d+, chat\] The owner answered on the Standard about what blocked your task #\d+:/);
+  assert.match(seen[0]!.prompt, /Ignore the rays, deliver\./);
+  const answer = db.prepare("SELECT status, source FROM tasks WHERE source = 'chat'").get() as { status: string; source: string };
+  assert.equal(answer.status, "done", "taken by the run with the task");
+});
+
+test("answer: when the agent cannot be woken, the answer waits with the task, both pending", () => {
+  const config = office();
+  const db = getDbAt(config.dbPath);
+  addRun(db, "painter", "running", 5, null, { resources: '["gpu"]' });
+  const task = addTask(db, "scout", { status: "blocked", created: ago(60) });
+  const result = relaunchBlocked(config, db, { kind: "task", id: task }, { engine: engine(), send: async () => true }, "Go on.");
+  assert.equal(result.waiting?.code, "RESOURCE_BUSY");
+  const rows = db.prepare("SELECT source, status FROM tasks WHERE agent_id = 'scout' ORDER BY id").all();
+  assert.deepEqual(
+    rows.map((row) => ({ ...(row as object) })),
+    [
+      { source: "message", status: "pending" },
+      { source: "chat", status: "pending" },
+    ],
+  );
+});
+
+test("answer: the route takes `answer`, trimmed; an empty one is refused", async () => {
+  const config = office();
+  process.env.MYHQ_HOME = config.home;
+  const db = getDbAt(config.dbPath);
+  addRun(db, "painter", "running", 5, null, { resources: '["gpu"]' });
+  const task = addTask(db, "scout", { status: "blocked", created: ago(60) });
+  const post = (body: unknown) =>
+    relaunchRoute(new Request("http://127.0.0.1/api/blocked/relaunch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+  assert.equal((await post({ kind: "task", id: task, answer: "   " })).status, 400);
+  const response = await post({ kind: "task", id: task, answer: "  Livre avec l'alerte.  " });
+  assert.equal(response.status, 200);
+  const text = (db.prepare("SELECT text FROM tasks WHERE source = 'chat'").get() as { text: string }).text;
+  assert.match(text, /\n\nLivre avec l'alerte\.\n\n/);
+});
+
+test("standard: a reason cut at 400 characters gives the desk the whole note", async () => {
+  const config = office();
+  process.env.MYHQ_HOME = config.home;
+  const db = getDbAt(config.dbPath);
+  const long = `${"The judge fails on the joint. ".repeat(14)}The fidelity fails too, for the same reason.`;
+  addTask(db, "scout", { status: "blocked", created: ago(60), note: long });
+  addTask(db, "critic", { status: "blocked", created: ago(50), note: "Short." });
+  const desk = await resolveDesk({ config, db, commands: new DeskCommands({ env: {} }) });
+  const items = desk.objects.find((object) => object.id === "telephone")!.items;
+  const ref = (title: string) => items.find((item) => item.title === title)!.ref as { reason: string; detail: string | null };
+  assert.match(ref("Scout").reason, /\.\.\.$/);
+  assert.equal(ref("Scout").detail, long);
+  assert.equal(ref("Critic").detail, null, "a reason that is whole needs nothing more");
+});

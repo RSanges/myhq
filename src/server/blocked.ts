@@ -40,7 +40,8 @@ export const FAILED_RUN_WINDOW_MS = 24 * 60 * 60_000;
 /** Why a relaunch started a run (`runs.reason`). */
 export { RELAUNCH_REASON };
 /** A reason longer than this (an agent's note, a run summary) is cut. */
-const REASON_MAX = 400;
+/** The longest reason of an entry, on one line: past it the reason is cut and the desk offers the whole note (desk.ts). */
+export const REASON_MAX = 400;
 
 export type BlockedEntry = {
   /** `task`: a blocked task; `pending`: a pending task nothing takes; `run`: a failed or interrupted run. */
@@ -425,6 +426,43 @@ export const blockedTargetSchema = z.strictObject({
 });
 export type BlockedTarget = z.infer<typeof blockedTargetSchema>;
 
+/** The longest answer of the owner on the Standard (« Répondre »). */
+export const ANSWER_MAX = 5_000;
+
+/** « Relancer » and « Répondre »: the target, and for « Répondre » the owner's words to the agent. */
+export const relaunchInputSchema = z.strictObject({
+  kind: z.enum(["task", "run"]),
+  id: z.number().int().positive(),
+  answer: z.string().trim().min(1).max(ANSWER_MAX).optional(),
+});
+
+/** The task that carries the owner's answer on the Standard: a request of the owner (source `chat`), which only the owner cancels. */
+export function answerTaskText(ids: readonly number[], answer: string): string {
+  const tasks = ids.map((id) => `#${id}`).join(", ");
+  return [
+    `The owner answered on the Standard about what blocked your task${ids.length === 1 ? "" : "s"} ${tasks}:`,
+    "",
+    answer,
+    "",
+    "This is the owner's decision on that block: apply it to that work and go on from where you stopped. Do not block again on what it settles; if it leaves a real doubt, ask with hq_ask.",
+  ].join("\n");
+}
+
+/**
+ * The informational items that told the owner about an entry handed to them
+ * (`standard_handoff`, supervisor.ts) are seen once the owner acted on it from
+ * the Standard: nothing is left to look at.
+ */
+export function seeHandOffItems(db: Db, taskIds: readonly number[]): void {
+  db.prepare(
+    `UPDATE approvals SET status = 'seen' WHERE type = ? AND status = 'unseen'
+       AND EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.tasks')) j WHERE j.value IN (SELECT value FROM json_each(?)))`,
+  ).run(HANDOFF_TYPE, JSON.stringify(taskIds));
+}
+
+/** The type of the informational item MyHQ files when an entry of the Standard is handed to the owner. */
+export const HANDOFF_TYPE = "standard_handoff";
+
 /** The open tasks of a target, with their agent. Throws when there is nothing to act on. */
 export function targetTasks(db: Db, target: BlockedTarget): { room: string; agentId: string; ids: number[] } {
   if (target.kind === "task") {
@@ -470,7 +508,8 @@ const relaunchWaits = () => new Set([...WAITS, "ROOM_NOT_FOUND", "AGENT_NOT_FOUN
  * bench that closes, or that holds for a reason only the owner settles,
  * starts no run and its note stays as it is.
  */
-export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget, deps: RunnerDeps = {}): RelaunchResult {
+export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget, deps: RunnerDeps = {}, answer?: string): RelaunchResult {
+  // An answer is for the agent: on MyHQ's note on a bench there is no agent's block to answer, the closing is tried as for « Relancer ».
   const bench = retryBenchNote(db, targetTasks(db, target).ids);
   if (bench) {
     const message =
@@ -480,9 +519,18 @@ export function relaunchBlocked(config: HqConfig, db: Db, target: BlockedTarget,
   const { room, agentId, ids } = db
     .transaction(() => {
       const found = targetTasks(db, target);
+      const at = now();
       db.prepare(
         `UPDATE tasks SET status = 'pending', run_id = NULL, updated_at = ? WHERE id IN (${placeholders(found.ids)}) AND status IN ('blocked', 'pending')`,
-      ).run(now(), ...found.ids);
+      ).run(at, ...found.ids);
+      if (answer) {
+        // In the subject of the relaunch, so that the run started for it (or the next one of that subject) takes it with the tasks.
+        db.prepare(
+          `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, subject_id, created_at, updated_at)
+           VALUES (?, ?, 'chat', NULL, ?, 'pending', ?, ?, ?)`,
+        ).run(found.room, found.agentId, answerTaskText(found.ids, answer), relaunchSubject(db, found.ids), at, at);
+      }
+      seeHandOffItems(db, found.ids);
       return found;
     })
     .immediate();
@@ -521,6 +569,7 @@ export function closeBlocked(db: Db, target: BlockedTarget, note: string = strin
       db.prepare(
         `UPDATE tasks SET status = 'done', note = ?, updated_at = ? WHERE id IN (${placeholders(ids)}) AND status IN ('blocked', 'pending')`,
       ).run(note, now(), ...ids);
+      seeHandOffItems(db, ids);
       for (const order of orders) {
         writeMessage(
           db,

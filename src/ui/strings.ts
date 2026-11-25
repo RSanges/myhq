@@ -72,6 +72,7 @@ export const strings = {
       agent_proposal: "Agent",
       question: "Question",
       assistant_question: "Question à l'assistant",
+      standard_handoff: "Au Standard",
     } as Record<string, string>,
     age: {
       now: "à l'instant",
@@ -1544,6 +1545,23 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
       tasks: (count: number) => (count === 1 ? "1 tâche" : `${count} tâches`),
       relaunch: "Relancer",
       close: "Clore",
+      /** « Répondre »: the owner's words go to the agent as a request of the owner, and the agent is relaunched. */
+      answer: "Répondre",
+      answerLabel: (agent: string) => `Ta consigne à ${agent}`,
+      answerPlaceholder: "Par exemple : ignore ce contrôle et livre avec l'alerte.",
+      answerHint: "Elle part à l'agent comme une demande de ta part, avec sa tâche, et il est relancé tout de suite.",
+      sendAnswer: "Envoyer et relancer",
+      /** What « Répondre » did, before what the relaunch said. */
+      answered: (relaunch: string) => `Consigne envoyée. ${relaunch}`,
+      /** The whole words of the agent, folded under a reason that had to cut them. */
+      detail: "Lire la note entière",
+      /** The informational item MyHQ files when an entry is handed to the owner (supervisor.ts, `announceHandOff`). */
+      handOffItem: {
+        title: (agent: string) => `Au Standard : ${agent} attend ta décision`,
+        note: (by: string, text: string) => `**Note de ${by}** : ${text}`,
+        words: (agent: string, task: number | null) => (task === null ? `**Ce que dit ${agent}** :` : `**Ce que dit ${agent}** (tâche #${task}) :`),
+        link: (href: string) => `[Répondre ou relancer depuis le Standard](${href})`,
+      },
       confirm: {
         relaunch: "La tâche repart et l'agent est réveillé tout de suite (verrou, plafond et ressources comme d'habitude).",
         relaunchRun: (tasks: number) =>
@@ -1764,6 +1782,19 @@ MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
         p.body,
       ].join("\n\n"),
     dispatched: (agent: string, runId: number) => `Tâche transmise à ${agent}, tour n° ${runId} lancé`,
+    /** A task for an agent whose run could not start now: it waits in its mailbox, with why. */
+    dispatchQueued: (agent: string, code: string) =>
+      `Tâche transmise à ${agent}, mise en file : ${
+        (
+          {
+            AGENT_BUSY: "il a déjà un tour en cours, elle partira à la fin de ce tour.",
+            RESOURCE_BUSY: "une de ses ressources (le GPU par exemple) est prise par un autre tour, elle partira à sa fin.",
+            MACHINE_BUSY: "la machine ne peut pas prendre son tour maintenant (mémoire), elle partira dès qu'elle le permet.",
+            DAILY_CAP_REACHED: "le plafond du jour est atteint, elle partira demain ou quand le plafond sera relevé.",
+            SHUTTING_DOWN: "MyHQ s'arrête, elle partira après le redémarrage.",
+          } as Record<string, string>
+        )[code] ?? "son tour ne peut pas partir maintenant, elle partira dès que possible."
+      }`,
     selectionTitle: "Ta sélection",
     selectionSend: "Envoyer la sélection",
     selectionAll: "Tout",

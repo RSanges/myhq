@@ -1603,8 +1603,20 @@ room, so that nothing waits in silence:
 Each entry gives its room (and colour), its agent, since when (the block, the
 creation of the pending task, the end of the run), the reason in one sentence
 and the text of the task (for a run, its instruction then the tasks it gave
-back). The count of the object is the number of agents
-stuck, not of entries. Two actions, with a light confirmation on the page:
+back). A reason is one line of 400 characters at most; when that cuts the
+words of the agent (a blocked task's note, a failed run's summary), the card
+folds them whole under it (« Lire la note entière », `detail` of the desk's
+ref). The count of the object is the number of agents
+stuck, not of entries. Three actions, the last two with a light confirmation on the page:
+
+- **Répondre** (`POST /api/blocked/relaunch` with `answer`): the owner writes
+  what the agent needs (« ignore ce contrôle, livre avec l'alerte »). The
+  words join the tasks of the entry as a pending task of source `chat`, a
+  request of the owner that only the owner cancels, in the subject of the
+  relaunch; then everything goes as for « Relancer », so the run takes the
+  answer with the tasks (or, when it cannot start, both wait together). The
+  task tells the agent it is the owner's decision on that block, to apply
+  without blocking again on what it settles.
 
 - **Relancer** (`POST /api/blocked/relaunch`): the tasks of the entry go back
   to `pending` (without a run) and the agent is woken at once by a run of
@@ -1644,7 +1656,17 @@ see "The supervisor"). A reopened one stays listed, marked « Rouverte le ... »
 An entry also shows the latest note of the supervisor on its tasks (« Note de
 <its name> : ... », see below). An entry handed to the owner (by the
 supervisor, by MyHQ, or by a reopening) is marked « Remis au propriétaire »,
-drawn apart and listed first, whatever its age. A hand-off is for good: a
+drawn apart and listed first, whatever its age. Its first hand-off (not a
+reopening, which the owner did) also files an informational item of type
+`standard_handoff` (`noteBlocked` in supervisor.ts), in the room and the name
+of the agent stuck, born `unseen`: « Au Standard : <agent> attend ta
+décision », with the note, the agent's own words and a link to
+`/bureau/standard#<entry>` (the client opens the object on the `blocked`
+source, whatever its id in the home). So the owner learns it on the desk,
+under « À regarder », and on Telegram (the sweep of the notifications sends it
+at the end of the run that handed it), not only by the lamp of the phone. Any
+action of the owner on the entry from the Standard (« Répondre », « Relancer »,
+« Clore ») marks that item seen. A hand-off is for good: a
 later note, whatever it says, takes nothing back. MyHQ's note on a bench it
 keeps open (cause `bench`, see "Several benches") is the owner's from the
 start, and « Relancer » on it first tries the closing again.
@@ -3890,8 +3912,10 @@ object.
   numbered as the list numbers them, the late ones marked. An object on
   `blocked` is the Standard (see "The Standard" in section 1): one card per
   entry, its room chip and colour, its agent, « depuis 2 h », the reason, the
-  text of the task folded, and « Relancer » and « Clore », each asking a
-  light confirmation in the card before it acts; what the action did (the run
+  text of the task folded (and the whole note of the agent when the reason cut
+  it), and « Répondre » (a field for the owner's words, sent with « Envoyer et
+  relancer »), « Relancer » and « Clore », the last two asking a light
+  confirmation in the card before they act; what the action did (the run
   started, or why the agent could not be woken) is said above the list. A
   phone on `chat` is the conversation panel as the page itself. Any other
   pairing gets a plain list. Each page follows the live stream like the desk

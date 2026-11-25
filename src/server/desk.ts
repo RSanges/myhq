@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { strings } from "../ui/strings";
 import { app } from "./app";
-import { listBlocked, stuckAgents, type BlockedEntry } from "./blocked";
+import { listBlocked, REASON_MAX, stuckAgents, type BlockedEntry } from "./blocked";
 import { queueSignature } from "./queue";
 import { listClosures, type ClosureDto } from "./closures";
 import { isInside, type Env, type HqConfig } from "./config";
@@ -173,6 +173,8 @@ export type DeskRef =
       note: { text: string; by: string; at: string } | null;
       /** Handed to the owner by a supervisor: listed first, marked apart. */
       handedOff: boolean;
+      /** The whole words of the agent (a blocked task's note, a run's summary) when `reason` cuts them; null otherwise. */
+      detail: string | null;
     };
 
 export type DeskItemDto = {
@@ -381,8 +383,14 @@ function blockedItem(entry: BlockedEntry, objectId: string, colors: Map<string, 
       tasks: entry.taskIds.length,
       note: entry.note ? { text: entry.note.text, by: entry.note.agentName, at: entry.note.at } : null,
       handedOff: entry.handedOff,
+      detail: reasonCut(entry.detail) ? entry.detail!.trim() : null,
     },
   };
+}
+
+/** Whether the reason of an entry cut these words (`oneLine` in blocked.ts): the desk then offers them whole. */
+function reasonCut(detail: string | null): boolean {
+  return detail !== null && detail.replace(/\s+/g, " ").trim().length > REASON_MAX;
 }
 
 function readCore(db: Db, home: Home, source: CoreSource, objectId: string, config: HqConfig, at: Date, seenAt: string | null): CoreRead {
