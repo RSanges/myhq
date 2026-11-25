@@ -23,14 +23,19 @@ import {
   elapsedText,
   liveFigures,
   mergeTimeline,
+  minutesAgo,
+  minutesText,
   modelViewerRuns,
   pausedMinutes,
+  quietness,
   shownIndex,
   taskHeadline,
+  toolText,
+  waitCauseText,
   type TimelineEntry,
 } from "./live-room-model";
 import type { Pin } from "./model-viewer";
-import type { LiveRun, LiveTile, PieceVersion } from "./schemas";
+import type { LiveQueueEntry, LiveRun, LiveTile, LiveWait, PieceVersion } from "./schemas";
 import { SiteNav } from "./site-nav";
 import { strings } from "./strings";
 import { buttonClass, ErrorNote } from "./ui";
@@ -200,6 +205,7 @@ export function LiveRoomView() {
             </button>
           </div>
         )}
+        {state.status === "ready" && <QueueBand queue={state.room.queue ?? []} waits={state.room.waits ?? []} now={now} />}
         {state.status === "ready" && tiles.length === 0 && <Empty />}
         {tiles.length > 0 && (
           <div className="watch-grid">
@@ -345,6 +351,80 @@ function Tile(props: {
   );
 }
 
+/** What the run is doing now, from its journal: the tool in progress, the latest background command and the end of its output, and how quiet it is. */
+function Activity({ tile, now }: { tile: LiveTile; now: number }) {
+  const activity = tile.activity;
+  const quiet = quietness(tile, now);
+  if (!activity || !quiet) return null;
+  const a = t.activity;
+  const background = activity.background;
+  return (
+    <div className="watch-activity" data-quiet={quiet.level}>
+      <p className="watch-activity-now">
+        <small>{a.current}</small>
+        {activity.current ? (
+          <span>
+            {toolText(activity.current)} <em>{a.since(minutesAgo(activity.current.at, now))}</em>
+          </span>
+        ) : (
+          <span>{a.thinking}</span>
+        )}
+      </p>
+      {background && (
+        <div className="watch-activity-bg">
+          <small>
+            {a.background} : {background.detail ?? background.tool}
+            {background.outputAt && <> ({a.outputAt(formatClock(background.outputAt))})</>}
+          </small>
+          {background.output ? <pre>{background.output}</pre> : <p>{a.noOutput}</p>}
+        </div>
+      )}
+      {quiet.level !== "ok" && (
+        <p className="watch-activity-quiet" role="status">
+          {a.quiet(quiet.minutes)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The tasks that wait in the queue and why, and how long each agent waited over the last day. Nothing when nothing waits or waited. */
+function QueueBand({ queue, waits, now }: { queue: readonly LiveQueueEntry[]; waits: readonly LiveWait[]; now: number }) {
+  const q = t.queue;
+  if (queue.length === 0 && waits.length === 0) return null;
+  return (
+    <section className="watch-queue" aria-label={q.title}>
+      <header>
+        <h2 className="wall-display">{q.title}</h2>
+        <p>{q.text}</p>
+      </header>
+      {queue.length > 0 && (
+        <ol>
+          {queue.map((entry) => (
+            <li key={entry.taskId} style={entry.roomColor ? ({ "--room": entry.roomColor } as CSSProperties) : {}}>
+              <b>{entry.agentName}</b>
+              <span className="watch-room">{t.room(entry.roomLabel ?? entry.room)}</span>
+              <span className="watch-queue-reason">{entry.reason}</span>
+              <small>
+                {q.task(entry.taskId)}, {q.since(minutesAgo(entry.since, now))}
+              </small>
+            </li>
+          ))}
+        </ol>
+      )}
+      {waits.length > 0 && (
+        <p className="watch-queue-day">
+          <small>{q.lastDay}</small>
+          {waits
+            .slice(0, 6)
+            .map((each) => q.lastDayItem(each.agentName, minutesText(each.minutes), waitCauseText(each.cause)))
+            .join(" · ")}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function Info({ tile, now, pin }: { tile: LiveTile; now: number; pin: PieceVersion | null }) {
   return (
     <>
@@ -352,6 +432,7 @@ function Info({ tile, now, pin }: { tile: LiveTile; now: number; pin: PieceVersi
         <small>{t.task}</small>
         {taskHeadline(tile)}
       </p>
+      <Activity tile={tile} now={now} />
       {tile.state === "waiting" && tile.status && (
         <p className="watch-wait">
           <HoldIcon />

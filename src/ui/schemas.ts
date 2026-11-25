@@ -621,6 +621,14 @@ export const pieceVersionSchema = z.object({
   caption: z.string().nullable(),
 });
 
+const liveToolSchema = z.object({ tool: z.string(), detail: z.string().nullable(), at: z.string() });
+
+const liveActivitySchema = z.object({
+  current: liveToolSchema.nullable(),
+  lastEventAt: z.string().nullable(),
+  background: liveToolSchema.extend({ output: z.string().nullable(), outputAt: z.string().nullable() }).nullable(),
+});
+
 export const liveTileSchema = z.object({
   runId: z.number().int(),
   room: z.string(),
@@ -641,9 +649,33 @@ export const liveTileSchema = z.object({
   piece: z.object({ source: z.enum(["pin", "auto"]), versions: z.array(pieceVersionSchema) }).nullable(),
   /** The agent's other runs in progress (a parallel agent), latest started first; absent from an older server: none. */
   alsoRunning: z.array(z.number().int()).optional(),
+  /** What the run is doing, from its journal; absent from an older server. */
+  activity: liveActivitySchema.optional(),
 });
 
-export const liveRoomSchema = z.object({ now: z.string(), tiles: z.array(liveTileSchema) });
+const liveQueueEntrySchema = z.object({
+  taskId: z.number().int(),
+  room: z.string(),
+  roomLabel: z.string().nullable(),
+  roomColor: z.string().nullable(),
+  agentId: z.string(),
+  agentName: z.string(),
+  summary: z.string(),
+  since: z.string(),
+  cause: z.string(),
+  reason: z.string(),
+});
+
+const liveWaitSchema = z.object({ room: z.string(), agentId: z.string(), agentName: z.string(), cause: z.string(), minutes: z.number() });
+
+export const liveRoomSchema = z.object({
+  now: z.string(),
+  tiles: z.array(liveTileSchema),
+  /** What waits in the queue and why; absent from an older server. */
+  queue: z.array(liveQueueEntrySchema).optional(),
+  /** How long each agent waited over the last day; absent from an older server. */
+  waits: z.array(liveWaitSchema).optional(),
+});
 
 export const liveRunSchema = z.object({
   tile: liveTileSchema,
@@ -653,4 +685,7 @@ export const liveRunSchema = z.object({
 export type PieceVersion = z.infer<typeof pieceVersionSchema>;
 export type LiveTile = z.infer<typeof liveTileSchema>;
 export type LiveRoom = z.infer<typeof liveRoomSchema>;
+export type LiveActivity = z.infer<typeof liveActivitySchema>;
+export type LiveQueueEntry = z.infer<typeof liveQueueEntrySchema>;
+export type LiveWait = z.infer<typeof liveWaitSchema>;
 export type LiveRun = z.infer<typeof liveRunSchema>;

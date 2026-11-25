@@ -1121,7 +1121,8 @@ progress (oldest first), then the runs ended under 5 minutes ago (newest
 first); an agent with a run in progress shows that one, and an agent with
 several (`parallel`) the latest started of them, its other runs in progress
 named in `alsoRunning` (run ids, latest started first; absent when there is
-none). Agents merely queued behind a shared resource have no run and no tile.
+none). Agents merely queued behind a shared resource have no run and no tile:
+they are in `queue`.
 
 ```json
 {
@@ -1172,6 +1173,25 @@ none). Agents merely queued behind a shared resource have no run and no tile.
   so that a new version is a new address); a text file has no `url` but an `excerpt`: its first 40 lines or
   4 KB, null when it holds a NUL byte (not text). A text file is never served
   raw.
+- `activity` (`src/server/live-activity.ts`): what the run is doing, from its
+  journal. `current`: the latest tool call with no result yet (`tool`, a
+  `detail` from its input: a command's description, a file's name, a pattern,
+  a subagent's description, at most 120 characters; `at`), null when none
+  (the agent thinks or writes); `lastEventAt`: the latest event of the run's
+  journal; `background`: the latest command the CLI moved to the background
+  (its call, `at` the time it moved), with `output`, the last 12 lines or
+  2 KB of the file the CLI writes its output to, and `outputAt`, that file's
+  modification time (both null when it cannot be read; only a `.output` file
+  under the system's temporary folder is read). For an ended run, only
+  `lastEventAt`. Reused 3 seconds, like the listing of the pieces.
+- `queue`: the pending tasks that wait for their turn, in the order of the
+  queue, each with why it waits (`QueueEntry`, as `GET /api/queue` gives
+  them).
+- `waits`: for each agent, the minutes during which at least one of its
+  tasks waited in the queue over the last 24 hours (overlapping waits counted
+  once, a wait for the end of its own run in progress left out), with the
+  cause that held it the longest and its `agentName`, the longest first
+  (from `task_waits`, below).
 
 ### `GET /api/live/runs/[runId]`
 
