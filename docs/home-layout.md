@@ -117,6 +117,7 @@ written by hand. `npm run init` creates an empty home (`rooms/`, `data/`, a
 | `agents[].sprite` | no | The old top-down sheet of the floor (4 by 4 square cells), relative to the home, inside it. Still accepted and served by `GET /api/sprites/<room>/<agent>`, but **no longer drawn**: the floor is isometric and only draws `isoSprite`. |
 | `agents[].onApproval` | no | `"task"`: when an item this agent submitted is approved, MyHQ gives it the task « Exécute l'item approuvé n° <id> : <title> » and starts a run at once (reason `approval`). `"queue"`: the task is created but the agent is not woken, it finds it at its next run. The agent acts on the item with its own tools (for example an MCP server of the home that sends a mail once it finds the item approved). `"command"`: MyHQ runs the agent's `approvalCommand` itself the moment the item is approved, without a model turn, and falls back to `"task"` when the command fails (see "Executing an approved item without a model turn" below). Default: nothing happens on approval (no task: an approved item is usually the user's to post). An item submitted with `onApprove` (`hq_submit`) has its messages delivered by MyHQ instead, and its agent gets no task for it. |
 | `agents[].approvalCommand` | with `onApproval: "command"` | The command MyHQ runs for an approved item of this agent: the program then its arguments, for example `["node", "tools/mail/send-approved.mjs"]`. It runs in the home (its cwd), a program given as a path is relative to the home, and there is no shell (a `.cmd` or `.ps1` is not run, give its interpreter). Never accepted in an agent proposal of the receptionist: what runs on an approval is the owner's to write. |
+| `agents[].approvalCommandFailure` | no, only with `onApproval: "command"` | What happens when the approval command fails. `"task"` (the default): MyHQ falls back to `"task"`, the agent gets the task with the error and is woken. `"owner"`: the item goes back to the owner instead: its task is written `blocked` and handed to the owner on the Standard (a note by MyHQ, so the supervisor leaves it), a Telegram alert says it was not executed, and the agent is not woken. For a command whose action no model turn may take over (the last click of a form shown to the owner). |
 | `agents[].portier` | no | `false`: a message to this agent never goes through the portier and wakes it at once, as before it existed (for an agent whose every message matters). Default `true` (see "The portier" below). |
 | `agents[].onMessage` | no | `"run"` (the default): an `hq_message` addressed to this agent starts a run at once (reason `message`) when its lock is free and the daily cap allows, otherwise as soon as its current run ends. `"queue"`: the message waits for the agent's next run, for an agent meant to batch its work. |
 | `agents[].onRevise` | no | `"run"` (the default): a revise decision on one of its items (from the desk, including a revision asked after the item was approved or rejected, or from Telegram), or the answers of the owner to its questions (`hq_ask`), starts a run at once (reason `revise`) under the same conditions. `"queue"`: the revision waits for the agent's next run. |
@@ -213,6 +214,11 @@ moment the item is approved:
   a program that cannot start): MyHQ falls back to `"task"`. The agent gets the
   task « Exécute l'item approuvé n° <id> : <title> » with the error under it,
   and is woken (reason `approval`), so the item is still executed.
+  With `"approvalCommandFailure": "owner"`, nothing is taken over: the task
+  « Item approuvé n° <id> non exécuté : <title> » is written `blocked`, with
+  the error, and handed to the owner on the Standard; a Telegram alert says
+  so, and the agent is not woken. The owner relaunches it (the agent prepares
+  the item again) or closes it.
 
 ```json
 {

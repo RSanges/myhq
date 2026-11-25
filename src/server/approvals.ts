@@ -26,7 +26,8 @@ import { fileApproval } from "./room-folders";
 import { loadHome, type Agent } from "./rooms";
 import { agentEnv, wakeAgents, type RunnerDeps } from "./runner";
 import { reopenSubject, settleSubject } from "./subjects";
-import { deliverRelays, hasRelays } from "./supervisor";
+import { sendAlert } from "./notify";
+import { deliverRelays, hasRelays, myhqActor, noteBlocked } from "./supervisor";
 
 export const decisionSchema = z
   .strictObject({
@@ -327,6 +328,15 @@ export function decideApproval(
         } catch (error) {
           console.error(`[approvals] wake after the command of #${id} failed`, error);
         }
+      },
+      handOff: (taskId, error) => {
+        try {
+          // Handed to the owner for good: the supervisor leaves it, the owner relaunches or closes it.
+          noteBlocked(db, myhqActor(), { kind: "task", id: taskId }, strings.tasks.commandFailedNote, true);
+        } catch (failure) {
+          console.error(`[approvals] the failed command of #${id} could not be handed to the owner`, failure);
+        }
+        void (deps.send ?? sendAlert)(strings.tasks.commandFailedAlert(id, row.title, error)).catch(() => false);
       },
     });
   }

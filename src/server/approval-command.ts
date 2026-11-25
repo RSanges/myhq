@@ -13,7 +13,9 @@ import { settleSubject } from "./subjects";
 // moment the item is approved, with the item on stdin. When it says it did
 // the work, the item is executed (its task is written done, with the
 // command's note); otherwise MyHQ falls back to `onApproval: "task"`: the
-// agent gets the task, with the error, and is woken. This module imports
+// agent gets the task, with the error, and is woken. An agent with
+// `approvalCommandFailure: "owner"` never takes over a failed command: the
+// task is written blocked and handed to the owner (`handOff`), nobody is woken. This module imports
 // nothing that reads the runner: approvals.ts gives it what it needs. See
 // docs/architecture.md, "Executing an approved item".
 
@@ -114,8 +116,9 @@ export async function approvalCommandsIdle(): Promise<void> {
  * Runs the agent's approval command for an item just approved, in the
  * background. Success: the item's task is written done with the command's
  * note (the desk shows the item executed), nobody is woken. Failure: the
- * task is written pending with the error and `wake` runs, as `"task"` does.
- * Every run is recorded in `approval_commands`. Never throws.
+ * task is written pending with the error and `wake` runs, as `"task"` does;
+ * with `approvalCommandFailure: "owner"`, it is written blocked and `handOff`
+ * runs with its id instead (the owner decides, the agent is not woken). Every run is recorded in `approval_commands`. Never throws.
  */
 export function startApprovalCommand(p: {
   config: HqConfig;
@@ -125,6 +128,8 @@ export function startApprovalCommand(p: {
   note: string | null;
   env: Env;
   wake: () => void;
+  /** With `approvalCommandFailure: "owner"`: gives the blocked task to the owner. */
+  handOff?: (taskId: number, error: string) => void;
   timeoutMs?: number;
 }): void {
   const { config, db, row } = p;
@@ -163,6 +168,34 @@ export function startApprovalCommand(p: {
         return;
       }
       const error = result.error.slice(0, ERROR_MAX);
+      if (p.agent.approvalCommandFailure === "owner") {
+        console.error(`[approvals] the approval command of item #${row.id} failed: ${error}; the item goes back to the owner`);
+        const taskId = db
+          .transaction(() => {
+            const id = Number(
+              db
+                .prepare(
+                  `INSERT INTO tasks (room, agent_id, source, ref_id, text, status, note, subject_id, created_at, updated_at)
+                   VALUES (?, ?, 'approval', ?, ?, 'blocked', ?, ?, ?, ?)`,
+                )
+                .run(
+                  row.room,
+                  row.agent_id,
+                  row.id,
+                  strings.tasks.commandFailedForOwner(row.id, row.title, error),
+                  strings.tasks.commandFailedNote,
+                  row.subject_id ?? null,
+                  at,
+                  at,
+                ).lastInsertRowid,
+            );
+            db.prepare("UPDATE approval_commands SET ok = 0, error = ?, ended_at = ? WHERE approval_id = ?").run(error, at, row.id);
+            return id;
+          })
+          .immediate();
+        p.handOff?.(taskId, error);
+        return;
+      }
       console.error(`[approvals] the approval command of item #${row.id} failed: ${error}; the agent executes it`);
       db.transaction(() => {
         db.prepare(
