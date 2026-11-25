@@ -25,6 +25,47 @@ export const pausedMinutes = minutesSince;
 /** What a tile says the agent is asked to do: the run's one-line summary when there is one, else its task. */
 export const taskHeadline = (tile: Pick<LiveTile, "task" | "taskSummary">): string => tile.taskSummary ?? tile.task;
 
+/** Minutes without any event in a run's journal past which its tile says so, then rings. */
+export const QUIET_WARN_MINUTES = 5;
+export const QUIET_ALERT_MINUTES = 15;
+
+/**
+ * How quiet a run in progress is: the minutes since its journal last moved
+ * (any event: a tool call or result, a text), and a level, `warn` past
+ * QUIET_WARN_MINUTES, `alert` past QUIET_ALERT_MINUTES. Null for a run that
+ * ended, or without activity (an older server). A run with no event yet counts
+ * from its start.
+ */
+export function quietness(tile: LiveTile, now: number): { minutes: number; level: "ok" | "warn" | "alert" } | null {
+  if (tile.state === "done" || !tile.activity) return null;
+  const minutes = minutesSince(tile.activity.lastEventAt ?? tile.startedAt, now);
+  return { minutes, level: minutes >= QUIET_ALERT_MINUTES ? "alert" : minutes >= QUIET_WARN_MINUTES ? "warn" : "ok" };
+}
+
+/** A tool as the owner reads it: « Commande : lance les tests », « Lit bilan.json », an HQ tool by its short name. */
+export function toolText(tool: { tool: string; detail: string | null }): string {
+  const t = strings.live.activity.tools;
+  const known = (t as Record<string, string | undefined>)[tool.tool];
+  const name = known ?? (tool.tool.startsWith("mcp__") ? tool.tool.split("__").slice(2).join("__") || tool.tool : tool.tool);
+  return tool.detail ? `${name} : ${tool.detail}` : name;
+}
+
+/** The words of a cause of the queue, for the totals of the last day. */
+export function waitCauseText(cause: string): string {
+  const causes = strings.live.queue.causes as Record<string, string | undefined>;
+  return causes[cause] ?? causes.other!;
+}
+
+/** Minutes as « 45 min » or « 3 h 10 ». */
+export function minutesText(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return rest === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${String(rest).padStart(2, "0")}`;
+}
+
+/** The minutes since an instant, for « depuis 9 min ». */
+export const minutesAgo = minutesSince;
+
 /** The figures of the hero: agents at work, agents waiting, and the cost of the runs in progress. */
 export function liveFigures(tiles: readonly LiveTile[]): { working: number; waiting: number; costUsd: number } {
   let working = 0;

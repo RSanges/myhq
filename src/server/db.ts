@@ -1070,6 +1070,27 @@ CREATE TABLE IF NOT EXISTS machine_holds (
 CREATE INDEX IF NOT EXISTS machine_holds_open ON machine_holds (released_at, expires_at);
 `,
   },
+  {
+    version: 36,
+    // The journal of the queue's waits (live-activity.ts, journalWaits): one
+    // row per pending task and cause, from the tick that first saw it to the
+    // tick that no longer did (ended_at, null while it lasts), with the
+    // latest words of the reason. Rows are never deleted. Idempotent, as the migrations after 14.
+    sql: `
+CREATE TABLE IF NOT EXISTS task_waits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  cause TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS task_waits_open ON task_waits (ended_at);
+CREATE INDEX IF NOT EXISTS task_waits_agent ON task_waits (room, agent_id, started_at);
+`,
+  },
 ];
 
 function migrate(db: Db): void {

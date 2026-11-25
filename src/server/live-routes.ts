@@ -3,21 +3,36 @@ import { app } from "./app";
 import { attachmentMaxBytes } from "./attachments";
 import { errorResponse, HqError } from "./errors";
 import { fileResponse } from "./file-response";
+import { waitTotals } from "./live-activity";
 import { liveFile, readLiveRoom, readLiveRun } from "./live-room";
+import { listQueue } from "./queue";
 import { loadHome } from "./rooms";
 
 // The answers of the surveillance room's routes (src/app/api/live), apart from
 // the route files so that tests can call them: a route only awaits
 // `connection()` first. See docs/api.md.
 
+/** The window of the wait totals of GET /api/live: the last day. */
+const WAITS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const idSchema = z.coerce.number().int().positive();
 
-/** GET /api/live: the tiles of the runs in progress and of those ended under 5 minutes ago. */
+/** GET /api/live: the tiles of the runs in progress and of those ended under 5 minutes ago, the queue, and the waits of the last day. */
 export function liveRoomResponse(): Response {
   try {
     const { config, db } = app();
     const now = Date.now();
-    return Response.json({ now: new Date(now).toISOString(), tiles: readLiveRoom(db, loadHome(config.home), config.runsDir, now) });
+    const home = loadHome(config.home);
+    return Response.json({
+      now: new Date(now).toISOString(),
+      tiles: readLiveRoom(db, home, config.runsDir, now),
+      // What waits and why (the queue of the desk), and how long each agent waited over the last day (task_waits).
+      queue: listQueue(db, config, home),
+      waits: waitTotals(db, now - WAITS_WINDOW_MS, now).map((each) => {
+        const agent = home.rooms.find((room) => room.name === each.room)?.agents.find((one) => one.id === each.agentId);
+        return { ...each, agentName: agent?.name ?? each.agentId };
+      }),
+    });
   } catch (error) {
     return errorResponse(error);
   }

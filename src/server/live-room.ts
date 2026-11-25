@@ -4,6 +4,7 @@ import { ATTACHMENT_TYPES, AttachmentError, resolveInside } from "./attachments"
 import { workDirOf } from "./benches";
 import type { Db, RunRow, RunStatus } from "./db";
 import { HqError } from "./errors";
+import { readActivity, type LiveActivityDto } from "./live-activity";
 import { estimateCostUsd, journalUsage } from "./long-runs";
 import { runSummary } from "./run-summary";
 import type { Agent, Home, Room } from "./rooms";
@@ -191,6 +192,8 @@ export type LiveTileDto = {
   waitingSince: string | null;
   /** The piece, its versions oldest first; null: a text-only tile (no pattern, no pin, nothing found). */
   piece: { source: "pin" | "auto"; versions: PieceVersionDto[] } | null;
+  /** What the run is doing, read from its journal: the tool in progress, when the journal last moved, the latest background command (live-activity.ts). */
+  activity: LiveActivityDto;
   /** The agent's other runs in progress (a parallel agent), the latest started first; absent: none. */
   alsoRunning?: number[];
 };
@@ -337,6 +340,7 @@ function tileOf(db: Db, home: Home, runsDir: string, run: RunRow, now: number): 
     previous: statuses.slice(1).map((status) => ({ text: status.text, at: status.created_at })),
     waitingSince: waiting && latest ? latest.created_at : null,
     piece: piece(db, run, found?.agent ?? null, now),
+    activity: cached(["activity", run.id, run.status].join("\n"), () => readActivity(db, run.id, running)),
   };
 }
 

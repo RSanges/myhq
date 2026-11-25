@@ -3851,7 +3851,7 @@ the room (README, "Trying the room without a real run").
 the agents working now: one tile per agent with a run in progress, plus the
 runs ended under 5 minutes ago, greyed, with a link to the run on the desk
 (`/bureau#run-<id>`). An agent merely queued behind a shared resource has no
-run and no tile. The point is to follow the work as it is produced, so each
+run and no tile: it is in the band « En file » (below). The point is to follow the work as it is produced, so each
 tile shows the piece the agent works on, large.
 
 - **Relevance over completeness.** MyHQ never shows everything in a working
@@ -3921,6 +3921,24 @@ tile shows the piece the agent works on, large.
   panel keeps the full task under « Tâche complète ». The summaries are
   metered like the portier's verdicts: in their own table, outside the cost of
   the runs and of the day.
+- **What the run is doing** (`src/server/live-activity.ts`). An agent says
+  what it does with `hq_status`, but a long command says nothing until it
+  ends. The tile therefore also reads the run's journal (the `events` table):
+  the tool in progress (the latest call with no result yet, named in words:
+  « Commande : lance les tests », « Lit bilan.json ») and since when; the
+  latest command the CLI moved to the background (it caps a command in the
+  foreground at 10 minutes), with the end of its output, read from the
+  `.output` file the CLI names (only under the system's temporary folder);
+  and how long the journal has not moved. Past 5 minutes without any event
+  the block turns amber, past 15 red: a long command, or a run that is
+  stuck.
+- **The queue.** An agent that waits has no run and no tile; the band « En
+  file » above the tiles lists the pending tasks in the order of the queue
+  with why each one waits (`listQueue`, the reasons of the desk's queue), and
+  how long each agent waited over the last day. That figure comes from the
+  journal of the waits, `task_waits` (migration 36): at each tick of the
+  scheduler (15 s), `journalWaits` writes what the queue says, a row per task
+  and cause from the tick that first saw it to the tick that no longer did.
 - **Live updates.** The page reads `GET /api/live`, then again 700 ms after
   a run starts or ends or gets its summary, and after a call to `hq_status` or `hq_show` or its
   result on `GET /api/events` (the HQ server stores it a moment after the
