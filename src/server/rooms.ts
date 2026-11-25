@@ -7,7 +7,7 @@ import { cronError } from "./cron";
 import { readArchivedRooms, readHomeSettings } from "./home-settings";
 import { now, type Db } from "./db";
 import { resolveSkillDirs } from "./skills";
-import { patternRegExp, resolveReal } from "./write-guard-lib.mjs";
+import { FILE_TOOL_NAME, patternRegExp, resolveReal } from "./write-guard-lib.mjs";
 
 /** Room and agent ids are used in paths, in the database and in messages. */
 export const idSchema = z
@@ -100,6 +100,16 @@ export const agentSchema = z.strictObject({
   worktree: z.string().min(1).optional(),
   /** Denied to this agent on top of the global deny list. */
   disallowedTools: z.array(z.string().min(1)).optional(),
+  /**
+   * MCP tools that write a file themselves, each with the input field (or fields) naming the file: the
+   * write guard holds those paths to the agent's write rules, as for a Write (write-guard.ts).
+   */
+  fileWriteTools: z
+    .record(
+      z.string().regex(FILE_TOOL_NAME, "an MCP tool name (mcp__server__tool)"),
+      z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(8)]),
+    )
+    .optional(),
   /** Extra directories the agent may read (`--add-dir`), relative to the home. */
   addDirs: z.array(z.string().min(1)).optional(),
   /** The agent's notebook (notebook.ts): one folder it reads and writes, in runs and in questions, relative to the home or absolute. */
@@ -189,6 +199,13 @@ export const agentSchema = z.strictObject({
    */
   approvalCommand: z.array(z.string().min(1).max(4_000)).min(1).max(64).optional(),
   /**
+   * With `onApproval: "command"`: what happens when the command fails. "task" (the default): the agent
+   * gets the task and is woken, so the item is still executed. "owner": the item goes back to the owner,
+   * as a blocked task handed to them, and the agent is not woken (for a command whose action no model
+   * turn may take over, such as the last click of a form).
+   */
+  approvalCommandFailure: z.enum(["task", "owner"]).optional(),
+  /**
    * The piece the agent works on, shown large in the surveillance room: patterns relative to its working
    * directory (`renders/**\/*.mp4`), as the write rules take them (docs/home-layout.md, "The piece").
    */
@@ -276,6 +293,8 @@ export type Agent = {
   worktree: string | null;
   /** The agent's own deny list, merged with the global one at run time. */
   disallowedTools: string[];
+  /** MCP tools that write a file themselves, with the input fields naming it (room.json `fileWriteTools`); absent: none. */
+  fileWriteTools?: Record<string, string[]>;
   /** Absolute paths passed as `--add-dir`. */
   addDirs: string[];
   /** Absolute path of its notebook, the one folder outside its working directory it writes (notebook.ts); null or absent: none. */
@@ -325,6 +344,8 @@ export type Agent = {
   portier?: boolean;
   /** The command of `onApproval: "command"`, relative to the home; null otherwise. */
   approvalCommand?: string[] | null;
+  /** When the approval command fails: "task" gives the item to the agent, "owner" to the owner; absent: "task". */
+  approvalCommandFailure?: "task" | "owner";
   /** Patterns of its piece, relative to its working directory (room.json `pieces`); empty: no piece followed. */
   pieces: string[];
 };
@@ -575,6 +596,9 @@ export function loadRoom(home: string, roomDir: string): Room {
     if (agent.onApproval === "command" && !agent.approvalCommand) {
       throw new Error(`${file}: "${agent.id}" has onApproval "command": approvalCommand is required`);
     }
+    if (agent.approvalCommandFailure && agent.onApproval !== "command") {
+      throw new Error(`${file}: "${agent.id}" has approvalCommandFailure: it only applies to onApproval "command"`);
+    }
 
     let skills: string[];
     try {
@@ -600,6 +624,9 @@ export function loadRoom(home: string, roomDir: string): Room {
       armed: agent.armed ?? false,
       worktree,
       disallowedTools: agent.disallowedTools ?? [],
+      fileWriteTools: Object.fromEntries(
+        Object.entries(agent.fileWriteTools ?? {}).map(([tool, fields]) => [tool, typeof fields === "string" ? [fields] : fields]),
+      ),
       addDirs: (agent.addDirs ?? defaultAddDirs(agent, targetRepo)).map((dir) => path.resolve(home, dir)),
       notebook: agent.notebook ? path.resolve(home, agent.notebook) : null,
       maxBudgetUsd: agent.maxBudgetUsd ?? null,
@@ -624,6 +651,7 @@ export function loadRoom(home: string, roomDir: string): Room {
       cacheTtl: agent.cacheTtl ?? null,
       portier: agent.portier ?? true,
       approvalCommand: agent.approvalCommand ?? null,
+      approvalCommandFailure: agent.approvalCommandFailure ?? "task",
       pieces: agent.pieces ?? [],
     };
   });

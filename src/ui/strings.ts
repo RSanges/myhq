@@ -600,6 +600,20 @@ export const strings = {
       `Exécute l'item approuvé n° ${id} : ${title}
 
 MyHQ a lancé la commande d'approbation de l'agent, qui a échoué : ${error}`,
+    /**
+     * The task when the approval command failed and the agent sets `approvalCommandFailure: "owner"`:
+     * blocked, handed to the owner, nothing was done.
+     */
+    commandFailedForOwner: (id: number, title: string, error: string) =>
+      `Item approuvé n° ${id} non exécuté : ${title}
+
+La commande d'approbation a échoué et rien n'a été fait : ${error}
+L'agent ne reprend pas cet item de lui-même. Relance-le pour qu'il le prépare à nouveau, ou ferme-le.`,
+    /** The note MyHQ leaves for the owner on that task (the Standard). */
+    commandFailedNote: "La commande d'approbation a échoué : rien n'a été fait, l'item te revient.",
+    /** The Telegram alert of that failure. */
+    commandFailedAlert: (id: number, title: string, error: string) =>
+      `Item n° ${id} approuvé mais non exécuté : ${title}\nRien n'a été fait : ${error}\nIl t'attend sur le Standard.`,
     /** The note of an item MyHQ executed itself with the agent's approval command, when the command says nothing. */
     commandDone: "Exécuté par MyHQ (commande d'approbation).",
   },

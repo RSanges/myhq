@@ -61,7 +61,12 @@ export function notebookRefusal(tool, input, target, relative) {
  * @property {string[]} deny Patterns relative to workDir no write may match.
  * @property {string[]} writeDirs Absolute folders, outside workDir, writable in full.
  * @property {string[]} [notebooks] Absolute notebooks, outside workDir, writable under notebookRefusal's rules.
+ * @property {Record<string, string[]>} [fileTools] MCP tools that write a file themselves (room.json
+ *   `fileWriteTools`), each with the fields of its input that name the file. Absent: none.
  */
+
+/** A tool name `fileTools` may hold: an MCP tool, never a built-in one (those are WRITE_TOOLS). */
+export const FILE_TOOL_NAME = /^mcp__[A-Za-z0-9_-]+$/;
 
 /** Whether paths compare without case on this platform. */
 export function caseInsensitive(platform = process.platform) {
@@ -171,12 +176,33 @@ function realRoot(dir) {
  */
 export function decide(input, config, platform = process.platform) {
   const tool = input?.tool_name;
-  if (typeof tool !== "string" || !Object.hasOwn(WRITE_TOOLS, tool)) return { allow: true };
-  const field = WRITE_TOOLS[tool];
-  const raw = input.tool_input?.[field];
-  if (typeof raw !== "string" || raw.trim() === "") {
-    return { allow: false, reason: `MyHQ write guard: ${tool} without a ${field}: refused.` };
+  if (typeof tool !== "string") return { allow: true };
+  if (Object.hasOwn(WRITE_TOOLS, tool)) {
+    const field = WRITE_TOOLS[tool];
+    const raw = input.tool_input?.[field];
+    if (typeof raw !== "string" || raw.trim() === "") {
+      return { allow: false, reason: `MyHQ write guard: ${tool} without a ${field}: refused.` };
+    }
+    return decidePath(input, tool, raw, config, platform);
   }
+  const fields = config.fileTools && Object.hasOwn(config.fileTools, tool) ? config.fileTools[tool] : null;
+  if (!fields) return { allow: true };
+  // An MCP tool that writes a file itself: each path it is given passes the rules of a Write.
+  // A field left out or empty is no file (the tool answers in its reply): nothing to check.
+  for (const field of fields) {
+    const raw = input.tool_input?.[field];
+    if (raw === undefined || raw === null || raw === "") continue;
+    if (typeof raw !== "string" || raw.trim() === "") {
+      return { allow: false, reason: `MyHQ write guard: ${tool} with a ${field} that is not a path: refused.` };
+    }
+    const decision = decidePath(input, tool, raw, config, platform);
+    if (!decision.allow) return decision;
+  }
+  return { allow: true };
+}
+
+/** The decision on one path a tool writes (decide), relative paths against the session's cwd. */
+function decidePath(input, tool, raw, config, platform) {
   const base = typeof input.cwd === "string" && input.cwd ? input.cwd : config.workDir;
   let target;
   try {
@@ -223,6 +249,11 @@ export function readConfig(env = process.env) {
   if (!raw) throw new Error(`${GUARD_ENV} is not set (this folder's writes are guarded by MyHQ, which sets it for its runs)`);
   const config = JSON.parse(raw);
   const strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
+  const fileTools = (value) =>
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(([name, fields]) => FILE_TOOL_NAME.test(name) && strings(fields) && fields.length > 0);
   if (
     !config ||
     typeof config.workDir !== "string" ||
@@ -230,7 +261,8 @@ export function readConfig(env = process.env) {
     !strings(config.allow) ||
     !strings(config.deny) ||
     !strings(config.writeDirs) ||
-    !(config.notebooks === undefined || strings(config.notebooks))
+    !(config.notebooks === undefined || strings(config.notebooks)) ||
+    !(config.fileTools === undefined || fileTools(config.fileTools))
   ) {
     throw new Error(`${GUARD_ENV} is not a valid guard configuration`);
   }

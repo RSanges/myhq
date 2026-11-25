@@ -378,6 +378,10 @@ stays its identifier for the API, the database, the paths and the commands.
   missing, and on approval of an onboarding proposal. The agent works in it.
 - `disallowedTools`: added to the global deny list for this agent (for a
   developer: `git push`, merges, migrations, deploy commands).
+- `fileWriteTools`: MCP tools of the agent that write a file themselves, each
+  with the input field (or list of fields) that names the file, for example
+  `{ "mcp__cad__render_view": "save_to" }`. The write guard holds those paths
+  to the agent's write rules (see "The write guard").
 - `addDirs`: directories passed as `--add-dir`. An agent that reads files
   (`Read`, `Glob` or `Grep` in its whitelist) and has no worktree reads the
   target repository by default.
@@ -724,6 +728,12 @@ it the moment the item is approved (`src/server/approval-command.ts`, started by
 - anything else falls back to `"task"`: the task is written pending with the
   error under its text and `wakeAgents` wakes the agent (`wakesAgent` treats
   `"command"` like `"task"` for an approval task, which only exists then).
+- with `approvalCommandFailure: "owner"`, a failure is never taken over by a
+  model turn: the task is written `blocked` with the error, `decideApproval`
+  hands it to the owner (`noteBlocked` by MyHQ, `handOff` true, so the
+  supervisor leaves it) and sends a Telegram alert; nobody is woken. It is for
+  commands whose action must stay exactly the one the owner saw, such as the
+  last click of a form.
 
 Each command run is one row of `approval_commands` (`ok`, `note`, `error`, its
 start and end).
@@ -2659,6 +2669,23 @@ library of its decisions beside it, `write-guard-lib.mjs`):
   writes in print mode. The `--disallowedTools` write rules are still passed
   to the CLI as written (they deny correctly on 2.1.318), the guard being the
   enforcement that does not depend on the CLI version.
+- An MCP tool that writes a file itself (a render saved to a path, an
+  export) escapes all of the above: its server writes, not the CLI, and a
+  server's own path limit (often its whole working directory and the
+  temporary folder) is not the agent's rules. An agent declares such tools in
+  `fileWriteTools`, with the input fields that name the file. The hook's
+  matcher then lists them after the write tools (a name must look like
+  `mcp__server__tool`, so it cannot widen the matcher), the configuration
+  carries them in `fileTools`, and each path they are given passes the same
+  decision as a Write: allow and deny patterns, the protected settings
+  files, nothing outside the working directory, `--add-dir` folders and the
+  temporary folder included. A field left out or empty passes (the tool
+  answers in its reply, no file); a value that is not a path is refused. The
+  hook is installed for such a tool even when the agent has no write rule,
+  so that the tool then writes nothing. The path is checked as given: a tool
+  that adds an extension stays in the same folder. A question run in the
+  same folder keeps these tools in the matcher, since a run may be using the
+  settings file at the same time.
 - The `Bash` rules are passed unchanged and still hold on 2.1.318 (a command
   outside them is refused, a `disallowedTools` pattern denies), but they do not
   limit paths: a whitelisted `python *`, `cp *` or `mkdir *` can write
